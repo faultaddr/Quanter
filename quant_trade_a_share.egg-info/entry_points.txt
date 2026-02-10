@@ -1,0 +1,3 @@
+[console_scripts]
+quant-trade-a-share = cli_interface:main
+

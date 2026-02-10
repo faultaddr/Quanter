@@ -3,6 +3,6 @@ setup.py
 quant_trade_a_share.egg-info/PKG-INFO
 quant_trade_a_share.egg-info/SOURCES.txt
 quant_trade_a_share.egg-info/dependency_links.txt
+quant_trade_a_share.egg-info/entry_points.txt
 quant_trade_a_share.egg-info/requires.txt
 quant_trade_a_share.egg-info/top_level.txt
-strategies/__init__.py
