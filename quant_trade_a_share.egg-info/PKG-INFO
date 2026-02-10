@@ -1,0 +1,68 @@
+Metadata-Version: 2.1
+Name: quant-trade-a-share
+Version: 0.1.0
+Summary: A quantitative trading tool for A-Share market
+Home-page: https://github.com/your-repo/quant-trade-a-share
+Author: Quant Trader
+Author-email: quant@example.com
+License: UNKNOWN
+Platform: UNKNOWN
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Financial and Insurance Industry
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+
+# Quantitative Trading Tool for A-Share Market
+
+A comprehensive quantitative trading tool designed specifically for the Chinese A-share market with backtesting capabilities using free data sources.
+
+## Features
+
+- Historical data fetching from multiple free sources
+- Flexible backtesting engine
+- Pre-built trading strategies
+- Performance analysis tools
+- Risk management features
+- Easy-to-use interface
+
+## Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+
+```python
+from quant_trade_a_share import backtest
+
+# Example usage
+strategy = MovingAverageStrategy()
+results = backtest.run(start_date='2020-01-01', end_date='2021-01-01', strategy=strategy)
+print(results.metrics)
+```
+
+## Data Sources
+
+- Tushare (requires token)
+- AkShare
+- Baostock
+- Yahoo Finance
+
+## Architecture
+
+- `data/` - Data fetching and preprocessing modules
+- `strategies/` - Trading strategy implementations
+- `backtest/` - Backtesting engine
+- `analysis/` - Performance analysis tools
+- `utils/` - Utility functions
+- `database/` - Data storage and caching
+- `docs/` - Documentation
+- `tests/` - Unit and integration tests
+
