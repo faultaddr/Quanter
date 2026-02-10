@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script to verify ASHAre data source is working as default
+Test script to verify ASHare data source priority
 """
 
 import sys
@@ -9,10 +9,10 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from quant_trade_a_share.screeners.stock_screener import StockScreener
 
-def test_ashare_default():
-    print("🔍 测试AShare数据源作为默认数据源...")
+def test_ashare_priority():
+    print("🔍 测试Ashare数据源优先级...")
 
-    # 初始化股票筛选器 - 现在Ashare是主要数据源
+    # 初始化股票筛选器
     screener = StockScreener()
 
     # 测试获取一些股票数据，默认应该使用Ashare
@@ -21,7 +21,7 @@ def test_ashare_default():
     for symbol in test_symbols:
         print(f"\n🧪 测试股票: {symbol}")
 
-        # 使用默认数据源（现在Ashare优先）
+        # 使用默认数据源（现在应该是Ashare优先）
         data = screener.fetch_stock_data(symbol, period='30', data_source='auto')
 
         if data is not None and not data.empty:
@@ -45,7 +45,7 @@ def test_ashare_default():
         else:
             print(f"❌ 无法获取 {symbol} 的Ashare数据")
 
-    print(f"\n🎉 ASHare数据源测试完成!")
+    print(f"\n🎉 Ashare数据源优先级测试完成!")
 
 if __name__ == "__main__":
-    test_ashare_default()
+    test_ashare_priority()

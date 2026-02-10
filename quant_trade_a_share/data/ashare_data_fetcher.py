@@ -26,6 +26,52 @@ class AshareDataFetcher:
         """
         print("✅ Ashare数据源加载成功")
 
+    def get_all_stocks(self):
+        """
+        获取A股股票列表 (使用A股通用代码范围构造)
+        """
+        try:
+            print("正在构造A股股票列表...")
+
+            # 构造A股主要板块的代码范围
+            stock_codes = []
+
+            # 上海主板 (600xxx - 604xxx)
+            for i in range(1, 5000):  # 限制数量避免过大
+                code = f"600{i:03d}"
+                stock_codes.append({'symbol': f'sh{code}', 'code': code})
+
+            # 深圳主板 (000xxx)
+            for i in range(1, 1000):
+                code = f"000{i:03d}"
+                stock_codes.append({'symbol': f'sz{code}', 'code': code})
+
+            # 中小板 (002xxx)
+            for i in range(1, 1000):
+                code = f"002{i:03d}"
+                stock_codes.append({'symbol': f'sz{code}', 'code': code})
+
+            # 创业板 (300xxx)
+            for i in range(1, 1000):
+                code = f"300{i:03d}"
+                stock_codes.append({'symbol': f'sz{code}', 'code': code})
+
+            # 科创板 (688xxx)
+            for i in range(1, 1000):
+                code = f"688{i:03d}"
+                stock_codes.append({'symbol': f'sh{code}', 'code': code})
+
+            # 创建包含基本数据的DataFrame
+            df = pd.DataFrame(stock_codes)
+            df['name'] = df['code'].apply(lambda x: f"股票{x}")  # 使用代码作为名称
+
+            print(f"✅ 成功构造 {len(df)} 只A股股票列表")
+            return df[['symbol', 'code', 'name']]
+
+        except Exception as e:
+            print(f"❌ 构造A股股票列表失败: {e}")
+            return None
+
     def fetch_stock_data(self, symbol: str, days: int = 60, frequency: str = '1d') -> Optional[pd.DataFrame]:
         """
         Fetch stock data using Ashare implementation

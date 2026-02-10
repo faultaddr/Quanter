@@ -22,23 +22,24 @@ class StockScreener:
     def __init__(self, tushare_token=None):
         self.chinese_stocks = None
         self.screened_stocks = None
+        # 主要数据源现在是Ashare
+        self.ashare_fetcher = AshareDataFetcher()
+        # EastMoney作为备选数据源
+        self.eastmoney_fetcher = EastMoneyDataFetcher()
         # 仅用于回测
         if tushare_token:
             ts.set_token(tushare_token)
             self.pro = ts.pro_api()
         else:
             self.pro = None
-        # 主要数据源现在是EastMoney
-        self.eastmoney_fetcher = EastMoneyDataFetcher()
-        # 添加Ashare数据源
-        self.ashare_fetcher = AshareDataFetcher()
     
     def get_chinese_stocks_list(self):
         """
         获取A股股票列表
         """
         try:
-            # 使用新的EastMoney数据获取器
+            # 目前Ashare库没有提供获取全量股票列表的功能，因此我们仍需依赖EastMoney
+            # 使用EastMoney数据获取器获取股票列表
             all_stocks = self.eastmoney_fetcher.get_all_stocks()
 
             self.chinese_stocks = all_stocks[['symbol', 'code', 'name']]
@@ -143,12 +144,18 @@ class StockScreener:
 
             # 实时信号生成现在支持多种数据源
             if freq != 'D':
-                # 10分钟级别数据 - 主要使用EastMoney或模拟数据
-                print(f"实时信号生成: {symbol} 使用EastMoney或模拟数据")
-                # EastMoney通常不提供10分钟级别数据, 所以使用模拟数据
-                return self._generate_mock_data(symbol, period, freq)
+                # 10分钟级别数据 - 主要使用AShare或模拟数据
+                print(f"实时信号生成: {symbol} 使用Ashare或模拟数据")
+                # AShare提供分钟级别数据
+                df = self.ashare_fetcher.fetch_stock_data(symbol, days=int(period), frequency='1m' if freq.endswith('m') else '1d')
+                if df is not None and not df.empty:
+                    print(f"✅ 使用Ashare获取 {symbol} ({freq}) 数据")
+                    df = self._calculate_technical_indicators(df)
+                    return df
+                else:
+                    return self._generate_mock_data(symbol, period, freq)
             else:
-                # 日级别数据 - 根据参数选择数据源
+                # 日级别数据 - 根据参数选择数据源，优先使用Ashare
                 df = None
 
                 if data_source == 'ashare' or data_source == 'auto':
@@ -195,131 +202,14 @@ class StockScreener:
                     except Exception as e2:
                         print(f"Tushare备选方案失败: {e2}")
 
-                # 如果所有真实数据源都失败，生成模拟数据作为最后的备选方案
-                print(f"⚠️  所有真实数据源均不可用，为 {symbol} 生成模拟数据")
-                return self._generate_mock_data(symbol, period, freq)
+                # 所有数据源均不可用，直接返回None
+                print(f"❌ 所有真实数据源均不可用，无法获取 {symbol} 的数据")
+                return None
         except Exception as e:
             print(f"❌ 获取股票 {symbol} 数据失败: {e}")
             # 返回None表示获取失败
             return None
     
-    def _generate_mock_data(self, symbol, period='180', freq='D'):
-        """
-        生成模拟股票数据
-        """
-        import numpy as np
-        from datetime import datetime, timedelta
-        
-        if freq != 'D':
-            # 生成10分钟级别数据
-            # 计算需要多少个10分钟间隔
-            total_minutes = 240  # 4小时交易时间
-            intervals = total_minutes // 10  # 24个10分钟间隔
-            n = intervals  # 一天的数据点
-            
-            # 生成10分钟频率的时间索引
-            end_time = datetime.now().replace(hour=15, minute=0, second=0, microsecond=0)  # A股收盘时间
-            start_time = end_time - timedelta(minutes=240)  # 开盘时间
-            
-            # 生成10分钟间隔的时间序列
-            dates = pd.date_range(start=start_time, end=end_time, freq='10T')
-            # 只保留交易时间段内的数据
-            dates = dates[(dates.hour >= 9) | (dates.hour < 15)]  # 9:30-15:00
-            dates = dates[dates.hour != 12]  # 排除中午休市时间
-            dates = dates[:n]  # 只取需要的数量
-            
-            if len(dates) == 0:
-                return pd.DataFrame()
-        else:
-            # 生成日级别数据
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=int(period))
-            dates = pd.date_range(start=start_date, end=end_date, freq='D')
-            # 只保留工作日
-            dates = dates[dates.weekday < 5]
-            
-            n = len(dates)
-            if n == 0:
-                return pd.DataFrame()
-        
-        # 设置随机种子以确保结果一致
-        np.random.seed(abs(hash(symbol)) % (2**32))
-        
-        if freq != 'D':
-            # 10分钟级别数据 - 更高的波动性
-            initial_price = 50 + np.random.random() * 100  # 初始价格在50-150之间
-            returns = np.random.normal(0.0001, 0.005, n)  # 10分钟收益率均值0.01%，标准差0.5%
-        else:
-            # 日级别数据
-            initial_price = 50 + np.random.random() * 100  # 初始价格在50-150之间
-            returns = np.random.normal(0.0005, 0.02, n)  # 日收益率均值0.05%，标准差2%
-        
-        prices = [initial_price]
-        
-        for i in range(1, n):
-            new_price = prices[-1] * (1 + returns[i])
-            prices.append(max(new_price, 0.1))  # 确保价格为正
-        
-        prices = np.array(prices)
-        
-        # 生成OHLC数据
-        # 开盘价通常是前一天收盘价加上一个小的随机变化
-        opens = [prices[0]]
-        for i in range(1, n):
-            if freq != 'D':
-                # 10分钟级别数据的小幅波动
-                change = np.random.uniform(-0.002, 0.002)  # ±0.2%的变化
-            else:
-                change = np.random.uniform(-0.01, 0.01)  # ±1%的变化
-            opens.append(prices[i-1] * (1 + change))
-        opens = np.array(opens)
-        
-        # 高价、低价基于价格波动生成
-        if freq != 'D':
-            high_mult = np.random.uniform(1.0, 1.008, n)  # 10分钟级别较小波动
-            low_mult = np.random.uniform(0.992, 1.0, n)
-        else:
-            high_mult = np.random.uniform(1.0, 1.03, n)
-            low_mult = np.random.uniform(0.97, 1.0, n)
-            
-        highs = prices * high_mult
-        lows = np.maximum(prices * low_mult, 0.1)  # 确保为正值
-        closes = prices
-        
-        # 调整开盘价使其在高低区间内
-        opens = np.clip(opens, lows, highs)
-        
-        # 生成成交量 (随价格变动而变动)
-        if freq != 'D':
-            # 10分钟级别数据的成交量更小
-            base_volume = 10000 + np.random.random() * 40000  # 10k-50k股基础成交量
-            volume_changes = np.abs(np.diff(closes, prepend=closes[0])) * 5000  # 成交量与价格变动相关
-        else:
-            base_volume = 1000000 + np.random.random() * 4000000  # 1M-5M股基础成交量
-            volume_changes = np.abs(np.diff(closes, prepend=closes[0])) * 50000  # 成交量与价格变动相关
-            
-        volumes = (base_volume + volume_changes).astype(int)
-        
-        # 创建DataFrame
-        df = pd.DataFrame({
-            'date': dates[:len(prices)],  # 确保长度一致
-            'open': opens,
-            'high': highs,
-            'low': lows,
-            'close': closes,
-            'volume': volumes
-        })
-        
-        df.set_index('date', inplace=True)
-        
-        # 计算技术指标
-        df = self._calculate_technical_indicators(df)
-        
-        if freq != 'D':
-            print(f"⚠️  {symbol} 使用10分钟级别模拟数据")
-        else:
-            print(f"⚠️  {symbol} 使用日级别模拟数据")
-        return df
     
     def _calculate_technical_indicators(self, df):
         """
