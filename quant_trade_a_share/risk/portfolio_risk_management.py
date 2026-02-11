@@ -50,7 +50,8 @@ class PortfolioRiskManagement:
                 print(f"⚠️ Qlib 初始化失败: {e}")
                 print("💡 提示: 安装 Qlib 并下载数据以启用完整风险功能")
         else:
-            print("⚠️ Qlib 不可用，将使用基础风险功能")
+            # Qlib not available, will use basic risk functionality
+            pass
 
         # 风险参数设置
         self.risk_limits = {

@@ -197,8 +197,8 @@ class AshareDataFetcher:
                     print(f"JSON decode error for {code}: {e}")
                     print(f"Response content: {response.content[:500]}...")
                     if attempt < max_retries - 1:
-                        print(f"等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
+                        print(f"等待 {base_retry_delay} 秒后重试...")
+                        time.sleep(base_retry_delay)
                         continue
                     else:
                         return pd.DataFrame()  # Return empty DataFrame on failure
@@ -207,8 +207,8 @@ class AshareDataFetcher:
                 if 'data' not in st or code not in st['data']:
                     print(f"No data found for {code} in API response")
                     if attempt < max_retries - 1:
-                        print(f"等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
+                        print(f"等待 {base_retry_delay} 秒后重试...")
+                        time.sleep(base_retry_delay)
                         continue
                     else:
                         return pd.DataFrame()  # Return empty DataFrame on failure
@@ -220,8 +220,8 @@ class AshareDataFetcher:
                 if not buf:
                     print(f"No kline data found for {code}")
                     if attempt < max_retries - 1:
-                        print(f"等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
+                        print(f"等待 {base_retry_delay} 秒后重试...")
+                        time.sleep(base_retry_delay)
                         continue
                     else:
                         return pd.DataFrame()  # Return empty DataFrame on failure
@@ -235,32 +235,32 @@ class AshareDataFetcher:
             except requests.exceptions.ConnectionError as e:
                 print(f"连接错误 {code}: {e}")
                 if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
+                    print(f"等待 {base_retry_delay} 秒后重试...")
+                    time.sleep(base_retry_delay)
                     continue
                 else:
                     return pd.DataFrame()  # Return empty DataFrame on failure
             except requests.exceptions.Timeout as e:
                 print(f"请求超时 {code}: {e}")
                 if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
+                    print(f"等待 {base_retry_delay} 秒后重试...")
+                    time.sleep(base_retry_delay)
                     continue
                 else:
                     return pd.DataFrame()  # Return empty DataFrame on failure
             except requests.exceptions.RequestException as e:
                 print(f"请求异常 {code}: {e}")
                 if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
+                    print(f"等待 {base_retry_delay} 秒后重试...")
+                    time.sleep(base_retry_delay)
                     continue
                 else:
                     return pd.DataFrame()  # Return empty DataFrame on failure
             except Exception as e:
                 print(f"处理 {code} 数据时发生错误: {e}")
                 if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
+                    print(f"等待 {base_retry_delay} 秒后重试...")
+                    time.sleep(base_retry_delay)
                     continue
                 else:
                     return pd.DataFrame()  # Return empty DataFrame on failure
@@ -307,8 +307,8 @@ class AshareDataFetcher:
                     print(f"JSON decode error for {code}: {e}")
                     print(f"Response content: {response.content[:500]}...")
                     if attempt < max_retries - 1:
-                        print(f"等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
+                        print(f"等待 {base_retry_delay} 秒后重试...")
+                        time.sleep(base_retry_delay)
                         continue
                     else:
                         return pd.DataFrame()  # Return empty DataFrame on failure
@@ -317,8 +317,8 @@ class AshareDataFetcher:
                 if 'data' not in st or code not in st['data'] or f'm{ts}' not in st['data'][code]:
                     print(f"No data found for {code} in API response")
                     if attempt < max_retries - 1:
-                        print(f"等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
+                        print(f"等待 {base_retry_delay} 秒后重试...")
+                        time.sleep(base_retry_delay)
                         continue
                     else:
                         return pd.DataFrame()  # Return empty DataFrame on failure
@@ -336,32 +336,32 @@ class AshareDataFetcher:
             except requests.exceptions.ConnectionError as e:
                 print(f"连接错误 {code}: {e}")
                 if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
+                    print(f"等待 {base_retry_delay} 秒后重试...")
+                    time.sleep(base_retry_delay)
                     continue
                 else:
                     return pd.DataFrame()  # Return empty DataFrame on failure
             except requests.exceptions.Timeout as e:
                 print(f"请求超时 {code}: {e}")
                 if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
+                    print(f"等待 {base_retry_delay} 秒后重试...")
+                    time.sleep(base_retry_delay)
                     continue
                 else:
                     return pd.DataFrame()  # Return empty DataFrame on failure
             except requests.exceptions.RequestException as e:
                 print(f"请求异常 {code}: {e}")
                 if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
+                    print(f"等待 {base_retry_delay} 秒后重试...")
+                    time.sleep(base_retry_delay)
                     continue
                 else:
                     return pd.DataFrame()  # Return empty DataFrame on failure
             except Exception as e:
                 print(f"处理 {code} 数据时发生错误: {e}")
                 if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
+                    print(f"等待 {base_retry_delay} 秒后重试...")
+                    time.sleep(base_retry_delay)
                     continue
                 else:
                     return pd.DataFrame()  # Return empty DataFrame on failure
@@ -415,8 +415,8 @@ class AshareDataFetcher:
                     print(f"JSON decode error for {code}: {e}")
                     print(f"Response content: {response.content[:500]}...")
                     if attempt < max_retries - 1:
-                        print(f"等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
+                        print(f"等待 {base_retry_delay} 秒后重试...")
+                        time.sleep(base_retry_delay)
                         continue
                     else:
                         return pd.DataFrame()  # Return empty DataFrame on failure
@@ -425,8 +425,8 @@ class AshareDataFetcher:
                 if not isinstance(dstr, list) or len(dstr) == 0:
                     print(f"No data found for {code} in Sina API response")
                     if attempt < max_retries - 1:
-                        print(f"等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
+                        print(f"等待 {base_retry_delay} 秒后重试...")
+                        time.sleep(base_retry_delay)
                         continue
                     else:
                         return pd.DataFrame()  # Return empty DataFrame on failure
@@ -447,32 +447,32 @@ class AshareDataFetcher:
             except requests.exceptions.ConnectionError as e:
                 print(f"连接错误 {code}: {e}")
                 if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
+                    print(f"等待 {base_retry_delay} 秒后重试...")
+                    time.sleep(base_retry_delay)
                     continue
                 else:
                     return pd.DataFrame()  # Return empty DataFrame on failure
             except requests.exceptions.Timeout as e:
                 print(f"请求超时 {code}: {e}")
                 if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
+                    print(f"等待 {base_retry_delay} 秒后重试...")
+                    time.sleep(base_retry_delay)
                     continue
                 else:
                     return pd.DataFrame()  # Return empty DataFrame on failure
             except requests.exceptions.RequestException as e:
                 print(f"请求异常 {code}: {e}")
                 if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
+                    print(f"等待 {base_retry_delay} 秒后重试...")
+                    time.sleep(base_retry_delay)
                     continue
                 else:
                     return pd.DataFrame()  # Return empty DataFrame on failure
             except Exception as e:
                 print(f"处理 {code} 数据时发生错误: {e}")
                 if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
+                    print(f"等待 {base_retry_delay} 秒后重试...")
+                    time.sleep(base_retry_delay)
                     continue
                 else:
                     return pd.DataFrame()  # Return empty DataFrame on failure

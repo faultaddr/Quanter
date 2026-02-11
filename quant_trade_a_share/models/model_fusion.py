@@ -171,46 +171,65 @@ class ModelFusion:
         Args:
             data: 股票数据
         """
+        # 确保数据索引唯一，如果有重复则重置索引但保留原始索引作为列
+        if data.index.duplicated().any():
+            original_index_name = data.index.name
+            data = data.reset_index()
+            data = data.set_index(data.columns[0])  # 使用第一列作为新索引
+            data.index.name = original_index_name
+
         signals = {}
 
         # MA 交叉策略信号
-        ma5 = self.mytt_indicators.MA(data['close'], 5)
-        ma20 = self.mytt_indicators.MA(data['close'], 20)
+        ma5_values = self.mytt_indicators.MA(data['close'], 5)
+        ma20_values = self.mytt_indicators.MA(data['close'], 20)
+        ma5 = pd.Series(ma5_values, index=data.index)
+        ma20 = pd.Series(ma20_values, index=data.index)
         ma_cross_signal = pd.Series(0, index=data.index)
         ma_cross_signal[(ma5 > ma20) & (ma5.shift(1) <= ma20.shift(1))] = 1  # 金叉买入
         ma_cross_signal[(ma5 < ma20) & (ma5.shift(1) >= ma20.shift(1))] = -1  # 死叉卖出
         signals['MA_CROSS'] = ma_cross_signal
 
         # MACD 策略信号
-        macd, dif, dea, bar = self.mytt_indicators.MACD(data['close'])
+        dif_values, dea_values, bar = self.mytt_indicators.MACD(data['close'])
+        dif = pd.Series(dif_values, index=data.index) if not isinstance(dif_values, pd.Series) else dif_values
+        dea = pd.Series(dea_values, index=data.index) if not isinstance(dea_values, pd.Series) else dea_values
+        bar = pd.Series(bar, index=data.index) if not isinstance(bar, pd.Series) else bar
         macd_signal = pd.Series(0, index=data.index)
         macd_signal[(dif > dea) & (dif.shift(1) <= dea.shift(1))] = 1  # 金叉买入
         macd_signal[(dif < dea) & (dif.shift(1) >= dea.shift(1))] = -1  # 死叉卖出
         signals['MACD_CROSS'] = macd_signal
 
         # KDJ 策略信号
-        k, d, j = self.mytt_indicators.KDJ(data['high'], data['low'], data['close'])
+        k_values, d_values, j_values = self.mytt_indicators.KDJ(data['high'], data['low'], data['close'])
+        k = pd.Series(k_values, index=data.index)
+        d = pd.Series(d_values, index=data.index)
         kdj_signal = pd.Series(0, index=data.index)
         kdj_signal[(k > d) & (k < 20) & (k.shift(1) >= d.shift(1))] = 1  # 超卖买入
         kdj_signal[(k < d) & (k > 80) & (k.shift(1) <= d.shift(1))] = -1  # 超卖卖出
         signals['KDJ_SIGNAL'] = kdj_signal
 
         # RSI 策略信号
-        rsi_14 = self.mytt_indicators.RSI(data['close'], 14)
+        rsi_14_values = self.mytt_indicators.RSI(data['close'], 14)
+        rsi_14 = pd.Series(rsi_14_values, index=data.index)
         rsi_signal = pd.Series(0, index=data.index)
         rsi_signal[(rsi_14 < 30) & (rsi_14.shift(1) >= 30)] = 1  # 超卖买入
         rsi_signal[(rsi_14 > 70) & (rsi_14.shift(1) <= 70)] = -1  # 超买卖出
         signals['RSI_SIGNAL'] = rsi_signal
 
         # BOLL 策略信号
-        upper, middle, lower = self.mytt_indicators.BOLL(data['close'])
+        upper_values, middle_values, lower_values = self.mytt_indicators.BOLL(data['close'])
+        upper = pd.Series(upper_values, index=data.index)
+        middle = pd.Series(middle_values, index=data.index)
+        lower = pd.Series(lower_values, index=data.index)
         boll_signal = pd.Series(0, index=data.index)
         boll_signal[(data['close'] <= lower) & (data['close'].shift(1) > lower)] = 1  # 触底反弹
         boll_signal[(data['close'] >= upper) & (data['close'].shift(1) < upper)] = -1  # 触顶回落
         signals['BOLL_SIGNAL'] = boll_signal
 
         # CCI 策略信号
-        cci = self.mytt_indicators.CCI(data['high'], data['low'], data['close'])
+        cci_values = self.mytt_indicators.CCI(data['high'], data['low'], data['close'])
+        cci = pd.Series(cci_values, index=data.index)
         cci_signal = pd.Series(0, index=data.index)
         cci_signal[(cci < -100) & (cci.shift(1) >= -100)] = 1  # 超卖买入
         cci_signal[(cci > 100) & (cci.shift(1) <= 100)] = -1  # 超买卖出
@@ -246,6 +265,13 @@ class ModelFusion:
         """
         基础机器学习信号计算
         """
+        # 确保数据索引唯一：删除重复索引保留第一次出现
+        if data.index.duplicated().any():
+            print("🔍 检测到重复索引，正在处理...")
+            original_length = len(data)
+            data = data[~data.index.duplicated(keep='first')]
+            print(f"✅ 从 {original_length} 行清理到 {len(data)} 行")
+
         signals = pd.Series(0.0, index=data.index)
 
         try:
@@ -260,8 +286,14 @@ class ModelFusion:
             delta = data['close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
+
+            # 防止除零和重复索引
+            rs = gain / (loss + 1e-10)  # 添加小值防止除零
             rsi = 100 - (100 / (1 + rs))
+
+            # 确保rsi与data索引一致（这里可能是关键问题所在）
+            if not rsi.index.equals(data.index):
+                rsi = rsi.reindex(data.index)
             features['rsi'] = rsi
 
             # MACD
@@ -269,6 +301,12 @@ class ModelFusion:
             exp26 = data['close'].ewm(span=26).mean()
             macd = exp12 - exp26
             signal_line = macd.ewm(span=9).mean()
+
+            # 确保MACD相关指标与data索引一致
+            if not macd.index.equals(data.index):
+                macd = macd.reindex(data.index)
+            if not signal_line.index.equals(data.index):
+                signal_line = signal_line.reindex(data.index)
             features['macd'] = macd
             features['macd_signal'] = signal_line
 
@@ -277,30 +315,50 @@ class ModelFusion:
 
             if len(features) > 10:  # 需要有足够的数据点
                 # 基于 RSI 的 ML 信号
+                rsi_values = features['rsi']
                 rsi_sig = pd.Series(0.0, index=features.index)
-                rsi_sig[(features['rsi'] < 30) & (features['rsi'].shift(1) >= 30)] = 0.8  # 超卖
-                rsi_sig[(features['rsi'] > 70) & (features['rsi'].shift(1) <= 70)] = -0.8  # 超买
-                signals[features.index] += rsi_sig
+
+                # 确保索引一致后再进行shift操作
+                rsi_shifted = rsi_values.shift(1)
+                if not rsi_shifted.index.equals(rsi_values.index):
+                    rsi_shifted = rsi_shifted.reindex(rsi_values.index)
+
+                rsi_sig[(rsi_values < 30) & (rsi_shifted >= 30)] = 0.8  # 超卖
+                rsi_sig[(rsi_values > 70) & (rsi_shifted <= 70)] = -0.8  # 超买
+                signals.loc[features.index] += rsi_sig
 
                 # 基于 MACD 的 ML 信号
+                macd_values = features['macd']
+                macd_signal_values = features['macd_signal']
                 macd_sig = pd.Series(0.0, index=features.index)
-                macd_sig[(features['macd'] > features['macd_signal']) &
-                        (features['macd'].shift(1) <= features['macd_signal'].shift(1))] = 0.6  # 金叉
-                macd_sig[(features['macd'] < features['macd_signal']) &
-                        (features['macd'].shift(1) >= features['macd_signal'].shift(1))] = -0.6  # 死叉
-                signals[features.index] += macd_sig
+
+                # 确保索引一致后再进行shift操作
+                macd_shifted = macd_values.shift(1)
+                macd_signal_shifted = macd_signal_values.shift(1)
+
+                if not macd_shifted.index.equals(macd_values.index):
+                    macd_shifted = macd_shifted.reindex(macd_values.index)
+                if not macd_signal_shifted.index.equals(macd_signal_values.index):
+                    macd_signal_shifted = macd_signal_shifted.reindex(macd_signal_values.index)
+
+                macd_sig[(macd_values > macd_signal_values) &
+                        (macd_shifted <= macd_signal_shifted)] = 0.6  # 金叉
+                macd_sig[(macd_values < macd_signal_values) &
+                        (macd_shifted >= macd_signal_shifted)] = -0.6  # 死叉
+                signals.loc[features.index] += macd_sig
 
                 # 趋势信号
                 trend_sig = pd.Series(0.0, index=features.index)
                 trend_sig[features['pct_chg'] > 0.02] = 0.4  # 上涨趋势
                 trend_sig[features['pct_chg'] < -0.02] = -0.4  # 下跌趋势
-                signals[features.index] += trend_sig
+                signals.loc[features.index] += trend_sig
 
         except Exception as e:
             print(f"⚠️ 基础 ML 信号计算失败: {e}")
+            import traceback
+            traceback.print_exc()
 
         return signals
-
     def train_ml_model(self, data: pd.DataFrame, target_col: str = 'future_return', model_name: str = 'default'):
         """
         训练机器学习模型
@@ -413,13 +471,27 @@ class ModelFusion:
             # 剩余权重给传统移动平均信号
             weights['fallback'] = 0.3
 
+        # 确保所有输入都有唯一的索引，从第一个信号获取索引
+        if technical_signals:
+            first_signal = next(iter(technical_signals.values()))
+            # 检查索引是否唯一
+            if first_signal.index.duplicated().any():
+                original_index_name = first_signal.index.name
+                first_signal = first_signal.reset_index()
+                first_signal = first_signal.set_index(first_signal.columns[0])
+                first_signal.index.name = original_index_name
+        else:
+            first_signal = ml_signals
+
         # 创建综合信号 Series
-        combined_signal = pd.Series(0.0, index=next(iter(technical_signals.values())).index)
+        combined_signal = pd.Series(0.0, index=first_signal.index)
 
         # 加权组合技术指标信号
         for sig_name, sig_series in technical_signals.items():
             if sig_name in weights:
-                combined_signal += sig_series * weights[sig_name]
+                # 确保信号系列与目标索引对齐
+                sig_aligned = sig_series.reindex(combined_signal.index, fill_value=0.0)
+                combined_signal += sig_aligned * weights[sig_name]
 
         # 加入 ML 信号
         if not ml_signals.empty and 'ml_signal' in weights:

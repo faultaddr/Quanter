@@ -150,7 +150,7 @@ class AutomatedParameterTuning:
     利用Qlib和其他方法优化策略参数
     """
 
-    def __init__(self):
+    def __init__(self, verbose=False):
         """初始化参数调优器"""
         self.model_fusion = ModelFusion()
         self.factor_library = FactorLibraryExpansion()
@@ -165,7 +165,8 @@ class AutomatedParameterTuning:
             'win_rate': 0.1
         }
 
-        print("✅ 自动化参数调优器初始化完成")
+        if verbose:
+            print("✅ 自动化参数调优器初始化完成")
 
     def grid_search_optimization(self, data: pd.DataFrame, param_grid: Dict[str, List],
                                target_metric: str = 'sharpe_ratio',
@@ -259,8 +260,12 @@ class AutomatedParameterTuning:
 
             # MA交叉信号
             if 'close' in data.columns:
-                ma_short_series = self.mytt_indicators.MA(data['close'], ma_short)
-                ma_long_series = self.mytt_indicators.MA(data['close'], ma_long)
+                ma_short_values = self.mytt_indicators.MA(data['close'], ma_short)
+                ma_long_values = self.mytt_indicators.MA(data['close'], ma_long)
+
+                # 转换为pandas Series以支持shift操作
+                ma_short_series = pd.Series(ma_short_values, index=data.index)
+                ma_long_series = pd.Series(ma_long_values, index=data.index)
 
                 buy_condition = (ma_short_series > ma_long_series) & (ma_short_series.shift(1) <= ma_long_series.shift(1))
                 sell_condition = (ma_short_series < ma_long_series) & (ma_short_series.shift(1) >= ma_long_series.shift(1))
@@ -270,9 +275,11 @@ class AutomatedParameterTuning:
 
             # RSI信号
             if 'close' in data.columns:
-                rsi_values = self.mytt_indicators.RSI(data['close'], rsi_period)
-                rsi_buy = (rsi_values < rsi_buy_threshold) & (rsi_values.shift(1) >= rsi_buy_threshold)
-                rsi_sell = (rsi_values > rsi_sell_threshold) & (rsi_values.shift(1) <= rsi_sell_threshold)
+                rsi_values_raw = self.mytt_indicators.RSI(data['close'], rsi_period)
+                rsi_series = pd.Series(rsi_values_raw, index=data.index)
+
+                rsi_buy = (rsi_series < rsi_buy_threshold) & (rsi_series.shift(1) >= rsi_buy_threshold)
+                rsi_sell = (rsi_series > rsi_sell_threshold) & (rsi_series.shift(1) <= rsi_sell_threshold)
 
                 signals[rsi_buy] = 1
                 signals[rsi_sell] = -1

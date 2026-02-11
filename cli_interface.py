@@ -1816,12 +1816,12 @@ class UnifiedCLIInterface:
             integrated_system = QlibIntegratedEnhancement()
 
             # Get data
-            fetcher = DataFetcher(eastmoney_cookie=self.eastmoney_cookie)
+            fetcher = DataFetcher()
 
             all_data = pd.DataFrame()
             for symbol in symbols:
                 print(f"📊 获取 {symbol} 数据...")
-                data = fetcher.fetch_stock_data(symbol, start_date, end_date)
+                data = fetcher.fetch(symbol, start_date, end_date)
                 if not data.empty:
                     data['instrument'] = symbol
                     all_data = pd.concat([all_data, data], ignore_index=True)

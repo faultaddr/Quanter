@@ -7,9 +7,21 @@ import pandas as pd
 import numpy as np
 from abc import ABC, abstractmethod
 from scipy import stats
-import talib as ta
 import warnings
 warnings.filterwarnings('ignore')
+
+# Try to import TA-Lib, fall back to mock implementation if unavailable
+try:
+    import talib as ta
+    TALIB_AVAILABLE = True
+except ImportError:
+    import sys
+    import os
+    # Add the utils directory to the path to import our mock
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
+    from talib_mock import *
+    ta = sys.modules[__name__]  # Use our mock functions
+    TALIB_AVAILABLE = False
 
 class AdvancedStrategy(ABC):
     """

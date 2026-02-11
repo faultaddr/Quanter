@@ -148,7 +148,7 @@ class QlibIntegratedEnhancement:
         self.factor_library = FactorLibraryExpansion(provider_uri)
         self.model_fusion = ModelFusion()
         self.risk_manager = PortfolioRiskManagement(provider_uri)
-        self.param_tuner = AutomatedParameterTuning()
+        self.param_tuner = AutomatedParameterTuning(verbose=False)
         self.mytt_indicators = MyTTIndicators()
 
         # 系统状态
@@ -157,11 +157,7 @@ class QlibIntegratedEnhancement:
             hasattr(self.risk_manager, 'initialized')
         ])
 
-        print("🚀 Qlib集成增强系统初始化完成")
-        print("✅ 因子库扩充模块: 已加载")
-        print("✅ 模型融合模块: 已加载")
-        print("✅ 风险管理模块: 已加载")
-        print("✅ 自动调参模块: 已加载")
+        # Only print essential initialization info
         print(f"📊 Qlib 集成状态: {'完全可用' if self.system_initialized else '基础功能可用'}")
 
     def run_comprehensive_analysis(self, data: pd.DataFrame, instruments: List[str] = None,

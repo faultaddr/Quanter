@@ -164,7 +164,8 @@ class FactorLibraryExpansion:
                 print(f"⚠️ Qlib 初始化失败: {e}")
                 print("💡 提示: 安装 Qlib 并下载数据以启用完整因子功能")
         else:
-            print("⚠️ Qlib 不可用，将使用基础因子功能")
+            # Qlib not available, will use basic factor functionality
+            pass
 
     def get_qlib_alpha_factors(self, instruments: List[str], start_date: str, end_date: str,
                               alpha_version: str = '158') -> pd.DataFrame:
@@ -253,11 +254,10 @@ class FactorLibraryExpansion:
                 indicators[f'EMA_{period}'] = self.mytt_indicators.EMA(data['close'], period)
 
             # MACD - 异同移动平均线
-            macd, dif, dea, bar = self.mytt_indicators.MACD(data['close'])
-            indicators['MACD'] = macd
-            indicators['DIF'] = dif
-            indicators['DEA'] = dea
-            indicators['BAR'] = bar
+            dif, dea, bar = self.mytt_indicators.MACD(data['close'])
+            indicators['MACD_DIF'] = dif
+            indicators['MACD_DEA'] = dea
+            indicators['MACD_BAR'] = bar
 
             # KDJ - 随机指标
             k, d, j = self.mytt_indicators.KDJ(data['high'], data['low'], data['close'])
@@ -282,7 +282,9 @@ class FactorLibraryExpansion:
             indicators['ATR'] = self.mytt_indicators.ATR(data['high'], data['low'], data['close'])
 
             # DMA - 平均线差
-            indicators['DMA'] = self.mytt_indicators.DMA(data['close'])
+            dma_diff, dma_dea = self.mytt_indicators.DMA(data['close'])
+            indicators['DMA_DIFF'] = dma_diff
+            indicators['DMA_DEA'] = dma_dea
 
             # DMI - 动向指标
             p_di, n_di, adx, adxr = self.mytt_indicators.DMI(data['high'], data['low'], data['close'])
@@ -292,14 +294,17 @@ class FactorLibraryExpansion:
             indicators['DMI_ADXR'] = adxr
 
             # TRIX - 三重指数平滑平均线
-            indicators['TRIX'] = self.mytt_indicators.TRIX(data['close'])
+            trix, trma = self.mytt_indicators.TRIX(data['close'])
+            indicators['TRIX'] = trix
+            indicators['TRIX_MA'] = trma
 
             # VR - 成交量变异率
             indicators['VR'] = self.mytt_indicators.VR(data['close'], data['volume'])
 
             # WR - 威廉指标
-            for period in [5, 10, 14]:
-                indicators[f'WR_{period}'] = self.mytt_indicators.WR(data['high'], data['low'], data['close'], period)
+            wr1, wr2 = self.mytt_indicators.WR(data['high'], data['low'], data['close'], N=10, N1=6)
+            indicators['WR_10'] = wr1
+            indicators['WR_6'] = wr2
 
             print(f"✅ 成功计算 {len(indicators.columns)} 个 MyTT 指标")
             return indicators
@@ -360,7 +365,8 @@ class FactorLibraryExpansion:
             print("📦 获取 Qlib Alpha 因子...")
             qlib_factors = self.get_qlib_alpha_factors(instruments, start_date, end_date)
         else:
-            print("ℹ️ Qlib 不可用，跳过 Alpha 因子")
+            # Qlib not available, skipping Alpha factors
+            pass
             qlib_factors = pd.DataFrame()
 
         # 获取 MyTT 指标

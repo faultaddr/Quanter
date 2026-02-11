@@ -9,46 +9,56 @@ import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
 
-try:
-    import qlib
-    from qlib.config import REG_CN as REGION_CN
-    from qlib.data import D
-    from qlib.utils import init_instance_by_config
-    from qlib.workflow import R
-    from qlib.model.trainer import task_train
-    from qlib.contrib.strategy.signal_strategy import BaseSignalStrategy
-    from qlib.contrib.evaluate import risk_analysis, indicator_analysis
-    from qlib.backtest import backtest, executor
+# Check Python version compatibility
+import platform
+python_version = platform.python_version()
 
-    # Try to import GBDT separately to handle potential LightGBM/OpenMP issues
-    try:
-        from qlib.contrib.model.gbdt import LGBModel as GBDT  # Newer Qlib versions use LGBModel instead of GBDT
-        GBDT_AVAILABLE = True
-    except (ImportError, OSError) as e:
-        # Try the older name as fallback
-        try:
-            from qlib.contrib.model.gbdt import GBDT
-            GBDT_AVAILABLE = True
-        except (ImportError, OSError) as e2:
-            print(f"⚠️ GBDT 模型不可用 (LightGBM 问题): {e}")
-            print("💡 解决方案: 运行以下命令之一安装 OpenMP 库:")
-            print("   macOS (Homebrew): brew install libomp")
-            print("   macOS (Conda): conda install -c conda-forge libopenmp")
-            print("   或运行 install_qlib.sh 脚本来自动处理此问题")
-            GBDT_AVAILABLE = False
-
-    # Import LinearModel
-    try:
-        from qlib.contrib.model.linear import LinearModel
-        LINEAR_MODEL_AVAILABLE = True
-    except (ImportError, OSError) as e:
-        print(f"⚠️ Linear 模型不可用 (可能受LightGBM问题影响): {e}")
-        LINEAR_MODEL_AVAILABLE = False
-
-    QLIB_AVAILABLE = True
-except ImportError:
+if tuple(map(int, python_version.split('.')[:2])) < (3, 7):
     QLIB_AVAILABLE = False
-    print("⚠️ Qlib 未安装，将使用模拟集成")
+    print(f"⚠️ Qlib 需要 Python 3.7+，当前版本: {python_version}")
+    print("💡 解决方案: 使用 Python 3.8+ 运行程序或安装兼容版本的 Qlib")
+else:
+    try:
+        import qlib
+        from qlib.config import REG_CN as REGION_CN
+        from qlib.data import D
+        from qlib.utils import init_instance_by_config
+        from qlib.workflow import R
+        from qlib.model.trainer import task_train
+        from qlib.contrib.strategy.signal_strategy import BaseSignalStrategy
+        from qlib.contrib.evaluate import risk_analysis, indicator_analysis
+        from qlib.backtest import backtest, executor
+
+        # Try to import GBDT separately to handle potential LightGBM/OpenMP issues
+        try:
+            from qlib.contrib.model.gbdt import LGBModel as GBDT  # Newer Qlib versions use LGBModel instead of GBDT
+            GBDT_AVAILABLE = True
+        except (ImportError, OSError) as e:
+            # Try the older name as fallback
+            try:
+                from qlib.contrib.model.gbdt import GBDT
+                GBDT_AVAILABLE = True
+            except (ImportError, OSError) as e2:
+                print(f"⚠️ GBDT 模型不可用 (LightGBM 问题): {e}")
+                print("💡 解决方案: 运行以下命令之一安装 OpenMP 库:")
+                print("   macOS (Homebrew): brew install libomp")
+                print("   macOS (Conda): conda install -c conda-forge libopenmp")
+                print("   或运行 install_qlib.sh 脚本来自动处理此问题")
+                GBDT_AVAILABLE = False
+
+        # Import LinearModel
+        try:
+            from qlib.contrib.model.linear import LinearModel
+            LINEAR_MODEL_AVAILABLE = True
+        except (ImportError, OSError) as e:
+            print(f"⚠️ Linear 模型不可用 (可能受LightGBM问题影响): {e}")
+            LINEAR_MODEL_AVAILABLE = False
+
+        QLIB_AVAILABLE = True
+    except ImportError:
+        QLIB_AVAILABLE = False
+        print("⚠️ Qlib 未安装，将使用模拟集成")
+
 
 class DeepQlibIntegration:
     """
@@ -71,7 +81,8 @@ class DeepQlibIntegration:
                 print(f"⚠️ Qlib 初始化失败 (仅影响高级功能): {e}")
                 print("💡 提示: 运行 install_qlib.sh 安装完整 Qlib 数据环境")
         else:
-            print("⚠️ Qlib 不可用，将使用基础分析功能")
+            # Qlib not available, will use basic analysis functionality
+            pass
 
     def get_qlib_alpha_factors(self, instruments, start_date, end_date, alpha_version='158'):
         """
@@ -310,6 +321,13 @@ class DeepQlibIntegration:
             return pd.DataFrame()
 
         try:
+            # 确保数据索引唯一，如果有重复则重置索引但保留原始索引作为列
+            if data.index.duplicated().any():
+                original_index_name = data.index.name
+                data = data.reset_index()
+                data = data.set_index(data.columns[0])  # 使用第一列作为新索引
+                data.index.name = original_index_name
+
             features = pd.DataFrame(index=data.index)
 
             # 基础价格特征
@@ -368,6 +386,13 @@ class DeepQlibIntegration:
             return pd.Series()
 
         try:
+            # 确保数据索引唯一，如果有重复则重置索引但保留原始索引作为列
+            if features.index.duplicated().any():
+                original_index_name = features.index.name
+                features = features.reset_index()
+                features = features.set_index(features.columns[0])  # 使用第一列作为新索引
+                features.index.name = original_index_name
+
             # 简单的规则基信号生成（实际应用中可以用训练的模型）
             signals = pd.Series(0.0, index=features.index)
 
@@ -407,6 +432,16 @@ class DeepQlibIntegration:
         """
         获取传统技术指标信号作为对比
         """
+        if data.empty:
+            return pd.Series(0.0, index=data.index)
+
+        # 确保数据索引唯一，如果有重复则重置索引但保留原始索引作为列
+        if data.index.duplicated().any():
+            original_index_name = data.index.name
+            data = data.reset_index()
+            data = data.set_index(data.columns[0])  # 使用第一列作为新索引
+            data.index.name = original_index_name
+
         signals = pd.Series(0.0, index=data.index)
 
         try:
@@ -417,8 +452,8 @@ class DeepQlibIntegration:
             buy_signals = (ma_short > ma_long) & (ma_short.shift(1) <= ma_long.shift(1))
             sell_signals = (ma_short < ma_long) & (ma_short.shift(1) >= ma_long.shift(1))
 
-            signals[buy_signals] = 0.5
-            signals[sell_signals] = -0.5
+            signals.loc[buy_signals] = 0.5
+            signals.loc[sell_signals] = -0.5
 
         except Exception as e:
             print(f"⚠️ 传统信号生成失败: {e}")
@@ -468,6 +503,24 @@ class DeepQlibIntegration:
             return {'return': 0, 'sharpe': 0, 'max_dd': 0}
 
         try:
+            # 确保索引一致，如果有重复则重置索引但保留原始索引作为列
+            if signals.index.duplicated().any():
+                original_index_name = signals.index.name
+                signals = signals.reset_index()
+                signals = signals.set_index(signals.columns[0])  # 使用第一列作为新索引
+                signals.index.name = original_index_name
+
+            if data.index.duplicated().any():
+                original_index_name = data.index.name
+                data = data.reset_index()
+                data = data.set_index(data.columns[0])  # 使用第一列作为新索引
+                data.index.name = original_index_name
+
+            # 确保索引一致
+            common_index = signals.index.intersection(data.index)
+            signals = signals.loc[common_index]
+            data = data.loc[common_index]
+
             # 生成持仓信号（滞后一期以避免前瞻偏差）
             positions = signals.shift(1).fillna(0)
 

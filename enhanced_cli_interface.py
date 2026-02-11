@@ -21,7 +21,7 @@ from quant_trade_a_share.prediction.predictive_analyzer import PredictiveAnalyze
 from quant_trade_a_share.backtest.backtester_tushare import BacktesterWithTushare
 from quant_trade_a_share.data.data_fetcher import DataFetcher
 from multi_factor_strategy_template import MultiFactorStrategy
-from quant_trade_a_share.integration.qlib_enhancement import enhance_cli_with_qlib
+from quant_trade_a_share.integration.ashare_qlib_integration import AshareQlibIntegration
 
 
 class UnifiedCLIInterface:
@@ -51,6 +51,13 @@ class UnifiedCLIInterface:
 
         # 初始化多因子策略
         self.multi_factor_strategy = MultiFactorStrategy()
+
+        # 初始化 Ashare-Qlib 集成模块
+        try:
+            self.ashare_qlib_integration = AshareQlibIntegration()
+        except Exception as e:
+            print(f"⚠️  无法初始化Ashare-Qlib集成模块: {e}")
+            self.ashare_qlib_integration = None
 
         # 存储会话数据
         self.session_data = {}
@@ -95,10 +102,11 @@ class UnifiedCLIInterface:
   16. analyze_factors   - 分析因子表现
   17. factor_report     - 生成因子报告
 
-🧪 Qlib 增强功能类:
-  22. enhanced_multi_factor_analysis - 运行Qlib增强的多因子分析
-  23. enhanced_factor_analysis      - 进行Qlib增强的因子分析
-  24. get_qlib_market_status       - 获取Qlib市场状态分析
+🧪 Ashare-Qlib 集成分析类:
+  22. ashare_qlib_comprehensive_analysis - 运行Ashare-Qlib综合性分析
+  23. ashare_qlib_advanced_factor_analysis - 进行Ashare-Qlib高级因子分析
+  24. ashare_qlib_smart_portfolio_optimization - 运行Ashare-Qlib智能投组优化
+  25. ashare_qlib_adaptive_signal_generation - 生成Ashare-Qlib自适应信号
 
 ⚙️  系统管理类:
   18. show_session     - 显示会话数据
@@ -167,7 +175,11 @@ class UnifiedCLIInterface:
             'analyze_factors': self.analyze_factors,
             'factor_report': self.factor_report,
             'show_session': self.show_session,
-            'clear_session': self.clear_session
+            'clear_session': self.clear_session,
+            'ashare_qlib_comprehensive_analysis': self.ashare_qlib_comprehensive_analysis,
+            'ashare_qlib_advanced_factor_analysis': self.ashare_qlib_advanced_factor_analysis,
+            'ashare_qlib_smart_portfolio_optimization': self.ashare_qlib_smart_portfolio_optimization,
+            'ashare_qlib_adaptive_signal_generation': self.ashare_qlib_adaptive_signal_generation
         }
 
     def handle_numeric_command(self, cmd_num):
@@ -195,7 +207,11 @@ class UnifiedCLIInterface:
             18: 'show_session',
             19: 'clear_session',
             20: 'help',
-            21: 'quit'
+            21: 'quit',
+            22: 'ashare_qlib_comprehensive_analysis',
+            23: 'ashare_qlib_advanced_factor_analysis',
+            24: 'ashare_qlib_smart_portfolio_optimization',
+            25: 'ashare_qlib_adaptive_signal_generation'
         }
 
         if cmd_num in cmd_map:
@@ -271,9 +287,10 @@ class UnifiedCLIInterface:
 
         print(f"\n📊 分析股票 {symbol} 使用 {strategy_name} 策略...")
         print(f"📈 使用数据源: {source}")
+        print(f"📅 自动使用最近180天数据 (从今天往前推)")
 
         try:
-            # 获取股票数据
+            # 获取股票数据 - 自动使用当天为结束日期，前180天为开始日期
             from datetime import datetime, timedelta
             end_date = datetime.now().strftime('%Y-%m-%d')
             start_date = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
@@ -881,6 +898,168 @@ class UnifiedCLIInterface:
         else:
             print("\n⚠️  会话中无因子分析结果，请先运行 'multi_factor_analysis'")
 
+    def ashare_qlib_comprehensive_analysis(self):
+        """
+        使用 Ashare 数据运行综合性 Qlib 分析
+        """
+        print("\n🚀 使用 Ashare 数据运行综合性 Qlib 分析...")
+
+        if not self.ashare_qlib_integration:
+            print("❌ Ashare-Qlib集成模块未初始化，请检查依赖项")
+            return
+
+        symbol = input("请输入股票代码 (例: sh600023): ").strip()
+        if not symbol:
+            print("❌ 股票代码不能为空，使用默认股票 sh600023")
+            symbol = "sh600023"
+
+        days_input = input("请输入回溯天数 (默认: 180): ").strip()
+        days = int(days_input) if days_input.isdigit() else 180
+
+        print(f"\n📊 对 {symbol} 进行综合性分析，使用过去 {days} 天的数据...")
+
+        try:
+            # 运行综合性分析
+            results = self.ashare_qlib_integration.run_all_analysis_with_ashare(symbol, days=days)
+
+            # 存储结果
+            self.session_data['ashare_qlib_comprehensive_results'] = results
+
+            print(f"\n✅ {symbol} 的综合性 Qlib 分析已完成！")
+
+        except Exception as e:
+            print(f"❌ 综合性分析出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def ashare_qlib_advanced_factor_analysis(self):
+        """
+        使用 Ashare 数据运行高级因子分析
+        """
+        print("\n🔍 使用 Ashare 数据运行高级因子分析...")
+
+        if not self.ashare_qlib_integration:
+            print("❌ Ashare-Qlib集成模块未初始化，请检查依赖项")
+            return
+
+        symbol = input("请输入股票代码 (例: sh600023): ").strip()
+        if not symbol:
+            print("❌ 股票代码不能为空，使用默认股票 sh600023")
+            symbol = "sh600023"
+
+        days_input = input("请输入回溯天数 (默认: 180): ").strip()
+        days = int(days_input) if days_input.isdigit() else 180
+
+        print(f"\n📊 对 {symbol} 进行高级因子分析，使用过去 {days} 天的数据...")
+
+        try:
+            # 运行高级因子分析
+            results = self.ashare_qlib_integration.run_advanced_factor_analysis_with_ashare(symbol, days=days)
+
+            # 显示结果摘要
+            if 'factors' in results and not results['factors'].empty:
+                factors_df = results['factors']
+                print(f"\n📈 生成因子数量: {len(factors_df.columns)}")
+                print(f"📊 样本数量: {len(factors_df)}")
+                if not factors_df.empty and len(factors_df.columns) > 0:
+                    print(f"📊 首个因子统计: 均值={factors_df.iloc[:, 0].mean():.4f}, "
+                          f"标准差={factors_df.iloc[:, 0].std():.4f}, "
+                          f"最小值={factors_df.iloc[:, 0].min():.4f}, "
+                          f"最大值={factors_df.iloc[:, 0].max():.4f}")
+
+            # 存储结果
+            self.session_data['ashare_qlib_factor_analysis'] = results
+
+            print(f"\n✅ {symbol} 的高级因子分析已完成！")
+
+        except Exception as e:
+            print(f"❌ 高级因子分析出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def ashare_qlib_smart_portfolio_optimization(self):
+        """
+        使用 Ashare 数据运行智能投资组合优化
+        """
+        print("\n⚖️  使用 Ashare 数据运行智能投资组合优化...")
+
+        if not self.ashare_qlib_integration:
+            print("❌ Ashare-Qlib集成模块未初始化，请检查依赖项")
+            return
+
+        symbols_input = input("请输入股票代码 (用逗号分隔，例: sh600023,sz000001): ").strip()
+        if not symbols_input:
+            symbols = ['sh600023', 'sz000001']  # 默认股票
+            print("使用默认股票列表")
+        else:
+            symbols = [s.strip() for s in symbols_input.split(',')]
+
+        days_input = input("请输入回溯天数 (默认: 180): ").strip()
+        days = int(days_input) if days_input.isdigit() else 180
+
+        print(f"\n📊 对 {symbols} 进行投资组合优化，使用过去 {days} 天的数据...")
+
+        try:
+            # 运行投资组合优化
+            results = self.ashare_qlib_integration.run_smart_portfolio_optimization_with_ashare(symbols, days=days)
+
+            # 显示优化权重
+            weights = results.get('optimal_weights', {})
+            print(f"\n💰 优化权重:")
+            for asset, weight in weights.items():
+                print(f"  {asset}: {weight:.4f}")
+
+            # 存储结果
+            self.session_data['ashare_qlib_portfolio_optimization'] = results
+
+            print(f"\n✅ 投资组合优化已完成！")
+
+        except Exception as e:
+            print(f"❌ 投资组合优化出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def ashare_qlib_adaptive_signal_generation(self):
+        """
+        使用 Ashare 数据运行自适应信号生成
+        """
+        print("\n🎯 使用 Ashare 数据运行自适应信号生成...")
+
+        if not self.ashare_qlib_integration:
+            print("❌ Ashare-Qlib集成模块未初始化，请检查依赖项")
+            return
+
+        symbol = input("请输入股票代码 (例: sh600023): ").strip()
+        if not symbol:
+            print("❌ 股票代码不能为空，使用默认股票 sh600023")
+            symbol = "sh600023"
+
+        days_input = input("请输入回溯天数 (默认: 180): ").strip()
+        days = int(days_input) if days_input.isdigit() else 180
+
+        print(f"\n📊 对 {symbol} 生成自适应信号，使用过去 {days} 天的数据...")
+
+        try:
+            # 运行自适应信号生成
+            results = self.ashare_qlib_integration.run_adaptive_signal_generation_with_ashare(symbol, days=days)
+
+            # 统计各种信号的数量
+            print(f"\n📊 信号统计:")
+            for signal_type, signals in results.items():
+                if hasattr(signals, 'shape') and len(signals) > 0:
+                    active_signals = len(signals[signals != 0])
+                    print(f"  {signal_type}: 总数={len(signals)}, 活跃信号={active_signals}")
+
+            # 存储结果
+            self.session_data['ashare_qlib_adaptive_signals'] = results
+
+            print(f"\n✅ 自适应信号生成已完成！")
+
+        except Exception as e:
+            print(f"❌ 自适应信号生成出错: {e}")
+            import traceback
+            traceback.print_exc()
+
     def run_backtest(self):
         """
         运行策略回测
@@ -1065,7 +1244,7 @@ def main():
 
     args = parser.parse_args()
 
-    print("🔍 A股市场分析系统 - 统一CLI接口 (增强版)")
+    print("🔍 A股市场分析系统 - 统一CLI接口 (Ashare-Qlib增强版)")
     print("="*50)
 
     # 使用您的令牌
@@ -1101,11 +1280,7 @@ def main():
     }
 
     # 初始化统一接口
-    basic_cli = UnifiedCLIInterface(tushare_token, eastmoney_cookie)
-
-    # 使用增强功能装饰器
-    EnhancedCLIInterface = enhance_cli_with_qlib(UnifiedCLIInterface)
-    cli_interface = EnhancedCLIInterface(tushare_token, eastmoney_cookie)
+    cli_interface = UnifiedCLIInterface(tushare_token, eastmoney_cookie)
 
     if args.mode == 'interactive':
         # 运行交互模式
