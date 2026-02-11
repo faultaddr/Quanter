@@ -91,7 +91,10 @@ class StrategyManager:
         # Register advanced strategies if available
         if self.advanced_strategy_manager:
             for strategy_name in self.advanced_strategy_manager.get_strategy_names():
+                # Register with adv_ prefix for explicit access
                 self.register_strategy(f'adv_{strategy_name}', self.advanced_strategy_manager.get_strategy(strategy_name))
+                # Also register without prefix for backward compatibility
+                self.register_strategy(strategy_name, self.advanced_strategy_manager.get_strategy(strategy_name))
 
     def register_strategy(self, name, strategy):
         """
@@ -137,16 +140,29 @@ class StrategyManager:
         """
         return list(self.strategies.keys())
 
-    def run_backtest(self, strategy_name, data, start_date=None, end_date=None):
+    def run_strategy_on_multiple_stocks(self, strategy_name, stocks_data_dict):
         """
-        Run backtest for a specific strategy using Qlib
+        在多只股票上运行策略
+        :param strategy_name: 策略名称
+        :param stocks_data_dict: 字典，键为股票代码，值为该股票的数据
+        :return: 结果字典
         """
-        if strategy_name in self.qlib_manager.get_strategy_names():
-            return self.qlib_manager.run_backtest(strategy_name, data, start_date, end_date)
-        else:
-            # For traditional strategies, return a simple backtest result
-            signals = self.run_strategy(strategy_name, data)
-            return self._simple_backtest(signals, data)
+        results = {}
+        for stock_code, stock_data in stocks_data_dict.items():
+            try:
+                signals = self.run_strategy(strategy_name, stock_data)
+                backtest_result = self.run_backtest(strategy_name, stock_data)
+
+                results[stock_code] = {
+                    'signals': signals,
+                    'backtest': backtest_result,
+                    'latest_signal': signals.iloc[-1] if len(signals) > 0 else 0
+                }
+            except Exception as e:
+                print(f"⚠️  运行策略 {strategy_name} 于股票 {stock_code} 时出现错误: {e}")
+                results[stock_code] = None
+
+        return results
 
     def _simple_backtest(self, signals, data):
         """

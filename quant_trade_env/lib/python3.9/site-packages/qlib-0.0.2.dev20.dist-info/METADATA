@@ -1,0 +1,21 @@
+Metadata-Version: 2.1
+Name: qlib
+Version: 0.0.2.dev20
+Summary: A Q Library for Data Scientist
+Home-page: https://github.com/Q-Engineering/qlib
+Author: Q Engineering Dev Team
+Author-email: david@q.engineering
+License: UNKNOWN
+Project-URL: Bug Reports, https://someurl
+Project-URL: Funding, https://someurl
+Project-URL: Subscriptions, http://someurl
+Project-URL: Source, https://someurl
+Platform: UNKNOWN
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Description-Content-Type: text/markdown
+
+Initial package Qlib
+
+

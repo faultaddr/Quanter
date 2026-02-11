@@ -8,6 +8,7 @@ import os
 import argparse
 from datetime import datetime, timedelta
 import pandas as pd
+import numpy as np
 
 # Add the project root to the path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -20,7 +21,44 @@ from quant_trade_a_share.prediction.predictive_analyzer import PredictiveAnalyze
 # Using signal generation from other modules
 from quant_trade_a_share.backtest.backtester_tushare import BacktesterWithTushare
 from quant_trade_a_share.data.data_fetcher import DataFetcher
+from quant_trade_a_share.watchlist.watchlist_manager import WatchlistManager
+import sys
+import os
+# Add the project root directory to the path to import from the root
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from multi_factor_strategy_template import MultiFactorStrategy
+from quant_trade_a_share.integration.qlib_enhancement import enhance_cli_with_qlib
+# Try to import DeepQlibIntegration with error handling
+try:
+    from quant_trade_a_share.integration.deep_qlib_integration import DeepQlibIntegration
+    DEEP_QLIB_AVAILABLE = True
+except (ImportError, OSError) as e:
+    print(f"⚠️ 深度 Qlib 集成不可用: {e}")
+    print("💡 解决方案: 运行 'brew install libomp' 或 'pip install lightgbm' 或 './install_qlib.sh'")
+    DEEP_QLIB_AVAILABLE = False
+    # Define a dummy class to avoid further errors
+    class DeepQlibIntegration:
+        def __init__(self, *args, **kwargs):
+            print("❌ 深度 Qlib 集成不可用 (请按提示安装依赖)")
+
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: print(f"❌ 功能 '{name}' 不可用 (深度 Qlib 集成未加载)")
+
+# Try to import QlibIntegratedEnhancement with error handling
+try:
+    from quant_trade_a_share.integration.qlib_integrated_enhancement import QlibIntegratedEnhancement
+    QLIB_INTEGRATED_AVAILABLE = True
+except (ImportError, OSError) as e:
+    print(f"⚠️ Qlib集成增强不可用: {e}")
+    print("💡 解决方案: 检查因素库依赖是否正确安装")
+    QLIB_INTEGRATED_AVAILABLE = False
+    # Define a dummy class to avoid further errors
+    class QlibIntegratedEnhancement:
+        def __init__(self, *args, **kwargs):
+            print("❌ Qlib集成增强不可用 (请按提示安装依赖)")
+
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: print(f"❌ 功能 '{name}' 不可用 (Qlib集成增强未加载)")
 
 
 class UnifiedCLIInterface:
@@ -56,6 +94,8 @@ class UnifiedCLIInterface:
         # Store session data
         self.session_data = {}
         self.current_stocks = []
+        # Initialize watchlist manager
+        self.watchlist_manager = WatchlistManager()
 
         print("✅ A股市场分析系统统一接口初始化完成")
         print("="*60)
@@ -91,16 +131,21 @@ class UnifiedCLIInterface:
   13. run_backtest      - 运行策略回测
   14. compare_strategies - 比较不同策略
 
+🔍 自选股管理类:
+  15. batch_analyze_watchlist - 批量分析自选股
+  16. manage_watchlist        - 管理自选股列表
+
 📊 多因子分析类:
-  15. multi_factor_analysis - 运行100+因子分析
-  16. analyze_factors   - 分析因子表现
-  17. factor_report     - 生成因子报告
+  17. multi_factor_analysis - 运行100+因子分析
+  18. analyze_factors   - 分析因子表现
+  19. factor_report     - 生成因子报告
 
 ⚙️  系统管理类:
-  18. show_session     - 显示会话数据
-  19. clear_session    - 清空会话数据
-  20. help             - 显示帮助信息
-  21. quit/exit        - 退出系统
+  20. show_session     - 显示会话数据
+  21. clear_session    - 清空会话数据
+  22. help             - 显示帮助信息
+  23. quit/exit        - 退出系统
+  24. run_comprehensive_qlib_analysis - 综合性Qlib增强分析
 
 💡 使用方法: 输入命令编号或命令名称
    例如: 输入 '1' 或 'screen_stocks' 开始股票筛选
@@ -162,8 +207,11 @@ class UnifiedCLIInterface:
             'multi_factor_analysis': self.multi_factor_analysis,
             'analyze_factors': self.analyze_factors,
             'factor_report': self.factor_report,
+            'batch_analyze_watchlist': self.batch_analyze_watchlist,
+            'manage_watchlist': self.manage_watchlist,
             'show_session': self.show_session,
-            'clear_session': self.clear_session
+            'clear_session': self.clear_session,
+            'run_comprehensive_qlib_analysis': self.run_comprehensive_qlib_analysis
         }
 
     def handle_numeric_command(self, cmd_num):
@@ -188,10 +236,13 @@ class UnifiedCLIInterface:
             15: 'multi_factor_analysis',
             16: 'analyze_factors',
             17: 'factor_report',
-            18: 'show_session',
-            19: 'clear_session',
-            20: 'help',
-            21: 'quit'
+            18: 'batch_analyze_watchlist',
+            19: 'manage_watchlist',
+            20: 'show_session',
+            21: 'clear_session',
+            22: 'help',
+            23: 'quit',
+            24: 'run_comprehensive_qlib_analysis'
         }
 
         if cmd_num in cmd_map:
@@ -221,7 +272,7 @@ class UnifiedCLIInterface:
 
     def screen_stocks(self):
         """
-        Screen for potentially rising stocks
+        Screen for potentially rising stocks with detailed analysis
         """
         print("\n🔍 开始筛选潜在上涨股票 (市值>200亿)...")
 
@@ -243,27 +294,369 @@ class UnifiedCLIInterface:
                 print(f"\n✅ 筛选完成，找到 {len(results)} 只符合条件的股票:")
                 print(results.head(10).to_string(index=False))
                 self.session_data['screened_stocks'] = results
+
+                # 提供详细分析选项
+                analyze_detail = input("\n是否对筛选出的股票进行详细分析? (y/n, 默认: n): ").strip().lower()
+                if analyze_detail == 'y':
+                    # 对筛选出的前几只股票进行详细分析
+                    num_to_analyze = input(f"请输入要分析的股票数量 (1-{min(10, len(results))}, 默认: 3): ").strip()
+                    try:
+                        num_to_analyze = int(num_to_analyze) if num_to_analyze else 3
+                        num_to_analyze = min(num_to_analyze, len(results), 10)  # 最多分析10只或实际结果数
+                    except ValueError:
+                        num_to_analyze = 3
+
+                    print(f"\n🚀 开始对前 {num_to_analyze} 只筛选出的股票进行详细分析...")
+
+                    for idx, (_, stock_row) in enumerate(results.head(num_to_analyze).iterrows()):
+                        symbol = stock_row.get('symbol', stock_row.get('ts_code', stock_row.name if hasattr(stock_row, 'name') else 'Unknown'))
+
+                        print(f"\n{'='*80}")
+                        print(f"📊 第 {idx+1}/{num_to_analyze} 只股票详细分析: {symbol}")
+                        print(f"{'='*80}")
+
+                        # 获取股票数据
+                        from datetime import datetime, timedelta
+                        end_date = datetime.now().strftime('%Y-%m-%d')
+                        start_date = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+
+                        # 优先使用Ashare数据源
+                        data = self.data_fetcher.fetch(symbol, start_date, end_date, source='ashare')
+                        if data is None or data.empty:
+                            print(f"❌ 无法获取 {symbol} 的数据，跳过此股票")
+                            continue
+
+                        # 确保技术指标已计算
+                        required_indicators = ['rsi6', 'rsi12', 'rsi24', 'macd_dif', 'macd_dea', 'macd_bar',
+                                     'kdj_k', 'kdj_d', 'kdj_j', 'wr1', 'wr2', 'ma5', 'ma10', 'ma20',
+                                     'ma30', 'ma60', 'boll_upper', 'boll_mid', 'boll_lower', 'cci',
+                                     'atr', 'bias6', 'bias12', 'bias24', 'trix', 'trma', 'vr', 'cr',
+                                     'obv', 'mfi', 'ema12', 'ema26', 'ema50']
+
+                        missing_indicators = [col for col in required_indicators if col not in data.columns]
+                        if missing_indicators:
+                            print(f"🔄 检测到缺失指标，正在计算技术指标...")
+                            data = self.screener.eastmoney_fetcher.calculate_enhanced_technical_indicators(data)
+                            print("✅ 技术指标计算完成")
+                        else:
+                            print("✅ 数据已包含技术指标")
+
+                        # 获取股票名称
+                        if self.screener.chinese_stocks is None:
+                            self.screener.get_chinese_stocks_list()
+
+                        stock_info = self.screener.chinese_stocks[self.screener.chinese_stocks['symbol'] == symbol] if self.screener.chinese_stocks is not None else pd.DataFrame()
+                        stock_name = symbol  # Default to symbol if name not found
+                        if not stock_info.empty and 'name' in stock_info.columns:
+                            stock_name = stock_info['name'].iloc[0]
+
+                        # 计算近期表现
+                        if not data.empty and len(data) > 0:
+                            recent_performance = ((data['close'].iloc[-1] - data['close'].iloc[0]) /
+                                                 data['close'].iloc[0]) * 100
+                            current_price = data['close'].iloc[-1]
+                            # 计算20日和60日表现
+                            perf_20d = ((data['close'].iloc[-1] - data['close'].iloc[-20]) / data['close'].iloc[-20]) * 100 if len(data) >= 20 else 0
+                            perf_60d = ((data['close'].iloc[-1] - data['close'].iloc[-60]) / data['close'].iloc[-60]) * 100 if len(data) >= 60 else 0
+                        else:
+                            recent_performance = 0
+                            perf_20d = 0
+                            perf_60d = 0
+                            current_price = 0
+                            print(f"⚠️  {symbol} 数据不足，无法计算近期表现")
+
+                        # 运行所有可用策略并收集信号
+                        all_strategies = ['ma_crossover', 'rsi', 'macd', 'bollinger', 'mean_reversion', 'breakout']
+                        strategy_results = {}
+
+                        print(f"\n🏃 运行所有策略...")
+                        for strategy_name in all_strategies:
+                            strategy = self.strategy_manager.get_strategy(strategy_name)
+                            if strategy is not None:
+                                try:
+                                    signals = strategy.generate_signals(data)
+                                    latest_signal = signals.iloc[-1] if len(signals) > 0 else 0
+                                    signal_count = len(signals[signals != 0]) if len(signals) > 0 else 0
+                                    strategy_results[strategy_name] = {
+                                        'signal': latest_signal,
+                                        'signal_count': signal_count,
+                                        'signals': signals
+                                    }
+                                    signal_text = "📈 买入" if latest_signal == 1 else "🔴 卖出" if latest_signal == -1 else "⏸️  持有"
+                                    print(f"   {strategy_name}: {signal_text}")
+                                except Exception as e:
+                                    print(f"   ⚠️  {strategy_name} 策略执行失败: {e}")
+                                    strategy_results[strategy_name] = {
+                                        'signal': 0,
+                                        'signal_count': 0,
+                                        'signals': pd.Series(dtype=float)
+                                    }
+                            else:
+                                print(f"   ⚠️  策略 {strategy_name} 不存在")
+                                strategy_results[strategy_name] = {
+                                    'signal': 0,
+                                    'signal_count': 0,
+                                    'signals': pd.Series(dtype=float)
+                                }
+
+                        # 获取增强技术指标（现在保证已存在）
+                        rsi6 = data['rsi6'].iloc[-1] if 'rsi6' in data.columns and not pd.isna(data['rsi6'].iloc[-1]) else 0
+                        rsi12 = data['rsi12'].iloc[-1] if 'rsi12' in data.columns and not pd.isna(data['rsi12'].iloc[-1]) else 0
+                        rsi24 = data['rsi24'].iloc[-1] if 'rsi24' in data.columns and not pd.isna(data['rsi24'].iloc[-1]) else 0
+
+                        macd = data['macd_dif'].iloc[-1] if 'macd_dif' in data.columns and not pd.isna(data['macd_dif'].iloc[-1]) else 0
+                        macd_signal = data['macd_dea'].iloc[-1] if 'macd_dea' in data.columns and not pd.isna(data['macd_dea'].iloc[-1]) else 0
+                        macd_histogram = data['macd_bar'].iloc[-1] if 'macd_bar' in data.columns and not pd.isna(data['macd_bar'].iloc[-1]) else 0
+
+                        ma_5 = data['ma5'].iloc[-1] if 'ma5' in data.columns and not pd.isna(data['ma5'].iloc[-1]) else 0
+                        ma_10 = data['ma10'].iloc[-1] if 'ma10' in data.columns and not pd.isna(data['ma10'].iloc[-1]) else 0
+                        ma_20 = data['ma20'].iloc[-1] if 'ma20' in data.columns and not pd.isna(data['ma20'].iloc[-1]) else 0
+                        ma_30 = data['ma30'].iloc[-1] if 'ma30' in data.columns and not pd.isna(data['ma30'].iloc[-1]) else 0
+                        ma_60 = data['ma60'].iloc[-1] if 'ma60' in data.columns and not pd.isna(data['ma60'].iloc[-1]) else 0
+
+                        bb_upper = data['boll_upper'].iloc[-1] if 'boll_upper' in data.columns and not pd.isna(data['boll_upper'].iloc[-1]) else 0
+                        bb_lower = data['boll_lower'].iloc[-1] if 'boll_lower' in data.columns and not pd.isna(data['boll_lower'].iloc[-1]) else 0
+                        bb_middle = data['boll_mid'].iloc[-1] if 'boll_mid' in data.columns and not pd.isna(data['boll_mid'].iloc[-1]) else 0
+
+                        kdj_k = data['kdj_k'].iloc[-1] if 'kdj_k' in data.columns and not pd.isna(data['kdj_k'].iloc[-1]) else 0
+                        kdj_d = data['kdj_d'].iloc[-1] if 'kdj_d' in data.columns and not pd.isna(data['kdj_d'].iloc[-1]) else 0
+                        kdj_j = data['kdj_j'].iloc[-1] if 'kdj_j' in data.columns and not pd.isna(data['kdj_j'].iloc[-1]) else 0
+
+                        wr1 = data['wr1'].iloc[-1] if 'wr1' in data.columns and not pd.isna(data['wr1'].iloc[-1]) else 0
+                        wr2 = data['wr2'].iloc[-1] if 'wr2' in data.columns and not pd.isna(data['wr2'].iloc[-1]) else 0
+
+                        cci = data['cci'].iloc[-1] if 'cci' in data.columns and not pd.isna(data['cci'].iloc[-1]) else 0
+
+                        atr = data['atr'].iloc[-1] if 'atr' in data.columns and not pd.isna(data['atr'].iloc[-1]) else 0
+
+                        volume_ratio = data['volume_ratio'].iloc[-1] if 'volume_ratio' in data.columns and not pd.isna(data['volume_ratio'].iloc[-1]) else 0
+                        volatility = data['volatility'].iloc[-1] if 'volatility' in data.columns and not pd.isna(data['volatility'].iloc[-1]) else 0
+                        momentum = data['momentum'].iloc[-1] if 'momentum' in data.columns and not pd.isna(data['momentum'].iloc[-1]) else 0
+                        roc = data['roc'].iloc[-1] if 'roc' in data.columns and not pd.isna(data['roc'].iloc[-1]) else 0
+
+                        # MyTT指标
+                        bias6 = data['bias6'].iloc[-1] if 'bias6' in data.columns and not pd.isna(data['bias6'].iloc[-1]) else 0
+                        bias12 = data['bias12'].iloc[-1] if 'bias12' in data.columns and not pd.isna(data['bias12'].iloc[-1]) else 0
+                        bias24 = data['bias24'].iloc[-1] if 'bias24' in data.columns and not pd.isna(data['bias24'].iloc[-1]) else 0
+
+                        dmi_pdi = data['dmi_pdi'].iloc[-1] if 'dmi_pdi' in data.columns and not pd.isna(data['dmi_pdi'].iloc[-1]) else 0
+                        dmi_mdi = data['dmi_mdi'].iloc[-1] if 'dmi_mdi' in data.columns and not pd.isna(data['dmi_mdi'].iloc[-1]) else 0
+                        dmi_adx = data['dmi_adx'].iloc[-1] if 'dmi_adx' in data.columns and not pd.isna(data['dmi_adx'].iloc[-1]) else 0
+
+                        trix = data['trix'].iloc[-1] if 'trix' in data.columns and not pd.isna(data['trix'].iloc[-1]) else 0
+                        trma = data['trma'].iloc[-1] if 'trma' in data.columns and not pd.isna(data['trma'].iloc[-1]) else 0
+
+                        vr = data['vr'].iloc[-1] if 'vr' in data.columns and not pd.isna(data['vr'].iloc[-1]) else 0
+                        cr = data['cr'].iloc[-1] if 'cr' in data.columns and not pd.isna(data['cr'].iloc[-1]) else 0
+
+                        obv = data['obv'].iloc[-1] if 'obv' in data.columns and not pd.isna(data['obv'].iloc[-1]) else 0
+                        mfi = data['mfi'].iloc[-1] if 'mfi' in data.columns and not pd.isna(data['mfi'].iloc[-1]) else 0
+
+                        ema12 = data['ema12'].iloc[-1] if 'ema12' in data.columns and not pd.isna(data['ema12'].iloc[-1]) else 0
+                        ema26 = data['ema26'].iloc[-1] if 'ema26' in data.columns and not pd.isna(data['ema26'].iloc[-1]) else 0
+                        ema50 = data['ema50'].iloc[-1] if 'ema50' in data.columns and not pd.isna(data['ema50'].iloc[-1]) else 0
+
+                        # 计算额外的分析指标
+                        price_to_ma20 = (current_price / ma_20 - 1) * 100 if ma_20 != 0 else 0
+                        price_position_bb = (current_price - bb_lower) / (bb_upper - bb_lower) if bb_upper != bb_lower else 0.5
+                        volume_change = volume_ratio - 1 if volume_ratio != 0 else 0
+
+                        # 计算趋势
+                        trend = "上升" if current_price > ma_20 else "下降"
+
+                        # 生成综合分析报告
+                        print(f"\n" + "="*60)
+                        print(f"🏆 {symbol} ({stock_name}) 详细分析报告")
+                        print("="*60)
+
+                        # 价格与表现部分
+                        print(f"💰 价格与表现:")
+                        print(f"   当前价格: ¥{current_price:.2f}")
+                        print(f"   180日涨幅: {recent_performance:+.2f}%")
+                        print(f"   60日涨幅: {perf_60d:+.2f}%")
+                        print(f"   20日涨幅: {perf_20d:+.2f}%")
+                        print(f"   当前趋势: {trend}")
+
+                        # 技术指标部分
+                        print(f"\n🔧 技术指标:")
+                        print(f"   RSI (6/12/24): {rsi6:.2f}/{rsi12:.2f}/{rsi24:.2f} ({' oversold' if rsi24 < 30 else ' overbought' if rsi24 > 70 else ' neutral'})")
+                        print(f"   MACD: {macd:.4f}, Signal: {macd_signal:.4f}, Histogram: {macd_histogram:.4f}")
+                        print(f"   KDJ: K:{kdj_k:.2f}, D:{kdj_d:.2f}, J:{kdj_j:.2f}")
+                        print(f"   威廉指标: WR1:{wr1:.2f}, WR2:{wr2:.2f}")
+                        print(f"   移动均线: MA5:{ma_5:.2f}, MA10:{ma_10:.2f}, MA20:{ma_20:.2f}, MA30:{ma_30:.2f}, MA60:{ma_60:.2f}")
+                        print(f"   指数均线: EMA12:{ema12:.2f}, EMA26:{ema26:.2f}, EMA50:{ema50:.2f}")
+                        print(f"   布林带: 上轨{bb_upper:.2f}, 中轨{bb_middle:.2f}, 下轨{bb_lower:.2f}")
+                        print(f"   价格在布林带位置: {price_position_bb:.2f} ({'高位' if price_position_bb > 0.8 else '中位' if 0.2 <= price_position_bb <= 0.8 else '低位'})")
+                        print(f"   CCI: {cci:.2f}")
+                        print(f"   DMI: PDI:{dmi_pdi:.2f}, MDI:{dmi_mdi:.2f}, ADX:{dmi_adx:.2f}")
+                        print(f"   BIAS: 6日{bias6:.2f}%, 12日{bias12:.2f}%, 24日{bias24:.2f}%")
+                        print(f"   TRIX: {trix:.4f}, TRMA: {trma:.4f}")
+                        print(f"   VR: {vr:.2f}, CR: {cr:.2f}")
+                        print(f"   OBV: {obv:.2f}, MFI: {mfi:.2f}")
+                        print(f"   动量指标: {momentum:.4f}")
+                        print(f"   ROC (10日): {roc:.2f}%")
+                        print(f"   ATR (14日): {atr:.4f}")
+
+                        # 成交量分析
+                        print(f"\n📊 成交量分析:")
+                        print(f"   量比: {volume_ratio:.2f} ({'放量' if volume_ratio > 1.5 else '缩量' if volume_ratio < 0.7 else '正常'})")
+                        print(f"   成交量变化: {volume_change:+.2f}%")
+
+                        # 风险分析
+                        print(f"\n⚠️  风险分析:")
+                        print(f"   波动率: {volatility:.4f} ({'高风险' if volatility > 0.04 else '中风险' if volatility > 0.02 else '低风险'})")
+                        print(f"   价格距离MA20: {price_to_ma20:+.2f}% ({'远离' if abs(price_to_ma20) > 10 else '合理'})")
+
+                        # 所有策略信号汇总
+                        print(f"\n🎯 策略信号汇总:")
+                        buy_signals = 0
+                        sell_signals = 0
+                        hold_signals = 0
+
+                        for strategy_name, result in strategy_results.items():
+                            signal = result['signal']
+                            signal_count = result['signal_count']
+                            signal_text = "📈 买入" if signal == 1 else "🔴 卖出" if signal == -1 else "⏸️  持有"
+                            print(f"   {strategy_name.upper()}: {signal_text} (历史信号数: {signal_count})")
+
+                            if signal == 1:
+                                buy_signals += 1
+                            elif signal == -1:
+                                sell_signals += 1
+                            else:
+                                hold_signals += 1
+
+                        # 共识信号
+                        consensus_signal = ""
+                        if buy_signals > sell_signals and buy_signals > hold_signals:
+                            consensus_signal = "📈 多数策略建议买入"
+                        elif sell_signals > buy_signals and sell_signals > hold_signals:
+                            consensus_signal = "🔴 多数策略建议卖出"
+                        else:
+                            consensus_signal = "⏸️  多数策略建议持有/意见分歧"
+
+                        print(f"\n📊 策略共识: {consensus_signal}")
+                        print(f"   买入信号: {buy_signals}, 卖出信号: {sell_signals}, 持有信号: {hold_signals}")
+
+                        # 投资建议部分
+                        print(f"\n💡 投资建议:")
+                        # 使用RSI24和MACD柱状图作为主要建议，因为我们使用了所有策略
+                        recommendation = self._generate_investment_recommendation(
+                            rsi24, macd_histogram, price_position_bb, volume_ratio,
+                            volatility, current_price, ma_20, recent_performance,
+                            perf_20d, strategy_results['ma_crossover']['signal'] if 'ma_crossover' in strategy_results else 0,
+                            kdj_k, kdj_d, cci, rsi6, rsi12, rsi24
+                        )
+                        print(f"   {recommendation}")
+
+                        # 未来上涨潜力评估
+                        print(f"\n🚀 未来上涨潜力评估:")
+                        potential_score = self._assess_future_potential(
+                            rsi24, macd_histogram, price_position_bb, volume_ratio,
+                            volatility, recent_performance, perf_20d, momentum, roc,
+                            cci, kdj_k, kdj_d, bias6, dmi_adx
+                        )
+                        print(f"   潜力评分: {potential_score}/100")
+                        if potential_score >= 80:
+                            print(f"   🌟 极具上涨潜力")
+                        elif potential_score >= 60:
+                            print(f"   📈 有一定上涨潜力")
+                        elif potential_score >= 40:
+                            print(f"   ⚖️  潜力一般，观望")
+                        else:
+                            print(f"   📉 上涨潜力有限")
+
+                        # 买卖时机分析
+                        print(f"\n⏰ 买卖时机分析:")
+                        timing_advice = self._analyze_buy_sell_timing(
+                            rsi24, current_price, ma_5, ma_10, ma_20, bb_upper, bb_lower, bb_middle,
+                            macd, macd_signal, volume_ratio, roc,
+                            kdj_k, kdj_d, cci, atr, bias6
+                        )
+                        print(f"   {timing_advice}")
+
+                        print("="*60)
+
+                        # 将分析结果存储到会话
+                        self.session_data[f'analysis_{symbol}'] = {
+                            'symbol': symbol,
+                            'name': stock_name,
+                            'data': data,
+                            'strategy_results': strategy_results,
+                            'recent_performance': recent_performance,
+                            'technical_indicators': {
+                                'rsi': rsi24,
+                                'rsi6': rsi6,
+                                'rsi12': rsi12,
+                                'rsi24': rsi24,
+                                'macd': macd,
+                                'macd_signal': macd_signal,
+                                'macd_histogram': macd_histogram,
+                                'kdj_k': kdj_k,
+                                'kdj_d': kdj_d,
+                                'kdj_j': kdj_j,
+                                'wr1': wr1,
+                                'wr2': wr2,
+                                'ma_5': ma_5,
+                                'ma_10': ma_10,
+                                'ma_20': ma_20,
+                                'ma_30': ma_30,
+                                'ma_60': ma_60,
+                                'ema12': ema12,
+                                'ema26': ema26,
+                                'ema50': ema50,
+                                'bb_upper': bb_upper,
+                                'bb_middle': bb_middle,
+                                'bb_lower': bb_lower,
+                                'cci': cci,
+                                'atr': atr,
+                                'volume_ratio': volume_ratio,
+                                'volatility': volatility,
+                                'momentum': momentum,
+                                'roc': roc,
+                                'bias6': bias6,
+                                'bias12': bias12,
+                                'bias24': bias24,
+                                'dmi_pdi': dmi_pdi,
+                                'dmi_mdi': dmi_mdi,
+                                'dmi_adx': dmi_adx,
+                                'trix': trix,
+                                'trma': trma,
+                                'vr': vr,
+                                'cr': cr,
+                                'obv': obv,
+                                'mfi': mfi,
+                                'price_to_ma20': price_to_ma20,
+                                'price_position_bb': price_position_bb,
+                                'volume_change': volume_change
+                            },
+                            'recommendation': recommendation,
+                            'potential_score': potential_score,
+                            'timing_advice': timing_advice,
+                            'consensus_signal': consensus_signal
+                        }
             else:
                 print("⚠️  未找到符合条件的股票")
         except Exception as e:
             print(f"❌ 筛选过程出错: {e}")
+            import traceback
+            traceback.print_exc()
 
     def analyze_stock(self):
         """
-        Analyze a specific stock
+        Analyze a specific stock with detailed fundamental and technical analysis
+        Automatically runs all strategies and ensures technical indicators are calculated
         """
         symbol = input("请输入股票代码 (例: sh600519): ").strip()
         if not symbol:
             print("❌ 股票代码不能为空")
             return
 
-        strategy_name = input("请输入策略名称 (ma_crossover/rsi/macd/bollinger/mean_reversion/breakout，默认: ma_crossover): ").strip() or 'ma_crossover'
-
-        # Ask for data source
+        # Ask for data source (always auto to prioritize Ashare)
         source = input("请选择数据源 (eastmoney/ashare/tushare/baostock, 默认: auto (优先使用Ashare)): ").strip()
         source = source if source in ['eastmoney', 'ashare', 'tushare', 'baostock', 'auto'] else 'auto'
 
-        print(f"\n📊 分析股票 {symbol} 使用 {strategy_name} 策略...")
+        print(f"\n📊 分析股票 {symbol} - 自动运行所有策略...")
         print(f"📈 使用数据源: {source}")
 
         try:
@@ -281,6 +674,22 @@ class UnifiedCLIInterface:
                     print(f"⚠️  也无法从screener获取 {symbol} 数据，跳过")
                     return
 
+            # Ensure technical indicators are calculated
+            required_indicators = ['rsi6', 'rsi12', 'rsi24', 'macd_dif', 'macd_dea', 'macd_bar',
+                                 'kdj_k', 'kdj_d', 'kdj_j', 'wr1', 'wr2', 'ma5', 'ma10', 'ma20',
+                                 'ma30', 'ma60', 'boll_upper', 'boll_mid', 'boll_lower', 'cci',
+                                 'atr', 'bias6', 'bias12', 'bias24', 'trix', 'trma', 'vr', 'cr',
+                                 'obv', 'mfi', 'ema12', 'ema26', 'ema50']
+
+            missing_indicators = [col for col in required_indicators if col not in data.columns]
+            if missing_indicators:
+                print(f"🔄 检测到缺失指标，正在计算技术指标...")
+                # Use EastMoneyDataFetcher to calculate enhanced technical indicators
+                data = self.screener.eastmoney_fetcher.calculate_enhanced_technical_indicators(data)
+                print("✅ 技术指标计算完成")
+            else:
+                print("✅ 数据已包含技术指标")
+
             # Get stock name
             if self.screener.chinese_stocks is None:
                 self.screener.get_chinese_stocks_list()
@@ -290,45 +699,553 @@ class UnifiedCLIInterface:
             if not stock_info.empty and 'name' in stock_info.columns:
                 stock_name = stock_info['name'].iloc[0]
 
-            # Get strategy
-            strategy = self.strategy_manager.get_strategy(strategy_name)
-            if strategy is None:
-                print(f"❌ 策略 {strategy_name} 不存在")
-                return
-
-            # Generate signals
-            signals = strategy.generate_signals(data)
-
             # Calculate recent performance if data is sufficient
             if not data.empty and len(data) > 0:
                 recent_performance = ((data['close'].iloc[-1] - data['close'].iloc[0]) /
                                      data['close'].iloc[0]) * 100
                 current_price = data['close'].iloc[-1]
+                # Calculate 20-day and 60-day performances
+                perf_20d = ((data['close'].iloc[-1] - data['close'].iloc[-20]) / data['close'].iloc[-20]) * 100 if len(data) >= 20 else 0
+                perf_60d = ((data['close'].iloc[-1] - data['close'].iloc[-60]) / data['close'].iloc[-60]) * 100 if len(data) >= 60 else 0
             else:
                 recent_performance = 0
+                perf_20d = 0
+                perf_60d = 0
                 current_price = 0
                 print(f"⚠️  {symbol} 数据不足，无法计算近期表现")
 
-            print(f"\n✅ {symbol} ({stock_name}) 分析完成:")
-            if current_price > 0:
-                print(f"   当前价格: {current_price:.2f}")
+            # Run all available strategies and collect signals
+            all_strategies = ['ma_crossover', 'rsi', 'macd', 'bollinger', 'mean_reversion', 'breakout']
+            strategy_results = {}
+
+            print(f"\n🏃 运行所有策略...")
+            for strategy_name in all_strategies:
+                strategy = self.strategy_manager.get_strategy(strategy_name)
+                if strategy is not None:
+                    try:
+                        signals = strategy.generate_signals(data)
+                        latest_signal = signals.iloc[-1] if len(signals) > 0 else 0
+                        signal_count = len(signals[signals != 0]) if len(signals) > 0 else 0
+                        strategy_results[strategy_name] = {
+                            'signal': latest_signal,
+                            'signal_count': signal_count,
+                            'signals': signals
+                        }
+                        signal_text = "📈 买入" if latest_signal == 1 else "🔴 卖出" if latest_signal == -1 else "⏸️  持有"
+                        print(f"   {strategy_name}: {signal_text}")
+                    except Exception as e:
+                        print(f"   ⚠️  {strategy_name} 策略执行失败: {e}")
+                        strategy_results[strategy_name] = {
+                            'signal': 0,
+                            'signal_count': 0,
+                            'signals': pd.Series(dtype=float)
+                        }
+                else:
+                    print(f"   ⚠️  策略 {strategy_name} 不存在")
+                    strategy_results[strategy_name] = {
+                        'signal': 0,
+                        'signal_count': 0,
+                        'signals': pd.Series(dtype=float)
+                    }
+
+            # Get enhanced technical indicators (now guaranteed to exist)
+            rsi6 = data['rsi6'].iloc[-1] if 'rsi6' in data.columns and not pd.isna(data['rsi6'].iloc[-1]) else 0
+            rsi12 = data['rsi12'].iloc[-1] if 'rsi12' in data.columns and not pd.isna(data['rsi12'].iloc[-1]) else 0
+            rsi24 = data['rsi24'].iloc[-1] if 'rsi24' in data.columns and not pd.isna(data['rsi24'].iloc[-1]) else 0
+
+            macd = data['macd_dif'].iloc[-1] if 'macd_dif' in data.columns and not pd.isna(data['macd_dif'].iloc[-1]) else 0
+            macd_signal = data['macd_dea'].iloc[-1] if 'macd_dea' in data.columns and not pd.isna(data['macd_dea'].iloc[-1]) else 0
+            macd_histogram = data['macd_bar'].iloc[-1] if 'macd_bar' in data.columns and not pd.isna(data['macd_bar'].iloc[-1]) else 0
+
+            ma_5 = data['ma5'].iloc[-1] if 'ma5' in data.columns and not pd.isna(data['ma5'].iloc[-1]) else 0
+            ma_10 = data['ma10'].iloc[-1] if 'ma10' in data.columns and not pd.isna(data['ma10'].iloc[-1]) else 0
+            ma_20 = data['ma20'].iloc[-1] if 'ma20' in data.columns and not pd.isna(data['ma20'].iloc[-1]) else 0
+            ma_30 = data['ma30'].iloc[-1] if 'ma30' in data.columns and not pd.isna(data['ma30'].iloc[-1]) else 0
+            ma_60 = data['ma60'].iloc[-1] if 'ma60' in data.columns and not pd.isna(data['ma60'].iloc[-1]) else 0
+
+            bb_upper = data['boll_upper'].iloc[-1] if 'boll_upper' in data.columns and not pd.isna(data['boll_upper'].iloc[-1]) else 0
+            bb_lower = data['boll_lower'].iloc[-1] if 'boll_lower' in data.columns and not pd.isna(data['boll_lower'].iloc[-1]) else 0
+            bb_middle = data['boll_mid'].iloc[-1] if 'boll_mid' in data.columns and not pd.isna(data['boll_mid'].iloc[-1]) else 0
+
+            kdj_k = data['kdj_k'].iloc[-1] if 'kdj_k' in data.columns and not pd.isna(data['kdj_k'].iloc[-1]) else 0
+            kdj_d = data['kdj_d'].iloc[-1] if 'kdj_d' in data.columns and not pd.isna(data['kdj_d'].iloc[-1]) else 0
+            kdj_j = data['kdj_j'].iloc[-1] if 'kdj_j' in data.columns and not pd.isna(data['kdj_j'].iloc[-1]) else 0
+
+            wr1 = data['wr1'].iloc[-1] if 'wr1' in data.columns and not pd.isna(data['wr1'].iloc[-1]) else 0
+            wr2 = data['wr2'].iloc[-1] if 'wr2' in data.columns and not pd.isna(data['wr2'].iloc[-1]) else 0
+
+            cci = data['cci'].iloc[-1] if 'cci' in data.columns and not pd.isna(data['cci'].iloc[-1]) else 0
+
+            atr = data['atr'].iloc[-1] if 'atr' in data.columns and not pd.isna(data['atr'].iloc[-1]) else 0
+
+            volume_ratio = data['volume_ratio'].iloc[-1] if 'volume_ratio' in data.columns and not pd.isna(data['volume_ratio'].iloc[-1]) else 0
+            volatility = data['volatility'].iloc[-1] if 'volatility' in data.columns and not pd.isna(data['volatility'].iloc[-1]) else 0
+            momentum = data['momentum'].iloc[-1] if 'momentum' in data.columns and not pd.isna(data['momentum'].iloc[-1]) else 0
+            roc = data['roc'].iloc[-1] if 'roc' in data.columns and not pd.isna(data['roc'].iloc[-1]) else 0
+
+            # MyTT indicators
+            bias6 = data['bias6'].iloc[-1] if 'bias6' in data.columns and not pd.isna(data['bias6'].iloc[-1]) else 0
+            bias12 = data['bias12'].iloc[-1] if 'bias12' in data.columns and not pd.isna(data['bias12'].iloc[-1]) else 0
+            bias24 = data['bias24'].iloc[-1] if 'bias24' in data.columns and not pd.isna(data['bias24'].iloc[-1]) else 0
+
+            dmi_pdi = data['dmi_pdi'].iloc[-1] if 'dmi_pdi' in data.columns and not pd.isna(data['dmi_pdi'].iloc[-1]) else 0
+            dmi_mdi = data['dmi_mdi'].iloc[-1] if 'dmi_mdi' in data.columns and not pd.isna(data['dmi_mdi'].iloc[-1]) else 0
+            dmi_adx = data['dmi_adx'].iloc[-1] if 'dmi_adx' in data.columns and not pd.isna(data['dmi_adx'].iloc[-1]) else 0
+
+            trix = data['trix'].iloc[-1] if 'trix' in data.columns and not pd.isna(data['trix'].iloc[-1]) else 0
+            trma = data['trma'].iloc[-1] if 'trma' in data.columns and not pd.isna(data['trma'].iloc[-1]) else 0
+
+            vr = data['vr'].iloc[-1] if 'vr' in data.columns and not pd.isna(data['vr'].iloc[-1]) else 0
+            cr = data['cr'].iloc[-1] if 'cr' in data.columns and not pd.isna(data['cr'].iloc[-1]) else 0
+
+            obv = data['obv'].iloc[-1] if 'obv' in data.columns and not pd.isna(data['obv'].iloc[-1]) else 0
+            mfi = data['mfi'].iloc[-1] if 'mfi' in data.columns and not pd.isna(data['mfi'].iloc[-1]) else 0
+
+            ema12 = data['ema12'].iloc[-1] if 'ema12' in data.columns and not pd.isna(data['ema12'].iloc[-1]) else 0
+            ema26 = data['ema26'].iloc[-1] if 'ema26' in data.columns and not pd.isna(data['ema26'].iloc[-1]) else 0
+            ema50 = data['ema50'].iloc[-1] if 'ema50' in data.columns and not pd.isna(data['ema50'].iloc[-1]) else 0
+
+            # Calculate additional analysis metrics
+            price_to_ma20 = (current_price / ma_20 - 1) * 100 if ma_20 != 0 else 0
+            price_position_bb = (current_price - bb_lower) / (bb_upper - bb_lower) if bb_upper != bb_lower else 0.5
+            volume_change = volume_ratio - 1 if volume_ratio != 0 else 0
+
+            # Calculate trend
+            trend = "上升" if current_price > ma_20 else "下降"
+
+            # Generate comprehensive analysis report
+            print(f"\n" + "="*60)
+            print(f"🏆 {symbol} ({stock_name}) 详细分析报告")
+            print("="*60)
+
+            # Price and Performance Section
+            print(f"💰 价格与表现:")
+            print(f"   当前价格: ¥{current_price:.2f}")
+            print(f"   180日涨幅: {recent_performance:+.2f}%")
+            print(f"   60日涨幅: {perf_60d:+.2f}%")
+            print(f"   20日涨幅: {perf_20d:+.2f}%")
+            print(f"   当前趋势: {trend}")
+
+            # Technical Indicators Section
+            print(f"\n🔧 技术指标:")
+            print(f"   RSI (6/12/24): {rsi6:.2f}/{rsi12:.2f}/{rsi24:.2f} ({' oversold' if rsi24 < 30 else ' overbought' if rsi24 > 70 else ' neutral'})")
+            print(f"   MACD: {macd:.4f}, Signal: {macd_signal:.4f}, Histogram: {macd_histogram:.4f}")
+            print(f"   KDJ: K:{kdj_k:.2f}, D:{kdj_d:.2f}, J:{kdj_j:.2f}")
+            print(f"   威廉指标: WR1:{wr1:.2f}, WR2:{wr2:.2f}")
+            print(f"   移动均线: MA5:{ma_5:.2f}, MA10:{ma_10:.2f}, MA20:{ma_20:.2f}, MA30:{ma_30:.2f}, MA60:{ma_60:.2f}")
+            print(f"   指数均线: EMA12:{ema12:.2f}, EMA26:{ema26:.2f}, EMA50:{ema50:.2f}")
+            print(f"   布林带: 上轨{bb_upper:.2f}, 中轨{bb_middle:.2f}, 下轨{bb_lower:.2f}")
+            print(f"   价格在布林带位置: {price_position_bb:.2f} ({'高位' if price_position_bb > 0.8 else '中位' if 0.2 <= price_position_bb <= 0.8 else '低位'})")
+            print(f"   CCI: {cci:.2f}")
+            print(f"   DMI: PDI:{dmi_pdi:.2f}, MDI:{dmi_mdi:.2f}, ADX:{dmi_adx:.2f}")
+            print(f"   BIAS: 6日{bias6:.2f}%, 12日{bias12:.2f}%, 24日{bias24:.2f}%")
+            print(f"   TRIX: {trix:.4f}, TRMA: {trma:.4f}")
+            print(f"   VR: {vr:.2f}, CR: {cr:.2f}")
+            print(f"   OBV: {obv:.2f}, MFI: {mfi:.2f}")
+            print(f"   动量指标: {momentum:.4f}")
+            print(f"   ROC (10日): {roc:.2f}%")
+            print(f"   ATR (14日): {atr:.4f}")
+
+            # Volume Analysis
+            print(f"\n📊 成交量分析:")
+            print(f"   量比: {volume_ratio:.2f} ({'放量' if volume_ratio > 1.5 else '缩量' if volume_ratio < 0.7 else '正常'})")
+            print(f"   成交量变化: {volume_change:+.2f}%")
+
+            # Risk Analysis
+            print(f"\n⚠️  风险分析:")
+            print(f"   波动率: {volatility:.4f} ({'高风险' if volatility > 0.04 else '中风险' if volatility > 0.02 else '低风险'})")
+            print(f"   价格距离MA20: {price_to_ma20:+.2f}% ({'远离' if abs(price_to_ma20) > 10 else '合理'})")
+
+            # All Strategy Signals Section
+            print(f"\n🎯 策略信号汇总:")
+            buy_signals = 0
+            sell_signals = 0
+            hold_signals = 0
+
+            for strategy_name, result in strategy_results.items():
+                signal = result['signal']
+                signal_count = result['signal_count']
+                signal_text = "📈 买入" if signal == 1 else "🔴 卖出" if signal == -1 else "⏸️  持有"
+                print(f"   {strategy_name.upper()}: {signal_text} (历史信号数: {signal_count})")
+
+                if signal == 1:
+                    buy_signals += 1
+                elif signal == -1:
+                    sell_signals += 1
+                else:
+                    hold_signals += 1
+
+            # Consensus signal
+            consensus_signal = ""
+            if buy_signals > sell_signals and buy_signals > hold_signals:
+                consensus_signal = "📈 多数策略建议买入"
+            elif sell_signals > buy_signals and sell_signals > hold_signals:
+                consensus_signal = "🔴 多数策略建议卖出"
             else:
-                print(f"   当前价格: N/A")
-            print(f"   近期表现: {recent_performance:.2f}%")
-            print(f"   生成信号数: {len(signals[signals != 0]) if len(signals) > 0 else 0}")
-            print(f"   最新信号: {signals.iloc[-1] if len(signals) > 0 else 0}")
+                consensus_signal = "⏸️  多数策略建议持有/意见分歧"
+
+            print(f"\n📊 策略共识: {consensus_signal}")
+            print(f"   买入信号: {buy_signals}, 卖出信号: {sell_signals}, 持有信号: {hold_signals}")
+
+            # Investment Recommendation Section
+            print(f"\n💡 投资建议:")
+            # Use RSI24 and MACD histogram for the main recommendation since we're using all strategies
+            recommendation = self._generate_investment_recommendation(
+                rsi24, macd_histogram, price_position_bb, volume_ratio,
+                volatility, current_price, ma_20, recent_performance,
+                perf_20d, strategy_results['ma_crossover']['signal'] if 'ma_crossover' in strategy_results else 0,
+                kdj_k, kdj_d, cci, rsi6, rsi12, rsi24
+            )
+            print(f"   {recommendation}")
+
+            # Future Potential Assessment
+            print(f"\n🚀 未来上涨潜力评估:")
+            potential_score = self._assess_future_potential(
+                rsi24, macd_histogram, price_position_bb, volume_ratio,
+                volatility, recent_performance, perf_20d, momentum, roc,
+                cci, kdj_k, kdj_d, bias6, dmi_adx
+            )
+            print(f"   潜力评分: {potential_score}/100")
+            if potential_score >= 80:
+                print(f"   🌟 极具上涨潜力")
+            elif potential_score >= 60:
+                print(f"   📈 有一定上涨潜力")
+            elif potential_score >= 40:
+                print(f"   ⚖️  潜力一般，观望")
+            else:
+                print(f"   📉 上涨潜力有限")
+
+            # Buy/Sell Timing
+            print(f"\n⏰ 买卖时机分析:")
+            timing_advice = self._analyze_buy_sell_timing(
+                rsi24, current_price, ma_5, ma_10, ma_20, bb_upper, bb_lower, bb_middle,
+                macd, macd_signal, volume_ratio, roc,
+                kdj_k, kdj_d, cci, atr, bias6
+            )
+            print(f"   {timing_advice}")
+
+            print("="*60)
 
             # Store in session
             self.session_data[f'analysis_{symbol}'] = {
                 'symbol': symbol,
                 'name': stock_name,
                 'data': data,
-                'signals': signals if len(signals) > 0 else pd.Series(dtype=float),
-                'recent_performance': recent_performance
+                'strategy_results': strategy_results,
+                'recent_performance': recent_performance,
+                'technical_indicators': {
+                    'rsi': rsi24,
+                    'rsi6': rsi6,
+                    'rsi12': rsi12,
+                    'rsi24': rsi24,
+                    'macd': macd,
+                    'macd_signal': macd_signal,
+                    'macd_histogram': macd_histogram,
+                    'kdj_k': kdj_k,
+                    'kdj_d': kdj_d,
+                    'kdj_j': kdj_j,
+                    'wr1': wr1,
+                    'wr2': wr2,
+                    'ma_5': ma_5,
+                    'ma_10': ma_10,
+                    'ma_20': ma_20,
+                    'ma_30': ma_30,
+                    'ma_60': ma_60,
+                    'ema12': ema12,
+                    'ema26': ema26,
+                    'ema50': ema50,
+                    'bb_upper': bb_upper,
+                    'bb_middle': bb_middle,
+                    'bb_lower': bb_lower,
+                    'cci': cci,
+                    'atr': atr,
+                    'volume_ratio': volume_ratio,
+                    'volatility': volatility,
+                    'momentum': momentum,
+                    'roc': roc,
+                    'bias6': bias6,
+                    'bias12': bias12,
+                    'bias24': bias24,
+                    'dmi_pdi': dmi_pdi,
+                    'dmi_mdi': dmi_mdi,
+                    'dmi_adx': dmi_adx,
+                    'trix': trix,
+                    'trma': trma,
+                    'vr': vr,
+                    'cr': cr,
+                    'obv': obv,
+                    'mfi': mfi,
+                    'price_to_ma20': price_to_ma20,
+                    'price_position_bb': price_position_bb,
+                    'volume_change': volume_change
+                },
+                'recommendation': recommendation,
+                'potential_score': potential_score,
+                'timing_advice': timing_advice,
+                'consensus_signal': consensus_signal
             }
 
         except Exception as e:
             print(f"❌ 分析过程出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _generate_investment_recommendation(self, rsi, macd_hist, price_pos_bb, vol_ratio,
+                                          volatility, current_price, ma_20, perf_long,
+                                          perf_short, signal, kdj_k, kdj_d, cci, rsi6, rsi12, rsi24):
+        """
+        Generate investment recommendation based on technical indicators
+        """
+        reasons = []
+
+        # RSI Analysis - using the 24-period RSI as primary indicator
+        if rsi24 < 30:
+            reasons.append("RSI24超卖，可能触底反弹")
+        elif rsi24 > 70:
+            reasons.append("RSI24超买，短期回调风险")
+        else:
+            reasons.append("RSI24处于合理区间")
+
+        # MACD Analysis
+        if macd_hist > 0:
+            reasons.append("MACD柱状图>0，看涨动能")
+        else:
+            reasons.append("MACD柱状图<0，看跌动能")
+
+        # KDJ Analysis
+        if kdj_k < 20 and kdj_d < 20:
+            reasons.append("KDJ低位金叉，可能见底")
+        elif kdj_k > 80 and kdj_d > 80:
+            reasons.append("KDJ高位死叉，可能见顶")
+        elif kdj_k > kdj_d:
+            reasons.append("KDJ金叉向上，看涨")
+        else:
+            reasons.append("KDJ死叉向下，看跌")
+
+        # CCI Analysis
+        if cci < -100:
+            reasons.append("CCI超卖，反转向上的可能性大")
+        elif cci > 100:
+            reasons.append("CCI超买，回调可能性大")
+        else:
+            reasons.append("CCI处于正常范围")
+
+        # Price Position in Bollinger Band
+        if price_pos_bb < 0.2:
+            reasons.append("价格在布林带下轨附近，估值偏低")
+        elif price_pos_bb > 0.8:
+            reasons.append("价格在布林带上轨附近，估值偏高")
+        else:
+            reasons.append("价格在布林带中位区域")
+
+        # Volume Analysis
+        if vol_ratio > 1.5:
+            reasons.append("成交量放大，资金关注")
+        elif vol_ratio < 0.7:
+            reasons.append("成交量萎缩，缺乏关注")
+        else:
+            reasons.append("成交量正常")
+
+        # Moving Average Trend
+        if current_price > ma_20:
+            reasons.append("价格站上20日线，中期趋势向好")
+        else:
+            reasons.append("价格跌破20日线，中期趋势向下")
+
+        # Performance Analysis
+        if perf_short > 0:
+            reasons.append("短期表现强劲")
+        else:
+            reasons.append("短期表现疲弱")
+
+        # Signal Analysis
+        if signal == 1:
+            reasons.append("策略给出买入信号")
+        elif signal == -1:
+            reasons.append("策略给出卖出信号")
+        else:
+            reasons.append("策略建议持有")
+
+        # Generate overall recommendation
+        strong_positive = sum(['强势' in r or '看涨' in r or '向上' in r or '买入' in r or '反转向上的可能性大' in r or '估值偏低' in r for r in reasons])
+        strong_negative = sum(['弱势' in r or '看跌' in r or '向下' in r or '卖出' in r or '回调可能性大' in r or '估值偏高' in r or '回调风险' in r for r in reasons])
+
+        if strong_positive > strong_negative + 1:
+            return f"建议买入: {'; '.join(reasons)}"
+        elif strong_negative > strong_positive + 1:
+            return f"建议卖出: {'; '.join(reasons)}"
+        else:
+            return f"建议观望: {'; '.join(reasons)}"
+
+    def _assess_future_potential(self, rsi, macd_hist, price_pos_bb, vol_ratio,
+                               volatility, perf_long, perf_short, momentum, roc,
+                               cci, kdj_k, kdj_d, bias6, dmi_adx):
+        """
+        Assess future potential of the stock
+        """
+        score = 50  # Base score
+
+        # RSI contribution (best between 30-70, especially 40-60)
+        if 40 <= rsi <= 60:
+            score += 10
+        elif 30 <= rsi <= 70:
+            score += 5
+        elif rsi < 30:  # Oversold, potential rebound
+            score += 8
+        else:  # Overbought, less favorable
+            score -= 5
+
+        # MACD histogram positive
+        if macd_hist > 0:
+            score += 8
+        elif macd_hist < 0:
+            score -= 5
+
+        # Price position in Bollinger band (favorable if not too high)
+        if 0.2 <= price_pos_bb <= 0.8:
+            score += 8
+        elif 0.1 <= price_pos_bb <= 0.9:
+            score += 4
+        else:
+            score -= 3
+
+        # Volume ratio (higher is generally better)
+        if vol_ratio > 1.5:
+            score += 5
+        elif vol_ratio > 1.2:
+            score += 3
+        elif vol_ratio < 0.5:
+            score -= 5
+
+        # Performance (positive performance is good)
+        if perf_short > 0:
+            score += 5
+        elif perf_short < -5:  # Strong negative performance reduces score
+            score -= 8
+
+        # Momentum (positive momentum is good)
+        if momentum > 0:
+            score += 3
+        elif momentum < -0.1:  # Strong negative momentum reduces score
+            score -= 5
+
+        # ROC (positive ROC is good)
+        if roc > 0:
+            score += 3
+        elif roc < -2:  # Strong negative ROC reduces score
+            score -= 5
+
+        # CCI contribution (good when between -100 and 100, but also consider extremes)
+        if -100 <= cci <= 100:
+            score += 5
+        elif cci < -100:  # Oversold, potential rebound
+            score += 6
+        else:  # Overbought
+            score += 2
+
+        # KDJ contribution (good when K>D and in middle range)
+        if kdj_k > kdj_d and 20 <= kdj_k <= 80:
+            score += 6
+        elif kdj_k < kdj_d and 20 <= kdj_d <= 80:
+            score -= 3
+
+        # Bias contribution (not too far from moving average is good)
+        if abs(bias6) < 5:  # Reasonable bias
+            score += 5
+        elif abs(bias6) > 8:  # Too far from moving average, risky
+            score -= 5
+
+        # DMI ADX contribution (higher ADX indicates stronger trend)
+        if dmi_adx > 25:
+            score += 5  # Strong trend
+        elif dmi_adx < 20:
+            score -= 3  # Weak trend
+
+        # Limit score between 0 and 100
+        score = max(0, min(100, score))
+
+        return score
+
+    def _analyze_buy_sell_timing(self, rsi, current_price, ma_5, ma_10, ma_20,
+                               bb_upper, bb_lower, bb_middle, macd, macd_signal, vol_ratio, roc,
+                               kdj_k, kdj_d, cci, atr, bias6):
+        """
+        Analyze current buy/sell timing
+        """
+        advice_parts = []
+
+        # RSI Timing
+        if 30 < rsi < 70:
+            advice_parts.append("RSI处于中性区域，适合观察")
+        elif rsi < 30:
+            advice_parts.append("RSI超卖，可能是较好买点")
+        elif rsi > 70:
+            advice_parts.append("RSI超买，考虑获利了结")
+
+        # Moving Average Alignment
+        if current_price > ma_5 > ma_10 > ma_20:
+            advice_parts.append("多头排列，趋势向好")
+        elif current_price < ma_5 < ma_10 < ma_20:
+            advice_parts.append("空头排列，趋势向淡")
+        else:
+            advice_parts.append("均线纠缠，方向不明")
+
+        # MACD Timing
+        if macd > macd_signal:
+            advice_parts.append("MACD金叉向上，看涨信号")
+        elif macd < macd_signal:
+            advice_parts.append("MACD死叉向下，看跌信号")
+        else:
+            advice_parts.append("MACD与信号线粘合")
+
+        # Price and Bollinger Bands
+        if bb_lower < current_price < bb_middle:
+            advice_parts.append("价格在布林带下轨至中轨间，相对安全")
+        elif bb_middle < current_price < bb_upper:
+            advice_parts.append("价格在布林带中轨至上轨间，注意压力")
+        else:
+            advice_parts.append("价格偏离布林带，注意回调")
+
+        # KDJ Timing
+        if kdj_k > kdj_d and kdj_k < 80:
+            advice_parts.append("KDJ金叉向上，看涨信号")
+        elif kdj_k < kdj_d and kdj_k > 20:
+            advice_parts.append("KDJ死叉向下，看跌信号")
+        elif kdj_k > 80 and kdj_d > 80:
+            advice_parts.append("KDJ高位钝化，注意回调")
+        elif kdj_k < 20 and kdj_d < 20:
+            advice_parts.append("KDJ超卖区，关注反弹机会")
+
+        # CCI Timing
+        if cci > 100:
+            advice_parts.append("CCI超买，短期调整风险")
+        elif cci < -100:
+            advice_parts.append("CCI超卖，反弹预期")
+        elif -100 < cci < 100:
+            advice_parts.append("CCI在正常区间")
+
+        # BIAS Timing
+        if abs(bias6) > 8:
+            advice_parts.append("BIAS偏离过大，注意回归")
+        elif abs(bias6) < 3:
+            advice_parts.append("BIAS位置合理")
+
+        # ATR and Volatility
+        if atr > 0 and roc > 0:
+            advice_parts.append("波动率较高，关注趋势持续性")
+        elif atr > 0 and roc < 0:
+            advice_parts.append("高波动负收益，风险较高")
+
+        # Volume and ROC
+        if vol_ratio > 1.2 and roc > 0:
+            advice_parts.append("量价配合良好，趋势持续可能性高")
+        elif vol_ratio < 0.8 and roc < 0:
+            advice_parts.append("量价背离，趋势可持续性存疑")
+        else:
+            advice_parts.append("量价关系基本正常")
+
+        # Combine advice
+        return "综合来看: " + "; ".join(advice_parts)
 
     def predict_stocks(self):
         """
@@ -875,6 +1792,80 @@ class UnifiedCLIInterface:
         else:
             print("\n⚠️  会话中无因子分析结果，请先运行 'multi_factor_analysis'")
 
+    def run_comprehensive_qlib_analysis(self):
+        """
+        Run comprehensive Qlib-enhanced analysis (factor library expansion + model fusion + risk management + auto-tuning)
+        """
+        print("\n🌟 运行综合性的 Qlib 增强分析...")
+
+        symbols_input = input("请输入股票代码 (用逗号分隔): ").strip()
+        if not symbols_input:
+            symbols = ['600023', '000001', '600519']  # Default stocks
+            print("💡 使用默认股票列表")
+        else:
+            symbols = [s.strip() for s in symbols_input.split(',')]
+
+        start_date = input("请输入开始日期 (YYYY-MM-DD, 默认: 2024-01-01): ").strip() or '2024-01-01'
+        end_date = input("请输入结束日期 (YYYY-MM-DD, 默认: 2024-12-31): ").strip() or '2024-12-31'
+
+        print(f"\n🚀 对 {len(symbols)} 只股票进行综合性分析...")
+        print(f"📅 期间: {start_date} 至 {end_date}")
+
+        try:
+            # Create integrated enhancement system
+            integrated_system = QlibIntegratedEnhancement()
+
+            # Get data
+            fetcher = DataFetcher(eastmoney_cookie=self.eastmoney_cookie)
+
+            all_data = pd.DataFrame()
+            for symbol in symbols:
+                print(f"📊 获取 {symbol} 数据...")
+                data = fetcher.fetch_stock_data(symbol, start_date, end_date)
+                if not data.empty:
+                    data['instrument'] = symbol
+                    all_data = pd.concat([all_data, data], ignore_index=True)
+                else:
+                    print(f"⚠️ 未能获取 {symbol} 的数据")
+
+            if all_data.empty:
+                print("❌ 未能获取任何股票数据")
+                return
+
+            print(f"📈 开始综合性分析，共 {len(all_data)} 条记录...")
+
+            # Run comprehensive analysis
+            results = integrated_system.run_comprehensive_analysis(
+                all_data,
+                instruments=symbols,
+                start_date=start_date,
+                end_date=end_date
+            )
+
+            # Generate comprehensive report
+            report = integrated_system.generate_comprehensive_report(results)
+            print(f"\n📋 综合分析报告:")
+            print(report)
+
+            # Store results
+            self.session_data['comprehensive_qlib_analysis'] = {
+                'results': results,
+                'report': report,
+                'timestamp': datetime.now()
+            }
+
+            print(f"\n✅ 综合性 Qlib 增强分析完成!")
+            print("💡 分析包含以下四个方面:")
+            print("   1. 因子库扩充：Qlib Alpha因子 + MyTT指标")
+            print("   2. 模型融合：传统技术指标 + ML模型")
+            print("   3. 风险管理：Qlib风险模型 + 投资组合优化")
+            print("   4. 自动调参：网格搜索 + 贝叶斯 + 遗传算法")
+
+        except Exception as e:
+            print(f"❌ 综合性 Qlib 分析出错: {e}")
+            import traceback
+            traceback.print_exc()
+
     def run_backtest(self):
         """
         Run backtesting for a strategy
@@ -1035,6 +2026,182 @@ class UnifiedCLIInterface:
                     print(f"  📝 {key}: {type(value).__name__}")
         else:
             print("  📭 会话中无数据")
+
+    def batch_analyze_watchlist(self):
+        """
+        批量分析自选股列表中的股票
+        """
+        print("\n🔍 批量分析自选股功能...")
+
+        # 显示现有自选股列表
+        watchlist_names = self.watchlist_manager.get_watchlist_names()
+        print(f"📋 现有自选股列表: {watchlist_names}")
+
+        # 选择自选股列表
+        if len(watchlist_names) > 1:
+            selected_watchlist = input(f"请选择自选股列表 (默认: default): ").strip() or "default"
+        else:
+            selected_watchlist = "default"
+
+        watchlist = self.watchlist_manager.get_watchlist(selected_watchlist)
+
+        if not watchlist:
+            print("⚠️  选定的自选股列表为空")
+            add_stocks = input("是否手动添加股票到列表? (y/n, 默认: n): ").strip().lower()
+            if add_stocks == 'y':
+                stocks_input = input("请输入股票代码 (用逗号分隔): ").strip()
+                if stocks_input:
+                    new_stocks = [s.strip() for s in stocks_input.split(',')]
+                    for stock in new_stocks:
+                        self.watchlist_manager.add_stock_to_watchlist(stock, selected_watchlist)
+                    watchlist = self.watchlist_manager.get_watchlist(selected_watchlist)
+                else:
+                    print("❌ 未添加任何股票，操作取消")
+                    return
+            else:
+                return
+
+        print(f"📊 正在分析自选股列表 '{selected_watchlist}' 中的 {len(watchlist)} 只股票...")
+
+        # 选择策略
+        print("可用策略: ma_crossover, rsi, macd, bollinger, mean_reversion, breakout")
+        strategy_name = input("请输入策略名称 (默认: ma_crossover): ").strip() or "ma_crossover"
+
+        # 准备数据获取器
+        data_fetcher = DataFetcher()
+
+        # 分析结果存储
+        analysis_results = []
+
+        for stock_code in watchlist:
+            try:
+                print(f"📈 正在分析 {stock_code}...")
+
+                # 获取数据
+                data = data_fetcher.fetch_stock_data_ts_code(stock_code, days=60)
+                if data is None or data.empty:
+                    print(f"⚠️  无法获取 {stock_code} 的数据")
+                    continue
+
+                # 运行策略
+                signals = self.strategy_manager.run_strategy(strategy_name, data)
+
+                # 获取最新信号
+                latest_signal = signals.iloc[-1] if len(signals) > 0 else 0
+                signal_text = "买入" if latest_signal == 1 else "卖出" if latest_signal == -1 else "持有"
+
+                # 进行简单回测
+                backtest_result = self.strategy_manager.run_backtest(strategy_name, data)
+
+                # 保存结果
+                result = {
+                    'stock_code': stock_code,
+                    'signal': signal_text,
+                    'signal_value': latest_signal,
+                    'total_return': backtest_result.get('total_return', 0),
+                    'sharpe_ratio': backtest_result.get('sharpe_ratio', 0),
+                    'max_drawdown': backtest_result.get('max_drawdown', 0),
+                    'last_price': data['close'].iloc[-1] if 'close' in data.columns else 0
+                }
+
+                analysis_results.append(result)
+
+                print(f"  ✅ {stock_code} - 信号: {signal_text} (收益率: {result['total_return']:.2%})")
+
+            except Exception as e:
+                print(f"⚠️  分析 {stock_code} 时出错: {e}")
+                continue
+
+        # 显示汇总结果
+        if analysis_results:
+            df_results = pd.DataFrame(analysis_results)
+            print(f"\n📋 批量分析结果 (按收益率排序):")
+            print(df_results[['stock_code', 'signal', 'total_return', 'sharpe_ratio', 'max_drawdown', 'last_price']]
+                  .sort_values('total_return', ascending=False))
+
+            # 提取买入信号的股票
+            buy_signals = df_results[df_results['signal'] == '买入']
+            if not buy_signals.empty:
+                print(f"\n💡 建议关注 (买入信号):")
+                print(buy_signals[['stock_code', 'last_price', 'total_return', 'sharpe_ratio']])
+
+            # 存储结果到会话
+            self.session_data[f'batch_analysis_{selected_watchlist}'] = df_results
+
+        else:
+            print("❌ 没有成功分析任何股票")
+
+    def manage_watchlist(self):
+        """
+        管理自选股列表
+        """
+        print("\n⭐ 自选股管理功能...")
+
+        while True:
+            print("\n请选择操作:")
+            print("1. 查看自选股列表")
+            print("2. 添加股票到自选股")
+            print("3. 从自选股移除股票")
+            print("4. 创建新的自选股列表")
+            print("5. 删除自选股列表")
+            print("6. 返回主菜单")
+
+            choice = input("请输入选项 (1-6): ").strip()
+
+            if choice == '1':
+                watchlist_names = self.watchlist_manager.get_watchlist_names()
+                for name in watchlist_names:
+                    stocks = self.watchlist_manager.get_watchlist(name)
+                    print(f"📋 {name}: {stocks}")
+
+            elif choice == '2':
+                watchlist_names = self.watchlist_manager.get_watchlist_names()
+                watchlist_name = input(f"请选择自选股列表 (现有: {', '.join(watchlist_names)}, 默认: default): ").strip() or "default"
+                stock_code = input("请输入股票代码: ").strip()
+                if stock_code:
+                    self.watchlist_manager.add_stock_to_watchlist(stock_code, watchlist_name)
+                    print(f"✅ {stock_code} 已添加到 {watchlist_name}")
+
+            elif choice == '3':
+                watchlist_names = self.watchlist_manager.get_watchlist_names()
+                watchlist_name = input(f"请选择自选股列表 (现有: {', '.join(watchlist_names)}, 默认: default): ").strip() or "default"
+                stocks = self.watchlist_manager.get_watchlist(watchlist_name)
+                if stocks:
+                    print(f"{watchlist_name} 中的股票: {stocks}")
+                    stock_code = input("请输入要移除的股票代码: ").strip()
+                    if stock_code in stocks:
+                        self.watchlist_manager.remove_stock_from_watchlist(stock_code, watchlist_name)
+                        print(f"✅ {stock_code} 已从 {watchlist_name} 移除")
+                    else:
+                        print(f"❌ {stock_code} 不在 {watchlist_name} 中")
+                else:
+                    print(f"⚠️  {watchlist_name} 列表为空")
+
+            elif choice == '4':
+                new_name = input("请输入新的自选股列表名称: ").strip()
+                if new_name:
+                    self.watchlist_manager.create_watchlist(new_name)
+                    print(f"✅ 已创建自选股列表: {new_name}")
+
+            elif choice == '5':
+                watchlist_names = self.watchlist_manager.get_watchlist_names()
+                if len(watchlist_names) <= 1:
+                    print("⚠️  至少保留一个自选股列表")
+                else:
+                    delete_name = input(f"请输入要删除的自选股列表名称 (现有: {', '.join(watchlist_names)}): ").strip()
+                    if delete_name in watchlist_names and delete_name != "default":
+                        confirm = input(f"确定删除自选股列表 '{delete_name}'? (y/N): ").strip().lower()
+                        if confirm == 'y':
+                            self.watchlist_manager.delete_watchlist(delete_name)
+                            print(f"✅ 自选股列表 {delete_name} 已删除")
+                    else:
+                        print("❌ 无效的列表名称或不能删除默认列表")
+
+            elif choice == '6':
+                break
+
+            else:
+                print("❌ 无效选项")
 
     def clear_session(self):
         """

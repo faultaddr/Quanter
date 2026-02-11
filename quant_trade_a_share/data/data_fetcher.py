@@ -193,7 +193,7 @@ class DataFetcher:
             return pd.DataFrame()
 
     def _fetch_ashare(self, symbol, start_date, end_date):
-        """Fetch data using Ashare data source"""
+        """Fetch data using Ashare data source with fallback to other sources on failure"""
         try:
             # Convert symbol if needed
             # For A-shares, we typically use codes like '000001'
@@ -237,12 +237,17 @@ class DataFetcher:
 
                 return df
             else:
-                print(f"Error: Ashare fetcher returned no data for {symbol}")
-                return pd.DataFrame()
+                print(f"Warning: Ashare fetcher returned no data for {symbol}, trying alternative source...")
+
+                # Fallback to EastMoney if Ashare fails
+                print("使用东财数据源作为备用...")
+                return self._fetch_eastmoney(symbol, start_date, end_date)
 
         except Exception as e:
             print(f"Error fetching data from Ashare: {e}")
-            return pd.DataFrame()
+            # Fallback to EastMoney if Ashare fails
+            print("使用东财数据源作为备用...")
+            return self._fetch_eastmoney(symbol, start_date, end_date)
 
     def _fetch_yahoo(self, symbol, start_date, end_date):
         """Fetch data using Yahoo Finance"""

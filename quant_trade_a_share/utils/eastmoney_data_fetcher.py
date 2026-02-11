@@ -2,6 +2,7 @@
 Reusable EastMoney Data Fetcher Module
 Provides a centralized way to fetch A-Share market data using EastMoney cookies
 Enhanced with better error handling and retry mechanisms
+Integrating MyTT technical indicators for comprehensive analysis
 """
 
 import pandas as pd
@@ -67,236 +68,194 @@ class EastMoneyDataFetcher:
     def fetch_stock_data(self, symbol, days=60):
         """
         Fetch stock data using EastMoney API with cookies
-        Enhanced with retry mechanism and better error handling
         """
-        max_retries = 3
-        retry_delay = 2  # seconds
+        try:
+            # Calculate date range
+            end_date = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
 
-        for attempt in range(max_retries):
-            try:
-                # Calculate date range
-                end_date = datetime.now().strftime('%Y%m%d')
-                start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
+            # Use requests to fetch data with cookies to bypass anti-bot measures
+            url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get"
+            params = {
+                'fields1': 'f1,f2,f3,f4,f5,f6',
+                'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f116',
+                'ut': '7eea3edcaed734bea9cbfc24409ed989',
+                'klt': '101',  # Daily data
+                'fqt': '0',
+                'secid': f"{1 if symbol.startswith('sh') else 0}.{symbol[2:]}",  # Format as "1.600519" or "0.000001"
+                'beg': start_date,
+                'end': end_date
+            }
 
-                # Use requests to fetch data with cookies to bypass anti-bot measures
-                url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get"
-                params = {
-                    'fields1': 'f1,f2,f3,f4,f5,f6',
-                    'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f116',
-                    'ut': '7eea3edcaed734bea9cbfc24409ed989',
-                    'klt': '101',  # Daily data
-                    'fqt': '0',
-                    'secid': f"{1 if symbol.startswith('sh') else 0}.{symbol[2:]}",  # Format as "1.600519" or "0.000001"
-                    'beg': start_date,
-                    'end': end_date
-                }
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Referer': 'https://quote.eastmoney.com/',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Connection': 'keep-alive',
+                'Sec-Fetch-Dest': 'empty',
+                'Sec-Fetch-Mode': 'cors',
+                'Sec-Fetch-Site': 'same-site',
+                'Pragma': 'no-cache',
+                'Cache-Control': 'no-cache',
+                'Cookie': '; '.join([f"{k}={v}" for k, v in self.cookies.items()])
+            }
 
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'application/json, text/javascript, */*; q=0.01',
-                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Referer': 'https://quote.eastmoney.com/',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Connection': 'keep-alive',
-                    'Sec-Fetch-Dest': 'empty',
-                    'Sec-Fetch-Mode': 'cors',
-                    'Sec-Fetch-Site': 'same-site',
-                    'Pragma': 'no-cache',
-                    'Cache-Control': 'no-cache',
-                    'Cookie': '; '.join([f"{k}={v}" for k, v in self.cookies.items()])
-                }
+            response = self.session.get(url, params=params, headers=headers, timeout=30)
 
-                response = self.session.get(url, params=params, headers=headers, timeout=30)
-
-                # Handle compressed content (gzip, deflate, or brotli)
-                content_encoding = response.headers.get('Content-Encoding', '').lower()
-                if content_encoding == 'br':
-                    # Handle Brotli compression
-                    try:
-                        import brotli
-                        response._content = brotli.decompress(response.content)
-                        # Update encoding to ensure proper text interpretation
+            # Handle compressed content (gzip, deflate, or brotli)
+            content_encoding = response.headers.get('Content-Encoding', '').lower()
+            if content_encoding == 'br':
+                # Handle Brotli compression
+                try:
+                    import brotli
+                    response._content = brotli.decompress(response.content)
+                    # Update encoding to ensure proper text interpretation
+                    response.encoding = 'utf-8'
+                except ImportError:
+                    print("Brotli library not available, response may be corrupted")
+                except Exception as e:
+                    print(f"Brotli decompression failed: {e}")
+                    # Don't raise here, let the JSON parsing handle any issues
+            elif content_encoding == 'gzip':
+                # Handle gzip compression, but verify it's actually gzipped
+                try:
+                    import gzip
+                    # Check if content actually looks like gzip data (starts with 1f8b)
+                    if len(response.content) >= 2 and response.content[0] == 0x1f and response.content[1] == 0x8b:
+                        response._content = gzip.decompress(response.content)
                         response.encoding = 'utf-8'
-                    except ImportError:
-                        print("Brotli library not available, response may be corrupted")
-                    except Exception as e:
-                        print(f"Brotli decompression failed: {e}")
-                        # Don't raise here, let the JSON parsing handle any issues
-                elif content_encoding == 'gzip':
-                    # Handle gzip compression, but verify it's actually gzipped
+                    else:
+                        print("Content marked as gzip but doesn't appear to be gzipped, leaving as-is")
+                except Exception as e:
+                    print(f"Gzip decompression failed: {e}")
+            elif content_encoding == 'deflate':
+                # Handle deflate compression
+                try:
+                    import zlib
+                    # Try standard deflate decompression
+                    response._content = zlib.decompress(response.content)
+                    response.encoding = 'utf-8'
+                except zlib.error:
+                    # Some servers use raw deflate without zlib headers
                     try:
-                        import gzip
-                        # Check if content actually looks like gzip data (starts with 1f8b)
-                        if len(response.content) >= 2 and response.content[0] == 0x1f and response.content[1] == 0x8b:
-                            response._content = gzip.decompress(response.content)
-                            response.encoding = 'utf-8'
-                        else:
-                            print("Content marked as gzip but doesn't appear to be gzipped, leaving as-is")
-                    except Exception as e:
-                        print(f"Gzip decompression failed: {e}")
-                elif content_encoding == 'deflate':
-                    # Handle deflate compression
-                    try:
-                        import zlib
-                        # Try standard deflate decompression
-                        response._content = zlib.decompress(response.content)
+                        response._content = zlib.decompress(response.content, -zlib.MAX_WBITS)
                         response.encoding = 'utf-8'
-                    except zlib.error:
-                        # Some servers use raw deflate without zlib headers
-                        try:
-                            response._content = zlib.decompress(response.content, -zlib.MAX_WBITS)
-                            response.encoding = 'utf-8'
-                        except Exception as e:
-                            print(f"Deflate decompression failed: {e}")
                     except Exception as e:
                         print(f"Deflate decompression failed: {e}")
+                except Exception as e:
+                    print(f"Deflate decompression failed: {e}")
 
-                if response.status_code == 200:
-                    # Check if response is valid JSON
-                    try:
-                        data = response.json()
+            if response.status_code == 200:
+                # Check if response is valid JSON
+                try:
+                    data = response.json()
 
-                        # Verify that the response contains expected structure
-                        if isinstance(data, dict) and 'data' in data and data['data'] and 'klines' in data['data']:
-                            klines = data['data']['klines']
+                    # Verify that the response contains expected structure
+                    if isinstance(data, dict) and 'data' in data and data['data'] and 'klines' in data['data']:
+                        klines = data['data']['klines']
 
-                            if klines:
-                                # Parse kline data
-                                dates = []
-                                opens = []
-                                closes = []
-                                highs = []
-                                lows = []
-                                volumes = []
+                        if klines:
+                            # Parse kline data
+                            dates = []
+                            opens = []
+                            closes = []
+                            highs = []
+                            lows = []
+                            volumes = []
 
-                                for kline in klines:
-                                    parts = kline.split(',')
-                                    if len(parts) >= 7:
-                                        dates.append(parts[0])  # date
-                                        opens.append(float(parts[1]))  # open
-                                        closes.append(float(parts[2]))  # close
-                                        highs.append(float(parts[3]))  # high
-                                        lows.append(float(parts[4]))  # low
-                                        volumes.append(int(float(parts[6])))  # volume
+                            for kline in klines:
+                                parts = kline.split(',')
+                                if len(parts) >= 7:
+                                    dates.append(parts[0])  # date
+                                    opens.append(float(parts[1]))  # open
+                                    closes.append(float(parts[2]))  # close
+                                    highs.append(float(parts[3]))  # high
+                                    lows.append(float(parts[4]))  # low
+                                    volumes.append(int(float(parts[6])))  # volume
 
-                                # Create DataFrame
-                                df = pd.DataFrame({
-                                    'date': pd.to_datetime(dates),
-                                    'open': opens,
-                                    'close': closes,
-                                    'high': highs,
-                                    'low': lows,
-                                    'volume': volumes
-                                })
+                            # Create DataFrame
+                            df = pd.DataFrame({
+                                'date': pd.to_datetime(dates),
+                                'open': opens,
+                                'close': closes,
+                                'high': highs,
+                                'low': lows,
+                                'volume': volumes
+                            })
 
-                                df.set_index('date', inplace=True)
+                            df.set_index('date', inplace=True)
 
-                                # Calculate enhanced technical indicators using Qlib
-                                df = self.calculate_enhanced_technical_indicators(df)
+                            # Calculate enhanced technical indicators using Qlib
+                            df = self.calculate_enhanced_technical_indicators(df)
 
-                                print(f"✅ 成功使用EastMoney Cookie获取 {symbol} 数据")
-                                return df
-                            else:
-                                print(f"EastMoney API未返回 {symbol} 的数据")
-                                return None
+                            print(f"✅ 成功使用EastMoney Cookie获取 {symbol} 数据")
+                            return df
                         else:
-                            print(f"EastMoney API响应结构异常或数据为空: {type(data)}")
-                            # Print first 200 chars of response text for debugging
-                            print(f"Response preview: {response.text[:200]}...")
+                            print(f"EastMoney API未返回 {symbol} 的数据")
                             return None
-                    except ValueError as e:
-                        # Response is not valid JSON - probably an error page or blocked request
-                        print(f"EastMoney API返回非JSON格式内容: {e}")
-                        print(f"Response status: {response.status_code}")
-                        print(f"Response headers: {dict(response.headers)}")
-                        print(f"Response preview: {response.text[:500]}...")
-
-                        # Check if we should retry based on response
-                        if "访问过于频繁" in response.text or "请求过于频繁" in response.text or response.status_code == 403:
-                            if attempt < max_retries - 1:
-                                print(f"触发频率限制，等待 {retry_delay} 秒后重试...")
-                                time.sleep(retry_delay)
-                                continue
-                            else:
-                                return None
+                    else:
+                        print(f"EastMoney API响应结构异常或数据为空: {type(data)}")
+                        # Print first 200 chars of response text for debugging
+                        print(f"Response preview: {response.text[:200]}...")
                         return None
-                    except requests.RequestException:
-                        # Re-raise RequestExceptions to be caught by outer exception handler
-                        raise
-                    except Exception as e:
-                        # Catch any other exceptions during parsing
-                        print(f"解析EastMoney API响应时出错: {e}")
-                        print(f"Response status: {response.status_code}")
-                        print(f"Response preview: {response.text[:500]}...")
-                        if attempt < max_retries - 1:
-                            print(f"等待 {retry_delay} 秒后重试...")
-                            time.sleep(retry_delay)
-                            continue
-                        return None
-                else:
-                    print(f"EastMoney API请求失败，状态码: {response.status_code}")
-                    print(f"Response preview: {response.text[:200]}...")
+                except ValueError as e:
+                    # Response is not valid JSON - probably an error page or blocked request
+                    print(f"EastMoney API返回非JSON格式内容: {e}")
+                    print(f"Response status: {response.status_code}")
+                    print(f"Response headers: {dict(response.headers)}")
+                    print(f"Response preview: {response.text[:500]}...")
 
-                    # If it's a server error, maybe we should retry
-                    if response.status_code in [500, 502, 503, 504] and attempt < max_retries - 1:
-                        print(f"服务器错误，等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
-                        continue
+                    # Check if we should return based on response
+                    if "访问过于频繁" in response.text or "请求过于频繁" in response.text or response.status_code == 403:
+                        return None
                     return None
+                except requests.RequestException:
+                    # Re-raise RequestExceptions to be caught by outer exception handler
+                    raise
+                except Exception as e:
+                    # Catch any other exceptions during parsing
+                    print(f"解析EastMoney API响应时出错: {e}")
+                    print(f"Response status: {response.status_code}")
+                    print(f"Response preview: {response.text[:500]}...")
+                    return None
+            else:
+                print(f"EastMoney API请求失败，状态码: {response.status_code}")
+                print(f"Response preview: {response.text[:200]}...")
 
-            except requests.exceptions.ConnectionError as e:
-                print(f"连接错误 {symbol}: {e}")
-                if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
-                    continue
-                print(f"❌ 无法获取 {symbol} 的数据")
-                return None
-            except requests.exceptions.Timeout as e:
-                print(f"请求超时 {symbol}: {e}")
-                if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
-                    continue
-                print(f"❌ 无法获取 {symbol} 的数据")
-                return None
-            except requests.exceptions.ChunkedEncodingError as e:
-                print(f"分块编码错误 {symbol}: {e}")
-                if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
-                    continue
-                print(f"❌ 无法获取 {symbol} 的数据")
-                return None
-            except requests.exceptions.RequestException as e:
-                print(f"请求异常 {symbol}: {e}")
-                if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
-                    continue
-                print(f"❌ 无法获取 {symbol} 的数据")
-                return None
-            except ProtocolError as e:
-                print(f"协议错误 {symbol}: {e}")
-                if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
-                    continue
-                print(f"❌ 无法获取 {symbol} 的数据")
-                return None
-            except Exception as e:
-                print(f"获取 {symbol} 数据失败: {e}")
-                if attempt < max_retries - 1:
-                    print(f"等待 {retry_delay} 秒后重试...")
-                    time.sleep(retry_delay)
-                    continue
-                # If error occurs, return None
-                print(f"❌ 无法获取 {symbol} 的数据")
+                # If it's a server error, return None
                 return None
 
-        # If all retries failed
-        print(f"❌ 经过 {max_retries} 次尝试后仍无法获取 {symbol} 的数据")
+        except requests.exceptions.ConnectionError as e:
+            print(f"连接错误 {symbol}: {e}")
+            print(f"❌ 无法获取 {symbol} 的数据")
+            return None
+        except requests.exceptions.Timeout as e:
+            print(f"请求超时 {symbol}: {e}")
+            print(f"❌ 无法获取 {symbol} 的数据")
+            return None
+        except requests.exceptions.ChunkedEncodingError as e:
+            print(f"分块编码错误 {symbol}: {e}")
+            print(f"❌ 无法获取 {symbol} 的数据")
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"请求异常 {symbol}: {e}")
+            print(f"❌ 无法获取 {symbol} 的数据")
+            return None
+        except ProtocolError as e:
+            print(f"协议错误 {symbol}: {e}")
+            print(f"❌ 无法获取 {symbol} 的数据")
+            return None
+        except Exception as e:
+            print(f"获取 {symbol} 数据失败: {e}")
+            # If error occurs, return None
+            print(f"❌ 无法获取 {symbol} 的数据")
+            return None
+
+        # If all attempts failed
+        print(f"❌ 无法获取 {symbol} 的数据")
         return None
 
     def calculate_enhanced_technical_indicators(self, df):
@@ -330,7 +289,13 @@ class EastMoneyDataFetcher:
         df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
         df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
 
-        # Enhanced indicators inspired by Qlib
+        # Import MyTT indicators
+        from quant_trade_a_share.utils.mytt_indicators import calculate_mytt_indicators
+
+        # Calculate all MyTT indicators
+        df = calculate_mytt_indicators(df)
+
+        # Additional indicators beyond MyTT
         # Price momentum
         df['momentum'] = df['close'].pct_change(periods=5)
         df['volatility'] = df['close'].pct_change().rolling(window=10).std()
@@ -338,42 +303,28 @@ class EastMoneyDataFetcher:
         # Volume indicators
         df['volume_sma'] = df['volume'].rolling(window=10).mean()
         df['volume_ratio'] = df['volume'] / df['volume_sma']
-        
+
         # Qlib-inspired indicators
         # High-Low spread
         df['hl_ratio'] = (df['high'] - df['low']) / df['close']
-        
+
         # Price position in the day's range
         df['price_position'] = (df['close'] - df['low']) / (df['high'] - df['low'] + 1e-12)  # Adding small value to avoid division by zero
-        
+
         # Log returns
         df['log_return'] = np.log(df['close'] / df['close'].shift(1))
-        
+
         # High-low volatility
         df['hl_volatility'] = df['log_return'].rolling(window=5).std()
-        
+
         # Volume-price trend
         df['vpt'] = (df['volume'] * (df['close'] - df['close'].shift(1)) / df['close'].shift(1)).cumsum()
-        
-        # Williams %R
-        df['williams_r'] = (df['high'].rolling(window=14).max() - df['close']) / (df['high'].rolling(window=14).max() - df['low'].rolling(window=14).min()) * -100
-        
-        # Stochastic oscillator
-        df['stoch_k'] = (df['close'] - df['low'].rolling(window=14).min()) / (df['high'].rolling(window=14).max() - df['low'].rolling(window=14).min()) * 100
-        df['stoch_d'] = df['stoch_k'].rolling(window=3).mean()
-        
+
         # Rate of Change
         df['roc'] = ((df['close'] - df['close'].shift(10)) / df['close'].shift(10)) * 100
-        
-        # Average True Range (ATR)
-        df['tr1'] = abs(df['high'] - df['low'])
-        df['tr2'] = abs(df['high'] - df['close'].shift(1))
-        df['tr3'] = abs(df['low'] - df['close'].shift(1))
-        df['true_range'] = pd.concat([df['tr1'], df['tr2'], df['tr3']], axis=1).max(axis=1)
-        df['atr'] = df['true_range'].rolling(window=14).mean()
-        
+
         # Trend indicators
-        df['trend'] = np.where(df['close'] > df['ma_20'], 1, 0)  # 1 for uptrend, 0 for downtrend
+        df['trend'] = np.where(df['close'] > df['ma20'], 1, 0)  # 1 for uptrend, 0 for downtrend
 
         # Fill NaN values with 0 for clean data
         df.fillna(method='ffill', inplace=True)

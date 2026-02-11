@@ -335,6 +335,306 @@ class OscillatorStrategy(AdvancedStrategy):
         return signals
 
 
+class RSIReversionStrategy(AdvancedStrategy):
+    """
+    RSI均值回归策略 - 专门针对RSI指标的均值回归
+    """
+    def __init__(self):
+        super().__init__(
+            "RSI Reversion",
+            "基于RSI指标的均值回归策略，适用于震荡市场"
+        )
+
+    def calculate_factors(self, data):
+        """
+        计算RSI均值回归相关因子
+        """
+        factors = pd.DataFrame(index=data.index)
+
+        # RSI及其衍生指标
+        factors['rsi'] = data['rsi']
+        factors['rsi_sma'] = data['rsi'].rolling(10).mean()
+        factors['rsi_momentum'] = data['rsi'].diff()
+        factors['rsi_change'] = data['rsi'] - factors['rsi_sma']
+
+        # RSI波动性指标
+        factors['rsi_volatility'] = data['rsi'].rolling(10).std()
+
+        # RSI背离检测
+        factors['price_change'] = data['close'].pct_change()
+        factors['rsi_oscillation'] = abs(data['rsi'] - 50)
+
+        return factors
+
+    def generate_signals(self, data):
+        """
+        生成RSI均值回归信号
+        """
+        signals = pd.Series(0.0, index=data.index)
+        factors = self.calculate_factors(data)
+
+        # RSI超卖买入信号
+        rsi_oversold_buy = (
+            (factors['rsi'] < 30) &                           # RSI超卖
+            (factors['rsi_momentum'] > 0) &                   # RSI开始向上
+            (factors['rsi_change'] > 5) &                     # RSI快速回升
+            (factors['rsi_volatility'] > 5) &                 # 足够的波动
+            (data['volume'] > data['volume'].rolling(10).mean() * 1.2)  # 成交量确认
+        )
+
+        # RSI超买卖出信号
+        rsi_overbought_sell = (
+            (factors['rsi'] > 70) &                           # RSI超买
+            (factors['rsi_momentum'] < 0) &                   # RSI开始向下
+            (factors['rsi_change'] < -5) &                    # RSI快速回落
+            (factors['rsi_volatility'] > 5) &                 # 足够的波动
+            (data['volume'] > data['volume'].rolling(10).mean() * 1.2)  # 成交量确认
+        )
+
+        signals[rsi_oversold_buy] = 1
+        signals[rsi_overbought_sell] = -1
+
+        return signals
+
+
+class EMACrossStrategy(AdvancedStrategy):
+    """
+    EMA交叉策略 - 基于指数移动平均线的交叉
+    """
+    def __init__(self):
+        super().__init__(
+            "EMA Cross",
+            "基于不同周期EMA交叉的趋势跟随策略"
+        )
+
+    def calculate_factors(self, data):
+        """
+        计算EMA交叉相关因子
+        """
+        factors = pd.DataFrame(index=data.index)
+
+        # 不同周期的EMA
+        factors['ema_short'] = data['close'].ewm(span=12).mean()
+        factors['ema_medium'] = data['close'].ewm(span=26).mean()
+        factors['ema_long'] = data['close'].ewm(span=50).mean()
+
+        # EMA斜率
+        factors['ema_short_slope'] = (factors['ema_short'] - factors['ema_short'].shift(5)) / 5
+        factors['ema_medium_slope'] = (factors['ema_medium'] - factors['ema_medium'].shift(5)) / 5
+        factors['ema_long_slope'] = (factors['ema_long'] - factors['ema_long'].shift(5)) / 5
+
+        # EMA之间的距离
+        factors['ema_short_mid_distance'] = (factors['ema_short'] - factors['ema_medium']) / data['close']
+        factors['ema_short_long_distance'] = (factors['ema_short'] - factors['ema_long']) / data['close']
+
+        # EMA排列状态
+        factors['ema_arrangement_bullish'] = (
+            (factors['ema_short'] > factors['ema_medium']) &
+            (factors['ema_medium'] > factors['ema_long'])
+        )
+        factors['ema_arrangement_bearish'] = (
+            (factors['ema_short'] < factors['ema_medium']) &
+            (factors['ema_medium'] < factors['ema_long'])
+        )
+
+        return factors
+
+    def generate_signals(self, data):
+        """
+        生成EMA交叉信号
+        """
+        signals = pd.Series(0.0, index=data.index)
+        factors = self.calculate_factors(data)
+
+        # EMA金叉买入信号
+        ema_golden_cross = (
+            (factors['ema_short'] > factors['ema_medium']) &        # 短期EMA上穿中期EMA
+            (factors['ema_short'].shift(1) <= factors['ema_medium'].shift(1)) &  # 之前是下穿或平行
+            factors['ema_arrangement_bullish'] &                   # 牛市排列
+            (factors['ema_short_slope'] > 0.001) &                # 上升趋势
+            (data['volume'] > data['volume'].rolling(20).mean())   # 成交量放大
+        )
+
+        # EMA死叉卖出信号
+        ema_death_cross = (
+            (factors['ema_short'] < factors['ema_medium']) &        # 短期EMA下穿中期EMA
+            (factors['ema_short'].shift(1) >= factors['ema_medium'].shift(1)) &  # 之前是上穿或平行
+            factors['ema_arrangement_bearish'] &                   # 熊市排列
+            (factors['ema_short_slope'] < -0.001) &               # 下降趋势
+            (data['volume'] > data['volume'].rolling(20).mean())   # 成交量放大
+        )
+
+        signals[ema_golden_cross] = 1
+        signals[ema_death_cross] = -1
+
+        return signals
+
+
+class VolumeSpikeStrategy(AdvancedStrategy):
+    """
+    成交量脉冲策略 - 基于成交量异常放大的突破策略
+    """
+    def __init__(self):
+        super().__init__(
+            "Volume Spike",
+            "基于成交量异常放大的突破识别策略"
+        )
+
+    def calculate_factors(self, data):
+        """
+        计算成交量脉冲相关因子
+        """
+        factors = pd.DataFrame(index=data.index)
+
+        # 基础成交量指标
+        factors['volume_sma'] = data['volume'].rolling(20).mean()
+        factors['volume_ratio'] = data['volume'] / factors['volume_sma']
+        factors['volume_zscore'] = (data['volume'] - factors['volume_sma']) / (data['volume'].rolling(20).std() + 1e-10)
+
+        # 成交量脉冲分类
+        factors['volume_spike'] = factors['volume_ratio'] > 2.0  # 成交量超过平均2倍
+        factors['volume_extreme'] = factors['volume_ratio'] > 3.0  # 成交量超过平均3倍
+
+        # 价格对成交量脉冲的反应
+        factors['price_response'] = data['close'].pct_change()
+        factors['positive_response'] = (factors['price_response'] > 0.02)  # 价格上涨超过2%
+        factors['negative_response'] = (factors['price_response'] < -0.02)  # 价格下跌超过2%
+
+        # 价格波动率
+        factors['volatility'] = data['close'].pct_change().rolling(10).std()
+
+        # 价格位置 - 相对于近期高低点的位置
+        factors['price_position'] = (data['close'] - data['close'].rolling(20).min()) / (
+            data['close'].rolling(20).max() - data['close'].rolling(20).min() + 1e-10
+        )
+
+        return factors
+
+    def generate_signals(self, data):
+        """
+        生成成交量脉冲信号
+        """
+        signals = pd.Series(0.0, index=data.index)
+        factors = self.calculate_factors(data)
+
+        # 低吸策略 - 在相对低位出现放量上涨
+        volume_pullback_buy = (
+            factors['volume_spike'] &                        # 成交量放大
+            factors['positive_response'] &                   # 价格上涨
+            (factors['price_position'] < 0.4) &             # 相对低位
+            (factors['volatility'] > 0.01)                  # 足够的波动性
+        )
+
+        # 追涨策略 - 在相对高位放量突破
+        volume_breakout_buy = (
+            factors['volume_spike'] &                        # 成交量放大
+            factors['positive_response'] &                   # 价格上涨
+            (factors['price_position'] > 0.6) &             # 相对高位
+            (data['close'] > data['close'].rolling(20).max().shift(1) * 0.999)  # 接近或突破新高
+            (factors['volatility'] > 0.01)                  # 足够的波动性
+        )
+
+        # 高位放量卖出
+        volume_distribution_sell = (
+            factors['volume_spike'] &                        # 成交量放大
+            factors['negative_response'] &                   # 价格下跌
+            (factors['price_position'] > 0.6) &             # 相对高位
+            (factors['volatility'] > 0.01)                  # 足够的波动性
+        )
+
+        signals[volume_pullback_buy | volume_breakout_buy] = 1
+        signals[volume_distribution_sell] = -1
+
+        return signals
+
+
+class BollingerBandStrategy(AdvancedStrategy):
+    """
+    Bollinger Band strategy based on price volatility and band breaks
+    """
+    def __init__(self):
+        super().__init__(
+            "Bollinger Band",
+            "Strategy based on Bollinger Bands for volatility and mean reversion trading"
+        )
+
+    def calculate_factors(self, data):
+        """
+        Calculate Bollinger Band factors
+        """
+        factors = pd.DataFrame(index=data.index)
+
+        # Standard Bollinger Bands
+        factors['bb_middle'] = data['ma_20']  # Already calculated as MA20
+        bb_std = data['close'].rolling(20).std()
+        factors['bb_upper'] = factors['bb_middle'] + (bb_std * 2)
+        factors['bb_lower'] = factors['bb_middle'] - (bb_std * 2)
+
+        # Bollinger Band width and percentage
+        factors['bb_width'] = (factors['bb_upper'] - factors['bb_lower']) / factors['bb_middle']
+        factors['bb_percent'] = (data['close'] - factors['bb_lower']) / (factors['bb_upper'] - factors['bb_lower'] + 1e-10)
+
+        # Bollinger Band squeeze detection
+        factors['bb_squeeze'] = (factors['bb_width'] < factors['bb_width'].rolling(20).quantile(0.2))
+
+        # Band touch indicators
+        factors['bb_touch_upper'] = (data['close'] >= factors['bb_upper'] * 0.999)  # Close to upper
+        factors['bb_touch_lower'] = (data['close'] <= factors['bb_lower'] * 1.001)  # Close to lower
+
+        # Volatility indicators
+        factors['volatility'] = bb_std / factors['bb_middle']
+
+        # Moving average convergence
+        factors['ma_convergence'] = (data['ma_5'] - data['ma_20']) / data['close']
+
+        return factors
+
+    def generate_signals(self, data):
+        """
+        Generate Bollinger Band signals
+        """
+        signals = pd.Series(0.0, index=data.index)
+        factors = self.calculate_factors(data)
+
+        # Bollinger Band buy conditions - price touching lower band with reversal signs
+        bb_buy = (
+            (factors['bb_percent'] < 0.1) &          # Price near lower band (oversold)
+            (data['rsi'] < 40) &                      # RSI not extremely oversold to avoid further decline
+            (factors['volatility'] > 0.01) &          # Sufficient volatility
+            (factors['ma_convergence'] > -0.02) &     # Avoid strong downtrends
+            (~factors['bb_squeeze'])                  # Not in squeeze (when bands are too narrow)
+        )
+
+        # Bollinger Band sell conditions - price touching upper band with reversal signs
+        bb_sell = (
+            (factors['bb_percent'] > 0.9) &           # Price near upper band (overbought)
+            (data['rsi'] > 60) &                      # RSI not extremely overbought to avoid further rise
+            (factors['volatility'] > 0.01) &          # Sufficient volatility
+            (factors['ma_convergence'] < 0.02) &      # Avoid strong uptrends
+            (~factors['bb_squeeze'])                  # Not in squeeze
+        )
+
+        # Bollinger Band squeeze breakout signals
+        squeeze_breakout_buy = (
+            factors['bb_squeeze'] &                   # Currently in squeeze
+            (factors['bb_width'] > factors['bb_width'].shift(1) * 1.1) &  # Bands expanding
+            (data['close'] > data['close'].shift(1)) &                    # Price moving up
+            (data['volume'] > data['volume'].shift(1) * 1.2)              # Volume confirmation
+        )
+
+        squeeze_breakout_sell = (
+            factors['bb_squeeze'] &                   # Currently in squeeze
+            (factors['bb_width'] > factors['bb_width'].shift(1) * 1.1) &  # Bands expanding
+            (data['close'] < data['close'].shift(1)) &                    # Price moving down
+            (data['volume'] > data['volume'].shift(1) * 1.2)              # Volume confirmation
+        )
+
+        signals[bb_buy | squeeze_breakout_buy] = 1
+        signals[bb_sell | squeeze_breakout_sell] = -1
+
+        return signals
+
+
 class BreakoutStrategy(AdvancedStrategy):
     """
     Breakout strategy detecting support/resistance breaks
@@ -596,6 +896,7 @@ class AdvancedStrategyManager:
         Register all advanced strategies
         """
         # Register the main strategies
+        self.register_strategy('bollinger', BollingerBandStrategy())
         self.register_strategy('mean_reversion', MeanReversionStrategy())
         self.register_strategy('momentum', MomentumStrategy())
         self.register_strategy('volume_based', VolumeBasedStrategy())
@@ -603,6 +904,9 @@ class AdvancedStrategyManager:
         self.register_strategy('breakout', BreakoutStrategy())
         self.register_strategy('correlation', CorrelationStrategy())
         self.register_strategy('volatility_regime', VolatilityRegimeStrategy())
+        self.register_strategy('rsi_reversion', RSIReversionStrategy())
+        self.register_strategy('ema_cross', EMACrossStrategy())
+        self.register_strategy('volume_spike', VolumeSpikeStrategy())
 
         # Additional variations and hybrid strategies
         for i, name in enumerate([

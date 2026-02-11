@@ -157,8 +157,8 @@ class AshareDataFetcher:
     # --- Tencent Daily ---
     def get_price_day_tx(self, code: str, end_date: str = '', count: int = 10, frequency: str = '1d') -> pd.DataFrame:
         """Daily acquisition with improved error handling and retry mechanism"""
-        max_retries = 3
-        retry_delay = 2  # seconds
+        max_retries = 5
+        base_retry_delay = 2  # seconds
 
         unit = 'week' if frequency in '1w' else 'month' if frequency in '1M' else 'day'  # Judge day, week, month
         if end_date:
@@ -172,11 +172,22 @@ class AshareDataFetcher:
 
                 if response.status_code != 200:
                     print(f"Warning: Received status code {response.status_code} for {code}")
-                    if attempt < max_retries - 1:
-                        print(f"等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
+
+                    # Check if this is a rate limiting issue (common error codes)
+                    if response.status_code in [429, 456, 503, 504]:
+                        # Exponential backoff for rate limiting
+                        delay = base_retry_delay * (2 ** attempt)  # Double the delay each time
+                        print(f"检测到API限流或服务暂不可用，等待 {delay} 秒后重试...")
+                        time.sleep(delay)
+                        continue
+                    elif attempt < max_retries - 1:
+                        # For other error codes, use standard delay
+                        delay = base_retry_delay
+                        print(f"等待 {delay} 秒后重试...")
+                        time.sleep(delay)
                         continue
                     else:
+                        # If all retries exhausted, return to try alternative source
                         return pd.DataFrame()  # Return empty DataFrame on failure
 
                 # Try to parse JSON response
@@ -257,8 +268,8 @@ class AshareDataFetcher:
     # Tencent Minute Line
     def get_price_min_tx(self, code: str, end_date: Union[str, None] = None, count: int = 10, frequency: str = '1d') -> pd.DataFrame:
         """Minute line acquisition with improved error handling and retry mechanism"""
-        max_retries = 3
-        retry_delay = 2  # seconds
+        max_retries = 5
+        base_retry_delay = 2  # seconds
 
         ts = int(frequency[:-1]) if frequency[:-1].isdigit() else 1  # Parse K-line cycle number
         if end_date:
@@ -271,11 +282,22 @@ class AshareDataFetcher:
 
                 if response.status_code != 200:
                     print(f"Warning: Received status code {response.status_code} for {code}")
-                    if attempt < max_retries - 1:
-                        print(f"等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
+
+                    # Check if this is a rate limiting issue (common error codes)
+                    if response.status_code in [429, 456, 503, 504]:
+                        # Exponential backoff for rate limiting
+                        delay = base_retry_delay * (2 ** attempt)  # Double the delay each time
+                        print(f"检测到API限流或服务暂不可用，等待 {delay} 秒后重试...")
+                        time.sleep(delay)
+                        continue
+                    elif attempt < max_retries - 1:
+                        # For other error codes, use standard delay
+                        delay = base_retry_delay
+                        print(f"等待 {delay} 秒后重试...")
+                        time.sleep(delay)
                         continue
                     else:
+                        # If all retries exhausted, return to try alternative source
                         return pd.DataFrame()  # Return empty DataFrame on failure
 
                 # Try to parse JSON response
@@ -349,8 +371,8 @@ class AshareDataFetcher:
         """Sina all cycle acquisition function with improved error handling and retry mechanism"""
         import time
 
-        max_retries = 3
-        retry_delay = 2  # seconds
+        max_retries = 5
+        base_retry_delay = 2  # seconds
 
         frequency = frequency.replace('1d', '240m').replace('1w', '1200m').replace('1M', '7200m')
         mcount = count
@@ -368,11 +390,22 @@ class AshareDataFetcher:
 
                 if response.status_code != 200:
                     print(f"Warning: Received status code {response.status_code} for {code}")
-                    if attempt < max_retries - 1:
-                        print(f"等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
+
+                    # Check if this is a rate limiting issue (common error codes)
+                    if response.status_code in [429, 456, 503, 504]:
+                        # Exponential backoff for rate limiting
+                        delay = base_retry_delay * (2 ** attempt)  # Double the delay each time
+                        print(f"检测到API限流或服务暂不可用，等待 {delay} 秒后重试...")
+                        time.sleep(delay)
+                        continue
+                    elif attempt < max_retries - 1:
+                        # For other error codes, use standard delay
+                        delay = base_retry_delay
+                        print(f"等待 {delay} 秒后重试...")
+                        time.sleep(delay)
                         continue
                     else:
+                        # If all retries exhausted, return to try alternative source
                         return pd.DataFrame()  # Return empty DataFrame on failure
 
                 # Try to parse JSON response
