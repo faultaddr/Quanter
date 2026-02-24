@@ -1,4 +1,4 @@
-"""Enhanced Data Fetcher with support for multiple data sources including Tushare and EastMoney."""
+"""Enhanced Data Fetcher with support for multiple data sources including Tushare, EastMoney, and AkShare."""
 
 import os
 import tushare as ts
@@ -10,6 +10,29 @@ from ...domain.interfaces.data_provider import IDataProvider
 from ...core.errors import DataProviderError, ConfigurationError
 from ...core.registry import registry, ComponentType
 from ...core.logging import get_logger
+
+# Clear proxy environment variables at module level to avoid connection issues
+# This affects requests library used by AkShare and other data sources
+for _proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy',
+                   'ALL_PROXY', 'all_proxy']:
+    if _proxy_var in os.environ:
+        del os.environ[_proxy_var]
+
+# Try to import AkShare, but make it optional
+try:
+    import akshare as ak
+    AKSHARE_AVAILABLE = True
+except ImportError:
+    AKSHARE_AVAILABLE = False
+    ak = None
+
+# Try to import BaoStock, but make it optional
+try:
+    import baostock as bs
+    BAOSTOCK_AVAILABLE = True
+except ImportError:
+    BAOSTOCK_AVAILABLE = False
+    bs = None
 
 logger = get_logger(__name__)
 
@@ -23,12 +46,13 @@ def setup_tushare_api(token: str):
 
 @registry.register(ComponentType.DATA_PROVIDER, "enhanced_data_fetcher")
 class EnhancedDataFetcher(IDataProvider):
-    """Enhanced data fetcher supporting Tushare and EastMoney data sources."""
+    """Enhanced data fetcher supporting Tushare, EastMoney, and AkShare data sources."""
 
     def __init__(
         self,
         tushare_token: str = None,
-        eastmoney_cookie: str = None
+        eastmoney_cookie: str = None,
+        use_akshare: bool = True
     ):
         """
         Initialize enhanced data fetcher.
@@ -36,9 +60,11 @@ class EnhancedDataFetcher(IDataProvider):
         Args:
             tushare_token: Tushare API token. If None, will try to get from TUSHARE_TOKEN environment variable.
             eastmoney_cookie: EastMoney cookie string. If None, will try to get from EASTMONEY_COOKIE environment variable.
+            use_akshare: Whether to use AkShare as a fallback data source (default: True).
         """
         self.tushare_token = tushare_token or os.getenv("TUSHARE_TOKEN")
         self.eastmoney_cookie = eastmoney_cookie or os.getenv("EASTMONEY_COOKIE")
+        self.use_akshare = use_akshare and AKSHARE_AVAILABLE
 
         if not self.tushare_token:
             raise ConfigurationError(
@@ -54,6 +80,12 @@ class EnhancedDataFetcher(IDataProvider):
             'Cookie': self.eastmoney_cookie,
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
+
+        # AkShare availability
+        if self.use_akshare:
+            logger.info("AkShare is available and will be used as fallback")
+        elif not AKSHARE_AVAILABLE:
+            logger.warning("AkShare is not installed. Install it with: pip install akshare")
 
     def initialize(self) -> None:
         """Initialize the data fetcher connections."""
@@ -178,6 +210,182 @@ class EnhancedDataFetcher(IDataProvider):
             logger.error(f"Error fetching EastMoney data for {symbol}: {str(e)}")
             return pd.DataFrame()
 
+    def _fetch_from_akshare(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """Fetch data from AkShare as fallback."""
+        if not self.use_akshare or not AKSHARE_AVAILABLE:
+            logger.warning("AkShare not available")
+            return pd.DataFrame()
+
+        try:
+            # Format symbol for AkShare (remove .SH/.SZ suffix)
+            if '.' in symbol:
+                base_symbol = symbol.split('.')[0]
+            else:
+                base_symbol = symbol
+
+            # Convert dates from YYYY-MM-DD to YYYYMMDD format
+            start_formatted = start_date.replace('-', '')
+            end_formatted = end_date.replace('-', '')
+
+            # Determine market prefix for AkShare
+            if base_symbol.startswith(('5', '6', '9')):
+                # Shanghai stocks
+                ak_symbol = f"sh{base_symbol}"
+            else:
+                # Shenzhen stocks
+                ak_symbol = f"sz{base_symbol}"
+
+            logger.info(f"Fetching {symbol} from AkShare using {ak_symbol}")
+
+            # Use AkShare's stock_zh_a_hist interface
+            df = ak.stock_zh_a_hist(
+                symbol=base_symbol,
+                period="daily",
+                start_date=start_formatted,
+                end_date=end_formatted,
+                adjust="qfq"  # Forward adjusted
+            )
+
+            if df.empty:
+                logger.warning(f"No AkShare data found for {symbol}")
+                return pd.DataFrame()
+
+            # Rename columns to match expected format
+            # AkShare columns: 日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
+            column_mapping = {
+                "日期": "timestamp",
+                "开盘": "open",
+                "收盘": "close",
+                "最高": "high",
+                "最低": "low",
+                "成交量": "volume",
+                "成交额": "amount"
+            }
+
+            df = df.rename(columns=column_mapping)
+
+            # Convert timestamp to datetime
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+            # Add timeframe and symbol columns
+            df["timeframe"] = "1d"
+            df["symbol"] = symbol
+
+            # Select and reorder columns to match expected format
+            expected_cols = [
+                "timestamp", "open", "high", "low", "close", "volume",
+                "amount", "timeframe", "symbol"
+            ]
+            available_cols = [col for col in expected_cols if col in df.columns]
+            df = df[available_cols]
+
+            # Sort by timestamp
+            df.sort_values("timestamp", inplace=True)
+            df.reset_index(drop=True, inplace=True)
+
+            logger.info(f"Successfully fetched {len(df)} bars from AkShare for {symbol}")
+            return df
+
+        except Exception as e:
+            logger.error(f"Error fetching AkShare data for {symbol}: {str(e)}")
+            return pd.DataFrame()
+
+    def _fetch_from_baostock(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """Fetch data from BaoStock as fallback."""
+        if not BAOSTOCK_AVAILABLE:
+            logger.warning("BaoStock not available")
+            return pd.DataFrame()
+
+        try:
+            # Format symbol for BaoStock (remove .SH/.SZ suffix, BaoStock uses sh.600000 / sz.000001 format)
+            if '.' in symbol:
+                base_symbol = symbol.split('.')[0]
+                exchange = symbol.split('.')[1].upper()
+                if exchange == 'SH':
+                    bs_symbol = f"sh.{base_symbol}"
+                else:
+                    bs_symbol = f"sz.{base_symbol}"
+            else:
+                base_symbol = symbol
+                if base_symbol.startswith(('5', '6', '9')):
+                    bs_symbol = f"sh.{base_symbol}"
+                else:
+                    bs_symbol = f"sz.{base_symbol}"
+
+            logger.info(f"Fetching {symbol} from BaoStock using {bs_symbol}")
+
+            # Login to BaoStock
+            bs.login()
+
+            try:
+                # Query history k data
+                # BaoStock date format: YYYY-MM-DD
+                rs = bs.query_history_k_data_plus(
+                    bs_symbol,
+                    "date,open,high,low,close,volume,amount",
+                    start_date=start_date,
+                    end_date=end_date,
+                    frequency="d",
+                    adjustflag="3"  # 3 = post-adjusted (复权)
+                )
+
+                data_list = []
+                while (rs.error_code == '0') & rs.next():
+                    data_list.append(rs.get_row_data())
+
+                if not data_list:
+                    logger.warning(f"No BaoStock data found for {symbol}")
+                    return pd.DataFrame()
+
+                # Create DataFrame
+                df = pd.DataFrame(data_list, columns=rs.fields)
+
+                # Convert columns to appropriate types
+                df['date'] = pd.to_datetime(df['date'])
+                df['open'] = pd.to_numeric(df['open'], errors='coerce')
+                df['high'] = pd.to_numeric(df['high'], errors='coerce')
+                df['low'] = pd.to_numeric(df['low'], errors='coerce')
+                df['close'] = pd.to_numeric(df['close'], errors='coerce')
+                df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+                df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+
+                # Rename columns to match expected format
+                df = df.rename(columns={
+                    'date': 'timestamp',
+                    'open': 'open',
+                    'high': 'high',
+                    'low': 'low',
+                    'close': 'close',
+                    'volume': 'volume',
+                    'amount': 'amount'
+                })
+
+                # Add timeframe and symbol columns
+                df['timeframe'] = '1d'
+                df['symbol'] = symbol
+
+                # Select and reorder columns
+                expected_cols = [
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                    'amount', 'timeframe', 'symbol'
+                ]
+                available_cols = [col for col in expected_cols if col in df.columns]
+                df = df[available_cols]
+
+                # Drop rows with NaN values
+                df = df.dropna(subset=['open', 'high', 'low', 'close'])
+
+                logger.info(f"Successfully fetched {len(df)} bars from BaoStock for {symbol}")
+                return df
+
+            finally:
+                # Always logout
+                bs.logout()
+
+        except Exception as e:
+            logger.error(f"Error fetching BaoStock data for {symbol}: {str(e)}")
+            return pd.DataFrame()
+
     def get_bars(
         self,
         symbols: List[str],
@@ -187,7 +395,7 @@ class EnhancedDataFetcher(IDataProvider):
     ) -> Dict[str, pd.DataFrame]:
         """
         Get OHLCV bars for the given symbols and timeframe.
-        Prioritizes EastMoney data when available, falls back to Tushare.
+        Prioritizes Tushare data (most reliable), falls back to EastMoney, then AkShare.
 
         Args:
             symbols: List of symbols to retrieve
@@ -211,43 +419,33 @@ class EnhancedDataFetcher(IDataProvider):
             try:
                 df = pd.DataFrame()
 
-                # Try EastMoney first if available
-                if self.eastmoney_cookie:
-                    logger.info(f"Attempting to fetch {symbol} from EastMoney")
-                    df = self._fetch_from_eastmoney(symbol, start_str, end_str)
+                # Try Tushare first (most reliable)
+                logger.info(f"Attempting to fetch {symbol} from Tushare")
 
-                # Fallback to Tushare if EastMoney data not available or failed
-                if df.empty:
-                    logger.info(f"Falling back to Tushare for {symbol}")
-
-                    # Convert to Tushare format
-                    if '.' not in symbol:
-                        if len(symbol) == 6:
-                            if symbol.startswith(('5', '6', '9')):
-                                tushare_symbol = f"{symbol}.SH"
-                            else:
-                                tushare_symbol = f"{symbol}.SZ"
+                # Convert to Tushare format
+                if '.' not in symbol:
+                    if len(symbol) == 6:
+                        if symbol.startswith(('5', '6', '9')):
+                            tushare_symbol = f"{symbol}.SH"
                         else:
-                            tushare_symbol = symbol
+                            tushare_symbol = f"{symbol}.SZ"
                     else:
                         tushare_symbol = symbol
+                else:
+                    tushare_symbol = symbol
 
-                    start_ts = start_date.strftime("%Y%m%d")
-                    end_ts = end_date.strftime("%Y%m%d")
+                start_ts = start_date.strftime("%Y%m%d")
+                end_ts = end_date.strftime("%Y%m%d")
 
-                    if timeframe == "1d":
-                        try:
-                            df = self.pro_api.daily(
-                                ts_code=tushare_symbol, start_date=start_ts, end_date=end_ts
-                            )
+                if timeframe == "1d":
+                    try:
+                        df = self.pro_api.daily(
+                            ts_code=tushare_symbol, start_date=start_ts, end_date=end_ts
+                        )
 
-                            if df.empty:
-                                logger.warning(f"No data found from Tushare for symbol {tushare_symbol}")
-                        except Exception as e:
-                            logger.warning(f"Tushare API error for {symbol}: {str(e)}. This may be due to limited API permissions.")
-                            df = pd.DataFrame()
-
-                        if not df.empty:
+                        if df.empty:
+                            logger.warning(f"No data found from Tushare for symbol {tushare_symbol}")
+                        else:
                             # Rename columns to match expected format
                             df.rename(
                                 columns={
@@ -276,6 +474,24 @@ class EnhancedDataFetcher(IDataProvider):
                             # Sort by timestamp
                             df.sort_values("timestamp", inplace=True)
                             df.reset_index(drop=True, inplace=True)
+                    except Exception as e:
+                        logger.warning(f"Tushare API error for {symbol}: {str(e)}. This may be due to limited API permissions.")
+                        df = pd.DataFrame()
+
+                # Fallback to EastMoney if Tushare failed and cookie is available
+                if df.empty and self.eastmoney_cookie:
+                    logger.info(f"Falling back to EastMoney for {symbol}")
+                    df = self._fetch_from_eastmoney(symbol, start_str, end_str)
+
+                # Fallback to BaoStock if EastMoney failed
+                if df.empty and BAOSTOCK_AVAILABLE:
+                    logger.info(f"Falling back to BaoStock for {symbol}")
+                    df = self._fetch_from_baostock(symbol, start_str, end_str)
+
+                # Fallback to AkShare if BaoStock failed
+                if df.empty and self.use_akshare:
+                    logger.info(f"Falling back to AkShare for {symbol}")
+                    df = self._fetch_from_akshare(symbol, start_str, end_str)
 
                 if not df.empty:
                     results[symbol] = df
@@ -293,7 +509,7 @@ class EnhancedDataFetcher(IDataProvider):
     ) -> Optional[pd.DataFrame]:
         """
         Get the most recent bar for a symbol.
-        Prioritizes EastMoney data when available, falls back to Tushare.
+        Prioritizes EastMoney data when available, falls back to Tushare, then AkShare.
 
         Args:
             symbol: Symbol to retrieve
@@ -380,6 +596,16 @@ class EnhancedDataFetcher(IDataProvider):
                     df.sort_values("timestamp", inplace=True)
                     df.reset_index(drop=True, inplace=True)
 
+            # Fallback to AkShare if Tushare failed
+            if df.empty and self.use_akshare:
+                logger.info(f"Falling back to AkShare for latest bar of {symbol}")
+                df = self._fetch_from_akshare(symbol, start_str, end_str)
+
+            # Fallback to BaoStock if AkShare failed
+            if df.empty and BAOSTOCK_AVAILABLE:
+                logger.info(f"Falling back to BaoStock for latest bar of {symbol}")
+                df = self._fetch_from_baostock(symbol, start_str, end_str)
+
             if df.empty:
                 logger.warning(f"No recent data found for {symbol}")
                 return None
@@ -392,6 +618,98 @@ class EnhancedDataFetcher(IDataProvider):
         except Exception as e:
             logger.error(f"Failed to get latest bar for symbol {symbol}: {str(e)}")
             return None
+
+    def get_csi300_constituents(self, include_names: bool = False) -> List:
+        """
+        Get CSI 300 (沪深300) index constituents.
+        Tries Tushare first, falls back to AkShare if available.
+
+        Args:
+            include_names: If True, returns list of dicts with 'code' and 'name' keys.
+                          If False, returns list of stock codes only.
+
+        Returns:
+            List of stock codes in Tushare format (e.g., '000001.SZ', '600000.SH')
+            or list of dicts with 'code' and 'name' if include_names=True
+        """
+        if not self._tushare_initialized:
+            self.initialize()
+
+        # Try Tushare first
+        try:
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=30)
+            start_str = start_date.strftime("%Y%m%d")
+            end_str = end_date.strftime("%Y%m%d")
+
+            df = self.pro_api.index_weight(
+                index_code='000300.SH',
+                start_date=start_str,
+                end_date=end_str
+            )
+
+            if not df.empty:
+                latest_date = df['trade_date'].max()
+                latest_df = df[df['trade_date'] == latest_date]
+                constituents = latest_df['con_code'].tolist()
+
+                if include_names:
+                    # Fetch stock names from Tushare stock_basic
+                    try:
+                        stock_basic = self.pro_api.stock_basic(
+                            exchange="",
+                            list_status="L",
+                            fields="ts_code,name"
+                        )
+                        # Create a mapping from code to name
+                        name_map = dict(zip(stock_basic['ts_code'], stock_basic['name']))
+                        constituents = [
+                            {"code": code, "name": name_map.get(code, code)}
+                            for code in constituents
+                        ]
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch stock names from Tushare: {str(e)}")
+                        constituents = [{"code": code, "name": code} for code in constituents]
+
+                logger.info(f"Successfully got {len(constituents)} CSI 300 constituents from Tushare")
+                return constituents
+            else:
+                logger.warning("Tushare returned empty CSI 300 constituents list")
+        except Exception as e:
+            logger.warning(f"Failed to get CSI 300 constituents from Tushare: {str(e)}")
+
+        # Fallback to AkShare
+        if self.use_akshare and AKSHARE_AVAILABLE:
+            try:
+                logger.info("Trying to get CSI 300 constituents from AkShare...")
+                # ak.index_stock_cons_weight_csindex returns df with columns like: 成分券代码, 成分券名称, etc.
+                df = ak.index_stock_cons_weight_csindex(symbol="000300")
+                if not df.empty:
+                    # Convert to Tushare format (add .SH or .SZ suffix)
+                    constituents = []
+                    for _, row in df.iterrows():
+                        code_str = str(row['成分券代码']).zfill(6)
+                        name = row.get('成分券名称', code_str)
+                        if code_str.startswith(('5', '6', '9')):
+                            code_with_suffix = f"{code_str}.SH"
+                        else:
+                            code_with_suffix = f"{code_str}.SZ"
+
+                        if include_names:
+                            constituents.append({"code": code_with_suffix, "name": name})
+                        else:
+                            constituents.append(code_with_suffix)
+
+                    logger.info(f"Successfully got {len(constituents)} CSI 300 constituents from AkShare")
+                    return constituents
+                else:
+                    logger.warning("AkShare returned empty CSI 300 constituents list")
+            except Exception as e:
+                logger.error(f"Failed to get CSI 300 constituents from AkShare: {str(e)}")
+        else:
+            logger.warning("AkShare not available, cannot fallback for CSI 300 constituents")
+
+        return []
 
     def get_supported_symbols(self) -> List[str]:
         """Get list of supported symbols."""

@@ -69,7 +69,7 @@ class ScoringSystem:
     def _score_trend(self, df: pd.DataFrame, latest: pd.Series) -> Tuple[int, str]:
         """
         趋势维度：基于MA均线系统评分
-        多头排列 +2，空头排列 -2，纠缠 0
+        多头排列 +2，空头排列 -2，均线之下/之上但排列完好 ±1，纠缠 0
         """
         ma20 = latest.get('ma_20', np.nan)
         ma50 = latest.get('ma_50', np.nan)
@@ -86,6 +86,12 @@ class ScoringSystem:
                 return 2, f"多头排列（收盘价¥{close:.2f} > MA20¥{ma20:.2f} > MA50¥{ma50:.2f} > MA200¥{ma200:.2f}）"
             elif close < ma20 < ma50 < ma200:
                 return -2, f"空头排列（收盘价¥{close:.2f} < MA20¥{ma20:.2f} < MA50¥{ma50:.2f} < MA200¥{ma200:.2f}）"
+            elif ma20 > ma50 > ma200 and close < ma20:
+                # 均线多头排列但股价跌破MA20，短期转弱
+                return -1, f"多头趋势转弱（收盘价¥{close:.2f} < MA20¥{ma20:.2f}，但MA20>MA50>MA200）"
+            elif ma20 < ma50 < ma200 and close > ma20:
+                # 均线空头排列但股价站上MA20，短期转强
+                return 1, f"空头趋势转强（收盘价¥{close:.2f} > MA20¥{ma20:.2f}，但MA20<MA50<MA200）"
             else:
                 return 0, f"均线纠缠（MA20¥{ma20:.2f} / MA50¥{ma50:.2f} / MA200¥{ma200:.2f}）"
         else:
@@ -94,13 +100,25 @@ class ScoringSystem:
                 return 2, f"短期多头（收盘价¥{close:.2f} > MA20¥{ma20:.2f} > MA50¥{ma50:.2f}）"
             elif close < ma20 < ma50:
                 return -2, f"短期空头（收盘价¥{close:.2f} < MA20¥{ma20:.2f} < MA50¥{ma50:.2f}）"
+            elif close < ma20 and close < ma50 and ma20 > ma50:
+                # 股价跌破两条均线，且MA20>MA50（死叉后下跌趋势确认）
+                return -2, f"空头确认（收盘价¥{close:.2f} < MA20¥{ma20:.2f}且<MA50¥{ma50:.2f}，MA20>MA50）"
+            elif close > ma20 and close > ma50 and ma20 < ma50:
+                # 股价站上两条均线，且MA20<MA50（金叉后上涨趋势确认）
+                return 2, f"多头确认（收盘价¥{close:.2f} > MA20¥{ma20:.2f}且>MA50¥{ma50:.2f}，MA20<MA50）"
+            elif ma20 > ma50 and close < ma20:
+                # MA20>MA50但股价跌破MA20，短期回调
+                return -1, f"多头回调（收盘价¥{close:.2f} < MA20¥{ma20:.2f}，但MA20>MA50¥{ma50:.2f}）"
+            elif ma20 < ma50 and close > ma20:
+                # MA20<MA50但股价站上MA20，短期反弹
+                return 1, f"空头反弹（收盘价¥{close:.2f} > MA20¥{ma20:.2f}，但MA20<MA50¥{ma50:.2f}）"
             else:
                 return 0, f"趋势不明（MA20¥{ma20:.2f} vs MA50¥{ma50:.2f}）"
 
     def _score_momentum(self, df: pd.DataFrame, latest: pd.Series) -> Tuple[int, str]:
         """
         动量维度：基于MACD和RSI评分
-        双多 +2，双空 -2，背离 -1，中性 0
+        双多 +2，双空 -2，顶背离 -1~0，底背离 +1~0，中性 0
         """
         macd = latest.get('macd', np.nan)
         rsi = latest.get('rsi_24', np.nan)
@@ -113,27 +131,48 @@ class ScoringSystem:
         rsi_overbought = rsi > 70
         rsi_oversold = rsi < 30
 
-        # 检查MACD背离（简化版：比较价格和MACD趋势）
+        # 检查MACD背离（区分顶背离和底背离）
+        divergence_type = None  # None, 'top', 'bottom'
         if len(df) >= 10:
-            price_trend = df['close'].iloc[-1] > df['close'].iloc[-10]
-            macd_trend = df['macd'].iloc[-1] > df['macd'].iloc[-10]
-            divergence = price_trend != macd_trend
-        else:
-            divergence = False
+            # 使用更长的窗口检测背离（10日 vs 5日）
+            price_recent = df['close'].iloc[-5:].mean()
+            price_prev = df['close'].iloc[-10:-5].mean()
+            macd_recent = df['macd'].iloc[-5:].mean()
+            macd_prev = df['macd'].iloc[-10:-5].mean()
+
+            price_up = price_recent > price_prev
+            macd_up = macd_recent > macd_prev
+
+            if price_up and not macd_up:
+                # 价格新高但MACD未新高 → 顶背离（看跌）
+                divergence_type = 'top'
+            elif not price_up and macd_up:
+                # 价格新低但MACD未新低 → 底背离（看涨）
+                divergence_type = 'bottom'
 
         if macd_bull and not rsi_overbought and not rsi_oversold:
-            if divergence:
-                return -1, f"MACD偏多但出现背离（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
+            if divergence_type == 'top':
+                return -1, f"MACD偏多但出现顶背离，警惕回调（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
             return 2, f"动量健康向上（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
         elif not macd_bull and (rsi_overbought or rsi_oversold):
             if rsi_overbought:
                 return -2, f"动量偏空，RSI超买回调（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
             else:
+                if divergence_type == 'bottom':
+                    return 1, f"RSI超卖+底背离，或有反弹机会（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
                 return -2, f"动量偏空，RSI超卖（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
         elif macd_bull and rsi_overbought:
+            if divergence_type == 'top':
+                return -2, f"MACD向上但RSI超买+顶背离，回调风险高（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
             return -1, f"MACD向上但RSI超买警告（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
-        elif divergence:
-            return -1, f"价格与MACD背离，注意风险（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
+        elif not macd_bull and rsi_oversold:
+            if divergence_type == 'bottom':
+                return 1, f"MACD底背离+RSI超卖，反弹概率增加（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
+            return 0, f"MACD负值但RSI超卖，观望（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
+        elif divergence_type == 'top':
+            return -1, f"MACD顶背离，注意回调风险（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
+        elif divergence_type == 'bottom':
+            return 1, f"MACD底背离，或有反弹机会（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
         else:
             return 0, f"动量中性（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
 
