@@ -1,0 +1,98 @@
+2026-02-12 16:25:30,440 - quanttool.infrastructure.data_providers.csv_provider - INFO - Created mock data file: mock_data/000001.SZ.csv
+2026-02-12 16:25:30,449 - quanttool.infrastructure.data_providers.csv_provider - INFO - Created mock data file: mock_data/000002.SZ.csv
+2026-02-12 16:25:30,458 - quanttool.infrastructure.data_providers.csv_provider - INFO - Created mock data file: mock_data/600000.SH.csv
+2026-02-12 16:25:30,467 - quanttool.infrastructure.data_providers.csv_provider - INFO - Created mock data file: mock_data/600036.SH.csv
+2026-02-12 16:25:30,467 - quanttool.infrastructure.data_providers.csv_provider - INFO - CSV provider initialized with data directory: mock_data
+2026-02-12 16:26:33,662 - quanttool.application.backtest_service - INFO - Starting backtest for strategy: ma_cross, symbols: ['000001.SZ'], timeframe: 10m, period: 2023-01-01 00:00:00 to 2023-01-31 00:00:00
+2026-02-12 16:32:38,906 - quanttool.application.backtest_service - INFO - Starting backtest for strategy: ma_cross, symbols: ['000001.SZ'], timeframe: 1d, period: 2023-01-01 00:00:00 to 2023-01-10 00:00:00
+2026-02-12 16:32:38,907 - quanttool.strategies.ma_cross - INFO - MA Cross strategy initialized with short=10, long=30
+2026-02-12 16:32:38,907 - quanttool.infrastructure.data_providers.csv_provider - INFO - CSV provider initialized with data directory: mock_data
+2026-02-12 16:34:48,830 - quanttool.application.backtest_service - INFO - Starting backtest for strategy: ma_cross, symbols: ['000001.SZ'], timeframe: 1d, period: 2023-01-01 00:00:00 to 2023-01-10 00:00:00
+2026-02-12 16:34:48,831 - quanttool.strategies.ma_cross - INFO - MA Cross strategy initialized with short=10, long=30
+2026-02-12 16:34:48,831 - quanttool.infrastructure.data_providers.csv_provider - INFO - CSV provider initialized with data directory: mock_data
+2026-02-12 16:36:12,089 - quanttool.application.backtest_service - INFO - Starting backtest for strategy: ma_cross, symbols: ['000001.SZ'], timeframe: 1d, period: 2023-01-01 00:00:00 to 2023-01-10 00:00:00
+2026-02-12 16:36:12,104 - quanttool.strategies.ma_cross - INFO - MA Cross strategy initialized with short=10, long=30
+2026-02-12 16:36:12,104 - quanttool.infrastructure.data_providers.csv_provider - INFO - CSV provider initialized with data directory: mock_data
+2026-02-12 16:37:47,899 - quanttool.application.backtest_service - INFO - Starting backtest for strategy: ma_cross, symbols: ['000001.SZ'], timeframe: 1d, period: 2023-01-01 00:00:00 to 2023-01-10 00:00:00
+2026-02-12 16:37:47,899 - quanttool.strategies.ma_cross - INFO - MA Cross strategy initialized with short=10, long=30
+2026-02-12 16:37:47,899 - quanttool.infrastructure.data_providers.csv_provider - INFO - CSV provider initialized with data directory: mock_data
+2026-02-12 16:38:57,786 - quanttool.application.backtest_service - INFO - Starting backtest for strategy: ma_cross, symbols: ['000001.SZ'], timeframe: 1d, period: 2023-01-01 00:00:00 to 2023-01-10 00:00:00
+2026-02-12 16:38:57,787 - quanttool.strategies.ma_cross - INFO - MA Cross strategy initialized with short=10, long=30
+2026-02-12 16:38:57,787 - quanttool.infrastructure.data_providers.csv_provider - INFO - CSV provider initialized with data directory: mock_data
+2026-02-12 16:40:23,700 - quanttool.application.backtest_service - INFO - Starting backtest for strategy: ma_cross, symbols: ['000001.SZ'], timeframe: 1d, period: 2023-01-01 00:00:00 to 2023-01-10 00:00:00
+2026-02-12 16:40:23,700 - quanttool.strategies.ma_cross - INFO - MA Cross strategy initialized with short=10, long=30
+2026-02-12 16:40:23,700 - quanttool.infrastructure.data_providers.csv_provider - INFO - CSV provider initialized with data directory: mock_data
+2026-02-12 16:40:23,862 - quanttool.application.backtest_service - INFO - Backtest completed. Final value: 10000.0, Total return: 0.00%
+2026-02-12 16:41:01,391 - quanttool.application.backtest_service - INFO - Starting backtest for strategy: breakout, symbols: ['000001.SZ'], timeframe: 1d, period: 2023-01-01 00:00:00 to 2023-01-10 00:00:00
+2026-02-12 16:41:01,402 - quanttool.strategies.breakout - INFO - Breakout strategy initialized with lookback=20, threshold=0.02
+2026-02-12 16:41:01,402 - quanttool.infrastructure.data_providers.csv_provider - INFO - CSV provider initialized with data directory: mock_data
+2026-02-12 16:41:01,599 - quanttool.application.backtest_service - INFO - Backtest completed. Final value: 10000.0, Total return: 0.00%
+2026-02-12 16:45:25,406 - quanttool.application.backtest_service - INFO - Starting backtest for strategy: ma_cross, symbols: ['000001.SZ'], timeframe: 1d, period: 2023-01-01 00:00:00 to 2023-01-10 00:00:00
+2026-02-12 16:45:25,406 - quanttool.strategies.ma_cross - INFO - MA Cross strategy initialized with short=10, long=30
+2026-02-12 16:46:02,038 - quanttool.application.backtest_service - INFO - Starting backtest for strategy: ma_cross, symbols: ['000001.SZ'], timeframe: 1d, period: 2023-01-01 00:00:00 to 2023-01-10 00:00:00
+2026-02-12 16:46:02,052 - quanttool.strategies.ma_cross - INFO - MA Cross strategy initialized with short=10, long=30
+2026-02-12 16:46:02,053 - quanttool.infrastructure.data_providers.csv_provider - INFO - CSV provider initialized with data directory: mock_data
+2026-02-12 16:46:02,284 - quanttool.application.backtest_service - INFO - Backtest completed. Final value: 10000.0, Total return: 0.00%
+2026-02-12 16:50:20,315 - quanttool.application.backtest_service - INFO - Starting backtest for strategy: ma_cross, symbols: ['000001.SZ'], timeframe: 1d, period: 2023-01-01 00:00:00 to 2023-01-10 00:00:00
+2026-02-12 16:50:20,316 - quanttool.strategies.ma_cross - INFO - MA Cross strategy initialized with short=10, long=30
+2026-02-12 16:50:20,316 - quanttool.infrastructure.data_providers.csv_provider - INFO - CSV provider initialized with data directory: mock_data
+2026-02-12 16:50:20,431 - quanttool.application.backtest_service - INFO - Backtest completed. Final value: 100000.0, Total return: 0.00%
+2026-02-12 16:51:06,244 - quanttool.application.backtest_service - INFO - Starting backtest for strategy: ma_cross, symbols: ['000001.SZ'], timeframe: 1d, period: 2023-01-01 00:00:00 to 2023-01-10 00:00:00
+2026-02-12 16:51:06,244 - quanttool.strategies.ma_cross - INFO - MA Cross strategy initialized with short=10, long=30
+2026-02-12 17:04:16,468 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:04:16,547 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-12 17:04:16,547 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-12 17:05:12,699 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:05:12,811 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-12 17:05:12,812 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-12 17:05:12,813 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 000001.SZ from EastMoney
+2026-02-12 17:05:12,901 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to get latest bar for 000001.SZ from EastMoney
+2026-02-12 17:24:53,373 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:24:53,449 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-12 17:24:53,449 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-12 17:24:53,451 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 601777.SH from EastMoney
+2026-02-12 17:25:02,901 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:25:02,983 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-12 17:25:02,983 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-12 17:25:02,984 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 601777.SH from EastMoney
+2026-02-12 17:26:38,048 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:26:38,159 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-12 17:26:38,160 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-12 17:26:38,270 - quanttool.infrastructure.data_providers.data_fetcher - ERROR - Failed to search symbols: 抱歉，您每小时最多访问该接口1次，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:26:38,404 - quanttool.infrastructure.data_providers.data_fetcher - ERROR - Failed to search symbols: 抱歉，您每分钟最多访问该接口1次，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:26:38,489 - quanttool.infrastructure.data_providers.data_fetcher - ERROR - Failed to search symbols: 抱歉，您每分钟最多访问该接口1次，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:26:38,609 - quanttool.infrastructure.data_providers.data_fetcher - ERROR - Failed to search symbols: 抱歉，您每分钟最多访问该接口1次，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:30:00,737 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:30:00,828 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-12 17:30:00,828 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-12 17:30:00,830 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 601777.SH from EastMoney
+2026-02-12 17:39:02,477 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:39:02,551 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-12 17:39:02,551 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-12 17:39:02,553 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 601777.SH from EastMoney
+2026-02-12 17:40:00,329 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:40:00,516 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-12 17:40:00,516 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-12 17:40:00,518 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 601777.SH from EastMoney
+2026-02-12 17:45:47,768 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:45:47,954 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-12 17:45:47,954 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-12 17:45:47,955 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 601777.SH from EastMoney
+2026-02-12 17:46:47,957 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:46:48,196 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-12 17:46:48,196 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-12 17:46:48,198 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 000001.SZ from EastMoney
+2026-02-12 17:49:43,172 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:49:43,255 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-12 17:49:43,255 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-12 17:49:43,257 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 601777.SH from EastMoney
+2026-02-12 17:51:44,502 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-12 17:51:44,586 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-12 17:51:44,587 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-12 17:51:44,588 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 601777.SH from EastMoney
+2026-02-24 17:23:13,235 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-24 17:23:13,321 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-24 17:23:13,321 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-24 17:23:13,595 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 000001.SZ from EastMoney
+2026-02-24 17:23:13,687 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to get latest bar for 000001.SZ from EastMoney
+2026-02-24 17:23:13,852 - quanttool.infrastructure.data_providers.data_fetcher - ERROR - Failed to search symbols: 抱歉，您每分钟最多访问该接口1次，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
