@@ -35,9 +35,10 @@ class ScoringSystem:
         volatility_score, volatility_detail = self._score_volatility(df, latest)
         capital_score, capital_detail = self._score_capital(df, latest, prev)
         structure_score, structure_detail = self._score_structure(df, latest)
+        bias_score, bias_detail = self._score_bias(latest)  # 新增乖离率维度
 
-        # 计算总分
-        total_score = trend_score + momentum_score + volatility_score + capital_score + structure_score
+        # 计算总分 (现在6个维度，满分12分)
+        total_score = trend_score + momentum_score + volatility_score + capital_score + structure_score + bias_score
 
         # 评级和操作推荐
         rating, action, risk_level = self._get_rating_and_action(total_score, capital_score)
@@ -50,14 +51,17 @@ class ScoringSystem:
             warnings.append("MACD背离：价格与动量指标出现背离")
         if volatility_score == -2:
             warnings.append("超买警告：价格接近布林带上轨，短期回调概率增加")
+        if bias_score <= -1:
+            warnings.append(f"乖离率偏高：BIAS(6)={latest.get('bias_6', 0):.2f}%，股价偏离均线较远，注意回调风险")
 
         return {
             "dimensions": {
-                "trend": {"name": "趋势维度", "check": "MA均线排列", "score": trend_score, "desc": trend_detail},
+                "trend": {"name": "趋势维度", "check": "MA均线", "score": trend_score, "desc": trend_detail},
                 "momentum": {"name": "动量维度", "check": "MACD+RSI", "score": momentum_score, "desc": momentum_detail},
-                "volatility": {"name": "波动维度", "check": "布林带位置", "score": volatility_score, "desc": volatility_detail},
+                "volatility": {"name": "波动维度", "check": "布林带", "score": volatility_score, "desc": volatility_detail},
                 "capital": {"name": "资金维度", "check": "OBV+VR", "score": capital_score, "desc": capital_detail},
-                "structure": {"name": "结构维度", "check": "DMI+位置", "score": structure_score, "desc": structure_detail}
+                "structure": {"name": "结构维度", "check": "DMI+位置", "score": structure_score, "desc": structure_detail},
+                "bias": {"name": "乖离率维度", "check": "BIAS", "score": bias_score, "desc": bias_detail},
             },
             "total_score": total_score,
             "rating": rating,
@@ -320,6 +324,37 @@ class ScoringSystem:
             else:
                 return 1, f"震荡市偏低位（ADX:{adx:.1f}, 位置:{position:.0f}%）"
 
+    def _score_bias(self, latest: pd.Series) -> Tuple[int, str]:
+        """
+        乖离率维度：基于BIAS指标评分
+        BIAS反映股价与均线的偏离程度
+        过度负乖离（超跌）+2，适度负乖离 +1，正常范围 0，过度正乖离（超涨）-2
+        """
+        bias_6 = latest.get('bias_6', np.nan)
+        bias_12 = latest.get('bias_12', np.nan)
+        bias_24 = latest.get('bias_24', np.nan)
+
+        if pd.isna(bias_6):
+            return 0, "乖离率数据不足"
+
+        # BIAS(6) 评分标准（6日乖离率最敏感）
+        # <-5%: 严重超跌，强烈看多信号
+        # -5% ~ -3%: 轻度超跌，偏多信号
+        # -3% ~ +3%: 正常范围，中性
+        # +3% ~ +5%: 轻度超涨，偏空信号
+        # >+5%: 严重超涨，强烈看空信号
+
+        if bias_6 <= -5.0:
+            return 2, f"严重负乖离，超跌反弹概率高（BIAS6:{bias_6:.2f}%, BIAS12:{bias_12:.2f}%, BIAS24:{bias_24:.2f}%）"
+        elif bias_6 <= -3.0:
+            return 1, f"负乖离，股价低于均线（BIAS6:{bias_6:.2f}%, BIAS12:{bias_12:.2f}%）"
+        elif bias_6 >= 5.0:
+            return -2, f"严重正乖离，超买回调风险高（BIAS6:{bias_6:.2f}%, BIAS12:{bias_12:.2f}%, BIAS24:{bias_24:.2f}%）"
+        elif bias_6 >= 3.0:
+            return -1, f"正乖离，股价高于均线（BIAS6:{bias_6:.2f}%, BIAS12:{bias_12:.2f}%）"
+        else:
+            return 0, f"乖离率正常，股价贴近均线（BIAS6:{bias_6:.2f}%, BIAS12:{bias_12:.2f}%）"
+
     def _get_rating_and_action(self, total_score: float, capital_score: int) -> Tuple[str, str, str]:
         """
         根据总分和操作阈值确定评级和建议
@@ -330,13 +365,14 @@ class ScoringSystem:
         # 检查是否有严重背离
         has_divergence = capital_score <= -3
 
-        if total_score > 3:
+        # 调整阈值以适应6个维度（满分12分）
+        if total_score > 4:  # 原来是3，现在调整为4（约33%）
             if has_divergence:
                 return "谨慎偏多", "有买入信号但存在背离，建议小仓位试探", "中高风险"
             return "强烈看多", "多维度共振，可考虑加仓", "中低风险"
         elif total_score > 0:
             return "偏多观望", "偏正面但信号不强，持仓观望", "低风险"
-        elif total_score >= -3:
+        elif total_score >= -4:  # 原来是-3，现在调整为-4
             if has_divergence:
                 return "偏空观望", "存在背离信号，建议减仓或停止开新仓", "中风险"
             return "中性观望", "信号混合，暂无明确方向，观望为主", "低风险"

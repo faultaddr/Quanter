@@ -80,6 +80,91 @@ class MetaDB:
         """
         )
 
+        # Table for scan records (扫描记录)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scan_records (
+                id TEXT PRIMARY KEY,
+                scan_date TEXT NOT NULL,
+                market TEXT NOT NULL,
+                days_analyzed INTEGER,
+                total_stocks INTEGER,
+                bias_filter_min REAL,
+                bias_filter_max REAL,
+                created_at TEXT
+            )
+        """
+        )
+
+        # Table for scan stock results (扫描个股结果)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scan_stock_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                name TEXT,
+                close_price REAL,
+                daily_return REAL,
+                total_score INTEGER,
+                rating TEXT,
+                action TEXT,
+                risk_level TEXT,
+                bias_6 REAL,
+                bias_12 REAL,
+                bias_24 REAL,
+                trend_score INTEGER,
+                momentum_score INTEGER,
+                volatility_score INTEGER,
+                capital_score INTEGER,
+                structure_score INTEGER,
+                rank INTEGER,
+                created_at TEXT,
+                FOREIGN KEY (scan_id) REFERENCES scan_records(id)
+            )
+        """
+        )
+
+        # Table for tracking stock performance after scan (回测跟踪)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scan_performance_tracking (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                scan_date TEXT NOT NULL,
+                scan_price REAL,
+                day_1_return REAL,
+                day_3_return REAL,
+                day_5_return REAL,
+                day_10_return REAL,
+                day_20_return REAL,
+                day_60_return REAL,
+                max_return_20d REAL,
+                max_drawdown_20d REAL,
+                updated_at TEXT,
+                FOREIGN KEY (scan_id) REFERENCES scan_records(id)
+            )
+        """
+        )
+
+        # Create indexes for better query performance
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scan_results_scan_id ON scan_stock_results(scan_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scan_results_symbol ON scan_stock_results(symbol)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scan_tracking_scan_id ON scan_performance_tracking(scan_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scan_tracking_symbol ON scan_performance_tracking(symbol)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scan_records_date ON scan_records(scan_date)"
+        )
+
         conn.commit()
         conn.close()
 
@@ -468,3 +553,373 @@ class MetaDB:
             )
 
         return symbols
+
+    # ==================== Scan Records Methods ====================
+
+    def save_scan_record(self, scan_data: Dict[str, Any]) -> str:
+        """
+        Save a scan record to the database.
+
+        Args:
+            scan_data: Dictionary containing scan information
+                - id: scan ID (optional, will be generated if not provided)
+                - scan_date: date of the scan
+                - market: market scanned (e.g., 'csi300')
+                - days_analyzed: number of days analyzed
+                - total_stocks: total number of stocks scanned
+                - bias_filter_min: minimum BIAS filter value
+                - bias_filter_max: maximum BIAS filter value
+                - results: list of stock results
+
+        Returns:
+            scan_id: The ID of the saved scan record
+        """
+        import uuid
+
+        scan_id = scan_data.get("id", str(uuid.uuid4()))
+        scan_date = scan_data.get("scan_date", datetime.now().isoformat())
+        created_at = datetime.now().isoformat()
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Save scan record
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO scan_records
+            (id, scan_date, market, days_analyzed, total_stocks, bias_filter_min, bias_filter_max, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                scan_id,
+                scan_date,
+                scan_data.get("market", ""),
+                scan_data.get("days_analyzed", 0),
+                scan_data.get("total_stocks", 0),
+                scan_data.get("bias_filter_min"),
+                scan_data.get("bias_filter_max"),
+                created_at,
+            ),
+        )
+
+        # Save individual stock results
+        results = scan_data.get("results", [])
+        for rank, result in enumerate(results, 1):
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO scan_stock_results
+                (scan_id, symbol, name, close_price, daily_return, total_score, rating, action, risk_level,
+                 bias_6, bias_12, bias_24, trend_score, momentum_score, volatility_score, capital_score, structure_score, rank, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    scan_id,
+                    result.get("symbol", ""),
+                    result.get("name", ""),
+                    result.get("close", 0),
+                    result.get("daily_return", 0),
+                    result.get("total_score", 0),
+                    result.get("rating", ""),
+                    result.get("action", ""),
+                    result.get("risk_level", ""),
+                    result.get("bias_6"),
+                    result.get("bias_12"),
+                    result.get("bias_24"),
+                    result.get("trend_score", 0),
+                    result.get("momentum_score", 0),
+                    result.get("volatility_score", 0),
+                    result.get("capital_score", 0),
+                    result.get("structure_score", 0),
+                    rank,
+                    created_at,
+                ),
+            )
+
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Saved scan record: {scan_id} with {len(results)} stocks")
+        return scan_id
+
+    def get_scan_record(self, scan_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a scan record by ID.
+
+        Args:
+            scan_id: ID of the scan record
+
+        Returns:
+            Dictionary containing scan record information or None if not found
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Get scan record
+        cursor.execute(
+            """
+            SELECT id, scan_date, market, days_analyzed, total_stocks, bias_filter_min, bias_filter_max, created_at
+            FROM scan_records WHERE id = ?
+        """,
+            (scan_id,),
+        )
+
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return None
+
+        scan_record = {
+            "id": row[0],
+            "scan_date": row[1],
+            "market": row[2],
+            "days_analyzed": row[3],
+            "total_stocks": row[4],
+            "bias_filter_min": row[5],
+            "bias_filter_max": row[6],
+            "created_at": row[7],
+        }
+
+        # Get stock results
+        cursor.execute(
+            """
+            SELECT symbol, name, close_price, daily_return, total_score, rating, action, risk_level,
+                   bias_6, bias_12, bias_24, trend_score, momentum_score, volatility_score, capital_score, structure_score, rank
+            FROM scan_stock_results
+            WHERE scan_id = ?
+            ORDER BY rank
+        """,
+            (scan_id,),
+        )
+
+        results = []
+        for row in cursor.fetchall():
+            results.append(
+                {
+                    "symbol": row[0],
+                    "name": row[1],
+                    "close": row[2],
+                    "daily_return": row[3],
+                    "total_score": row[4],
+                    "rating": row[5],
+                    "action": row[6],
+                    "risk_level": row[7],
+                    "bias_6": row[8],
+                    "bias_12": row[9],
+                    "bias_24": row[10],
+                    "trend_score": row[11],
+                    "momentum_score": row[12],
+                    "volatility_score": row[13],
+                    "capital_score": row[14],
+                    "structure_score": row[15],
+                    "rank": row[16],
+                }
+            )
+
+        scan_record["results"] = results
+        conn.close()
+
+        return scan_record
+
+    def get_scan_history(
+        self,
+        market: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve scan history with optional filters.
+
+        Args:
+            market: Market to filter by
+            start_date: Start date (ISO format)
+            end_date: End date (ISO format)
+            limit: Maximum number of records to return
+
+        Returns:
+            List of scan record dictionaries
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        query = "SELECT id, scan_date, market, days_analyzed, total_stocks, bias_filter_min, bias_filter_max, created_at FROM scan_records WHERE 1=1"
+        params = []
+
+        if market:
+            query += " AND market = ?"
+            params.append(market)
+
+        if start_date:
+            query += " AND scan_date >= ?"
+            params.append(start_date)
+
+        if end_date:
+            query += " AND scan_date <= ?"
+            params.append(end_date)
+
+        query += " ORDER BY scan_date DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+
+        scans = []
+        for row in rows:
+            scans.append(
+                {
+                    "id": row[0],
+                    "scan_date": row[1],
+                    "market": row[2],
+                    "days_analyzed": row[3],
+                    "total_stocks": row[4],
+                    "bias_filter_min": row[5],
+                    "bias_filter_max": row[6],
+                    "created_at": row[7],
+                }
+            )
+
+        return scans
+
+    def get_scan_performance_summary(self, scan_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get performance summary for a scan.
+
+        Args:
+            scan_id: ID of the scan record
+
+        Returns:
+            Dictionary with performance statistics or None
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT AVG(day_1_return), AVG(day_3_return), AVG(day_5_return),
+                   AVG(day_10_return), AVG(day_20_return), AVG(day_60_return)
+            FROM scan_performance_tracking
+            WHERE scan_id = ?
+        """,
+            (scan_id,),
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row and row[0] is not None:
+            return {
+                "avg_day_1_return": row[0],
+                "avg_day_3_return": row[1],
+                "avg_day_5_return": row[2],
+                "avg_day_10_return": row[3],
+                "avg_day_20_return": row[4],
+                "avg_day_60_return": row[5],
+            }
+
+        return None
+
+    def update_scan_performance(self, tracking_data: Dict[str, Any]):
+        """
+        Update performance tracking for a scanned stock.
+
+        Args:
+            tracking_data: Dictionary containing performance data
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        updated_at = datetime.now().isoformat()
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO scan_performance_tracking
+            (scan_id, symbol, scan_date, scan_price, day_1_return, day_3_return, day_5_return,
+             day_10_return, day_20_return, day_60_return, max_return_20d, max_drawdown_20d, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                tracking_data.get("scan_id"),
+                tracking_data.get("symbol"),
+                tracking_data.get("scan_date"),
+                tracking_data.get("scan_price"),
+                tracking_data.get("day_1_return"),
+                tracking_data.get("day_3_return"),
+                tracking_data.get("day_5_return"),
+                tracking_data.get("day_10_return"),
+                tracking_data.get("day_20_return"),
+                tracking_data.get("day_60_return"),
+                tracking_data.get("max_return_20d"),
+                tracking_data.get("max_drawdown_20d"),
+                updated_at,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Updated performance tracking for {tracking_data.get('symbol')} in scan {tracking_data.get('scan_id')}")
+
+    def compare_scans(self, scan_id_1: str, scan_id_2: str) -> Dict[str, Any]:
+        """
+        Compare two scans and return common stocks and differences.
+
+        Args:
+            scan_id_1: First scan ID
+            scan_id_2: Second scan ID
+
+        Returns:
+            Dictionary with comparison results
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Get stocks from first scan
+        cursor.execute(
+            "SELECT symbol, total_score, rank FROM scan_stock_results WHERE scan_id = ? ORDER BY rank",
+            (scan_id_1,),
+        )
+        stocks_1 = {row[0]: {"score": row[1], "rank": row[2]} for row in cursor.fetchall()}
+
+        # Get stocks from second scan
+        cursor.execute(
+            "SELECT symbol, total_score, rank FROM scan_stock_results WHERE scan_id = ? ORDER BY rank",
+            (scan_id_2,),
+        )
+        stocks_2 = {row[0]: {"score": row[1], "rank": row[2]} for row in cursor.fetchall()}
+
+        conn.close()
+
+        # Find common stocks
+        common_symbols = set(stocks_1.keys()) & set(stocks_2.keys())
+        only_in_1 = set(stocks_1.keys()) - set(stocks_2.keys())
+        only_in_2 = set(stocks_2.keys()) - set(stocks_1.keys())
+
+        # Analyze common stocks
+        common_stocks = []
+        for symbol in common_symbols:
+            common_stocks.append(
+                {
+                    "symbol": symbol,
+                    "scan_1_rank": stocks_1[symbol]["rank"],
+                    "scan_2_rank": stocks_2[symbol]["rank"],
+                    "scan_1_score": stocks_1[symbol]["score"],
+                    "scan_2_score": stocks_2[symbol]["score"],
+                    "score_change": stocks_2[symbol]["score"] - stocks_1[symbol]["score"],
+                    "rank_change": stocks_1[symbol]["rank"] - stocks_2[symbol]["rank"],
+                }
+            )
+
+        # Sort by rank improvement
+        common_stocks.sort(key=lambda x: x["rank_change"], reverse=True)
+
+        return {
+            "scan_id_1": scan_id_1,
+            "scan_id_2": scan_id_2,
+            "common_stocks": common_stocks,
+            "common_count": len(common_symbols),
+            "only_in_scan_1": list(only_in_1),
+            "only_in_scan_2": list(only_in_2),
+            "only_in_scan_1_count": len(only_in_1),
+            "only_in_scan_2_count": len(only_in_2),
+        }
