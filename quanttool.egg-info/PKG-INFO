@@ -1,10 +1,21 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: quanttool
 Version: 0.1.0
 Summary: A comprehensive quantitative trading platform for A-share stocks
 Author: QuantTool Team
 Requires-Python: >=3.8
 Description-Content-Type: text/markdown
+Requires-Dist: pandas>=1.3.0
+Requires-Dist: numpy>=1.21.0
+Requires-Dist: pydantic>=1.8.0
+Requires-Dist: pyyaml>=5.4.0
+Requires-Dist: typer>=0.4.0
+Requires-Dist: pytz>=2021.1
+Requires-Dist: scikit-learn>=1.0.0
+Requires-Dist: tushare>=1.2.0
+Requires-Dist: pyarrow>=6.0.0
+Requires-Dist: requests>=2.25.0
+Requires-Dist: fastapi>=0.68.0
 Provides-Extra: dev
 Requires-Dist: pytest>=6.0; extra == "dev"
 Requires-Dist: pytest-cov; extra == "dev"
@@ -30,60 +41,476 @@ Requires-Dist: polars>=0.13.0; extra == "data"
 
 # QuantTool - A Comprehensive Quantitative Trading Platform for A-Share Stocks
 
-QuantTool is a flexible, extensible platform for quantitative analysis, backtesting, and signal generation specifically designed for the Chinese A-share market. It supports 10-minute bar analysis with strict time alignment to A-share trading hours.
+QuantTool is a flexible, extensible platform for quantitative analysis, backtesting, and signal generation specifically designed for the Chinese A-share market. It supports multiple timeframes with strict time alignment to A-share trading hours.
 
 ## Features
 
 - **Modular Architecture**: Plugin-based system for data providers, strategies, factors, and models
 - **A-Share Focused**: Optimized for Chinese stock market characteristics
-- **Time Alignment**: Strict 10-minute bar alignment to A-share trading hours (09:30-11:30, 13:00-15:00)
+- **Multiple Timeframes**: Support for 1m, 5m, 10m, 1d bars with proper trading hours alignment
 - **Next-Bar Close Execution**: Accurate simulation of trading delays
-- **Multiple Interfaces**: CLI, Web API, and React-based UI
+- **Multiple Interfaces**: CLI, Web API, and programmatic Python API
 - **Comprehensive Analysis**: Backtesting, factor mining, prediction, and portfolio analysis
+- **Machine Learning**: Built-in support for Random Forest, XGBoost, and LSTM models
+- **Real-time Signals**: Live signal monitoring with WebSocket support
 
 ## Installation
 
+### From Source
+
 ```bash
+git clone https://github.com/yourusername/quanttool.git
+cd quanttool
 pip install -e .
+```
+
+### Development Installation
+
+```bash
+pip install -e ".[dev]"
 ```
 
 ## Quick Start
 
-### CLI Commands
+### 1. Configuration
 
-Pull data from TuShare:
+Before using QuantTool, configure your data provider credentials:
+
+#### TuShare Configuration
+
+Set environment variable:
 ```bash
-quant data pull --provider tushare --start-date 2023-01-01 --end-date 2023-12-31
+export TUSHARE_TOKEN="your_tushare_token"
 ```
 
-Run a backtest:
-```bash
-quant backtest run --strategy ma_cross --symbols 000001.SZ --timeframe 10m --start 2023-01-01 --end 2023-06-01
+Or create a `.env` file in the project root:
+```
+TUSHARE_TOKEN=your_tushare_token
 ```
 
-Start the web interface:
+#### AShare Configuration (Optional, for real-time data)
+
 ```bash
+export ASHARE_ENDPOINT="your_ashare_endpoint"
+export ASHARE_API_KEY="your_ashare_api_key"
+```
+
+### 2. CLI Usage
+
+QuantTool provides a comprehensive command-line interface for all operations.
+
+#### List Available Plugins
+
+```bash
+quant plugins
+```
+
+Output example:
+```
+Available Data Providers:
+  - tushare
+  - ashare
+  - csv_mock
+
+Available Strategies:
+  - ma_cross
+  - breakout
+
+Available Factors:
+  - momentum
+  - returns_momentum
+  - price_volume_trend
+  - volatility
+  - atr
+  - rsi
+```
+
+#### Data Commands
+
+**Pull historical data:**
+```bash
+# Pull daily data from TuShare
+quant data pull --provider tushare \
+  --symbol 000001.SZ \
+  --symbol 000002.SZ \
+  --start 2023-01-01 \
+  --end 2023-12-31 \
+  --timeframe 1d \
+  --output ./data
+
+# Pull 10-minute data
+quant data pull --provider tushare \
+  --symbol 000001.SZ \
+  --start 2023-01-01 \
+  --end 2023-06-01 \
+  --timeframe 10m
+```
+
+**Search for symbols:**
+```bash
+# Search by name (Chinese or English)
+quant data search --provider tushare "平安银行"
+quant data search --provider tushare "pingan"
+
+# Output example:
+# Found 2 symbols:
+#   000001.SZ: 平安银行
+#   600000.SH: 浦发银行
+```
+
+#### Backtest Commands
+
+**Run a backtest with MA Cross strategy:**
+```bash
+quant backtest run \
+  --strategy ma_cross \
+  --symbol 000001.SZ \
+  --symbol 000002.SZ \
+  --start 2023-01-01 \
+  --end 2023-06-01 \
+  --timeframe 10m \
+  --cash 100000 \
+  --commission 0.0003 \
+  --provider tushare
+```
+
+**Output example:**
+```
+Backtest completed!
+Strategy: ma_cross
+Symbols: ['000001.SZ', '000002.SZ']
+Period: 2023-01-01 00:00:00 to 2023-06-01 00:00:00
+Timeframe: 10m
+Initial Capital: $100,000.00
+Final Capital: $108,500.00
+Total Return: 8.50%
+Annual Return: 17.34%
+Win Rate: 55.20%
+Total Trades: 48
+Winning Trades: 27
+Losing Trades: 21
+```
+
+#### Analysis Commands
+
+**Analyze a single stock:**
+```bash
+# Basic analysis
+quant analyze 000001.SZ
+
+# Analysis with specific period
+quant analyze 000001.SZ --days 180
+
+# Save report to file
+quant analyze 000001.SZ --days 360 --output analysis_report.txt
+```
+
+**Output example:**
+```
+Analyzing stock: 000001.SZ
+Analysis period: 360 days
+--------------------------------------------------
+Starting analysis for 000001.SZ...
+Fetching data for 000001.SZ from 2022-06-01 to 2023-06-01...
+Retrieved 240 records
+Calculating technical indicators...
+Technical indicators calculated successfully.
+Running trading strategies...
+Trading strategies completed.
+============================================================
+STOCK ANALYSIS REPORT FOR 000001.SZ
+============================================================
+Report Date: 2023-06-01 10:30:00
+Analysis Period: 2022-06-01 to 2023-06-01
+Number of Trading Days: 240
+
+CURRENT MARKET DATA:
+------------------------------
+Current Price: 12.50
+Today's Change: 1.20%
+Volume: 1,234,567
+High: 12.60 | Low: 12.40
+Open: 12.45
+
+TECHNICAL INDICATORS:
+------------------------------
+RSI(24): 58.34
+MACD: 0.25
+KDJ_K: 65.20 | KDJ_D: 60.15 | KDJ_J: 75.30
+MA20: 12.30 | MA50: 12.10 | MA200: 11.80
+...
+```
+
+**Market scan:**
+```bash
+# Scan all markets
+quant analyze scan --market all --days 360 --top 10
+
+# Scan specific market
+quant analyze scan --market sh --days 180 --top 20
+```
+
+### 3. Web API Usage
+
+QuantTool provides a RESTful Web API built with FastAPI.
+
+#### Start the Web Server
+
+```bash
+# Using uvicorn directly
+uvicorn quanttool.web.app:app --host 0.0.0.0 --port 8000 --reload
+
+# Or using quant CLI
 quant web start
 ```
 
-### Configuration
+The API documentation will be available at:
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
 
-Configuration is managed through `config/default.yaml` and can be overridden via environment variables.
+#### API Endpoints
+
+**List Available Resources:**
+
+```bash
+# List data providers
+curl http://localhost:8000/api/data/providers
+# Response: ["tushare", "ashare", "csv_mock"]
+
+# List strategies
+curl http://localhost:8000/api/strategies
+# Response: ["ma_cross", "breakout"]
+
+# List factors
+curl http://localhost:8000/api/factors
+# Response: ["momentum", "returns_momentum", "price_volume_trend", ...]
+
+# List experiments
+curl http://localhost:8000/api/experiments
+# Response: [{"id": "...", "type": "backtest", "status": "completed", ...}]
+```
+
+**Run Backtest:**
+
+```bash
+curl -X POST http://localhost:8000/api/backtest/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "strategy_name": "ma_cross",
+    "symbols": ["000001.SZ"],
+    "start_date": "2023-01-01",
+    "end_date": "2023-06-01",
+    "timeframe": "10m",
+    "initial_cash": 100000,
+    "commission_rate": 0.0003,
+    "data_provider": "tushare",
+    "strategy_params": {
+      "short_window": 5,
+      "long_window": 10
+    }
+  }'
+```
+
+Response:
+```json
+{
+  "run_id": "uuid-string",
+  "result": {
+    "start_date": "2023-01-01T00:00:00",
+    "end_date": "2023-06-01T00:00:00",
+    "initial_capital": 100000.0,
+    "final_capital": 108500.0,
+    "total_return": 0.085,
+    "annual_return": 0.1734,
+    "total_trades": 48,
+    "win_rate": 0.552
+  }
+}
+```
+
+**Get Backtest Result:**
+
+```bash
+curl http://localhost:8000/api/backtest/runs/{run_id}
+```
+
+**Mine Factors:**
+
+```bash
+curl -X POST http://localhost:8000/api/factors/mine \
+  -H "Content-Type: application/json" \
+  -d '{
+    "factor_name": "momentum",
+    "symbols": ["000001.SZ", "000002.SZ"],
+    "start_date": "2023-01-01",
+    "end_date": "2023-06-01",
+    "data_provider": "tushare",
+    "factor_params": {
+      "period": 10
+    }
+  }'
+```
+
+Response:
+```json
+{
+  "run_id": "uuid-string",
+  "results": {
+    "000001.SZ": {
+      "factor_name": "momentum",
+      "ic": 0.125,
+      "rank_ic": 0.134,
+      "win_rate": 0.58,
+      "avg_return": 0.002,
+      "volatility": 0.015,
+      "sharpe_ratio": 1.2
+    },
+    "000002.SZ": {
+      ...
+    }
+  }
+}
+```
 
 ## Architecture
 
 The platform follows a layered architecture:
 
-- **Interface**: CLI, Web API, and Web UI
-- **Application**: Service orchestrators for different use cases
-- **Domain**: Abstract interfaces and business logic
-- **Infrastructure**: Concrete implementations for data, storage, etc.
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Interface Layer                         │
+│  ┌────────────┐  ┌────────────┐  ┌────────────────────┐    │
+│  │    CLI     │  │  Web API   │  │   Python API       │    │
+│  └────────────┘  └────────────┘  └────────────────────┘    │
+├─────────────────────────────────────────────────────────────┤
+│                   Application Layer                         │
+│  ┌────────────┐  ┌────────────┐  ┌────────────────────┐    │
+│  │ Backtest   │  │  Factor    │  │  Signal Service    │    │
+│  │  Service   │  │  Service   │  │                    │    │
+│  └────────────┘  └────────────┘  └────────────────────┘    │
+│  ┌────────────┐  ┌────────────┐  ┌────────────────────┐    │
+│  │  Data      │  │ Prediction │  │  ML Models         │    │
+│  │  Service   │  │  Service   │  │  (RF/XGB/LSTM)     │    │
+│  └────────────┘  └────────────┘  └────────────────────┘    │
+├─────────────────────────────────────────────────────────────┤
+│                     Domain Layer                            │
+│  Interfaces: IDataProvider, IStrategy, IFactor, IModel,    │
+│              IStore, INotifier                              │
+│  Models: Bar, Trade, Order, Position, Portfolio, Signal    │
+├─────────────────────────────────────────────────────────────┤
+│                  Infrastructure Layer                       │
+│  Data Providers: TuShare, AShare, CSV Mock                 │
+│  Storage: Parquet Store, SQLite MetaDB                     │
+│  Reports: Text, HTML, PDF Generators                       │
+└─────────────────────────────────────────────────────────────┘
+```
 
-## Supported Data Providers
+## Data Providers
 
-- TuShare: Historical daily and minute data
-- AShare: Real-time data feed (for live signals)
-- CSV Mock: For testing and development
+### TuShare
+- **Type**: Historical data
+- **Coverage**: All A-share stocks, daily and minute data
+- **Configuration**: `TUSHARE_TOKEN` environment variable
+- **Best for**: Backtesting, historical analysis
+
+### AShare
+- **Type**: Real-time data
+- **Coverage**: Real-time quotes and bars
+- **Configuration**: `ASHARE_ENDPOINT`, `ASHARE_API_KEY`
+- **Best for**: Live signals, real-time monitoring
+
+### CSV Mock
+- **Type**: Mock data for testing
+- **Coverage**: Sample stocks with generated data
+- **Configuration**: Data directory path
+- **Best for**: Development, testing, CI/CD
+
+## Built-in Strategies
+
+### MA Cross (Moving Average Crossover)
+```python
+strategy_params = {
+    "short_window": 5,   # Short-term MA period
+    "long_window": 10    # Long-term MA period
+}
+```
+- **Logic**: Buy when short MA crosses above long MA, sell when opposite
+- **Best for**: Trend following
+
+### Breakout
+```python
+strategy_params = {
+    "lookback_period": 20,      # Lookback for high/low
+    "entry_threshold": 0.02     # Entry threshold (2%)
+}
+```
+- **Logic**: Buy on breakout above recent high, sell on breakdown below recent low
+- **Best for**: Momentum trading
+
+## Built-in Factors
+
+### Momentum Factors
+- **momentum**: Simple price momentum over N periods
+- **returns_momentum**: Average of returns over momentum period
+- **price_volume_trend**: Volume-weighted price trend
+
+### Volatility Factors
+- **volatility**: Standard deviation of returns
+- **atr**: Average True Range
+
+### Value Factors
+- **rsi**: Relative Strength Index
+
+## Machine Learning
+
+QuantTool supports several ML models for prediction:
+
+### Random Forest
+```python
+from quanttool.ml import RandomForestModel
+
+model = RandomForestModel({
+    'n_estimators': 100,
+    'max_depth': 10
+})
+```
+
+### XGBoost
+```python
+from quanttool.ml import XGBoostModel
+
+model = XGBoostModel({
+    'n_estimators': 100,
+    'learning_rate': 0.1
+})
+```
+
+### LSTM
+```python
+from quanttool.ml import LSTMModel
+
+model = LSTMModel({
+    'sequence_length': 20,
+    'units': [64, 32],
+    'epochs': 50
+})
+```
+
+## Report Generation
+
+Generate reports from backtest and analysis results:
+
+```python
+from quanttool.reports import BacktestReportGenerator, HTMLReportGenerator
+
+# Text report
+generator = BacktestReportGenerator(output_dir="./reports")
+report_path = generator.generate(result, strategy_name="ma_cross")
+
+# HTML report with charts
+generator = HTMLReportGenerator(output_dir="./reports")
+report_path = generator.generate_backtest_html(result, strategy_name="ma_cross")
+```
 
 ## Development
 
@@ -94,6 +521,50 @@ To contribute:
 3. Set up pre-commit hooks: `pre-commit install`
 4. Run tests: `pytest`
 
+### Running Tests
+
+```bash
+# Run all tests
+pytest tests/ -v
+
+# Run specific test file
+pytest tests/test_strategies.py -v
+
+# Run with coverage
+pytest --cov=quanttool tests/
+```
+
+## Configuration File
+
+Create `config/default.yaml` for advanced configuration:
+
+```yaml
+# Data providers
+data_providers:
+  tushare:
+    token: ${TUSHARE_TOKEN}
+  ashare:
+    endpoint: ${ASHARE_ENDPOINT}
+    api_key: ${ASHARE_API_KEY}
+
+# Default parameters
+defaults:
+  initial_cash: 100000
+  commission_rate: 0.0003
+  timeframe: "10m"
+
+# Storage
+storage:
+  data_dir: "./data"
+  report_dir: "./reports"
+  model_dir: "./models"
+
+# Logging
+logging:
+  level: INFO
+  file: "./logs/quanttool.log"
+```
+
 ## License
 
-MIT
+MIT License

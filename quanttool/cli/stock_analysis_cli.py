@@ -21,8 +21,9 @@ def main():
 
     args = parser.parse_args()
 
-    print(f"Analyzing stock: {args.symbol}")
-    print(f"Analysis period: {args.days} days")
+    print(f"正在分析股票：{args.symbol}")
+    print(f"分析周期：{args.days} 天")
+    print("-" * 50)
 
     # Create analyzer instance
     analyzer = StockAnalyzer()
@@ -37,7 +38,7 @@ def main():
     if args.output:
         with open(args.output, 'w', encoding='utf-8') as f:
             f.write(report)
-        print(f"\nAnalysis report saved to {args.output}")
+        print(f"\n分析报告已保存至：{args.output}")
 
 
 if __name__ == "__main__":

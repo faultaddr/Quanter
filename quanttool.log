@@ -96,3 +96,50 @@
 2026-02-24 17:23:13,595 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 000001.SZ from EastMoney
 2026-02-24 17:23:13,687 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to get latest bar for 000001.SZ from EastMoney
 2026-02-24 17:23:13,852 - quanttool.infrastructure.data_providers.data_fetcher - ERROR - Failed to search symbols: 抱歉，您每分钟最多访问该接口1次，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 01:54:38,431 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 01:54:38,619 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-25 01:54:38,619 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-25 01:54:38,627 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 000001.SZ from EastMoney
+2026-02-25 01:56:42,072 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 01:56:42,237 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-25 01:56:42,237 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-25 01:56:42,238 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 000001.SZ from EastMoney
+2026-02-25 01:58:55,813 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 01:58:55,964 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-25 01:58:55,964 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-25 01:58:55,966 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 000001.SZ from EastMoney
+2026-02-25 01:59:41,574 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 01:59:41,751 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-25 01:59:41,751 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-25 01:59:41,752 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 600023.SH from EastMoney
+2026-02-25 02:02:47,589 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 02:02:47,757 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-25 02:02:47,757 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-25 02:02:47,759 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 600023.SH from EastMoney
+2026-02-25 02:05:05,509 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 02:05:05,678 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-25 02:05:05,678 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-25 02:05:05,679 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 000876.SZ from EastMoney
+2026-02-25 02:05:45,112 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 02:05:45,301 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-25 02:05:45,301 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-25 02:05:45,304 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 600000.SH from EastMoney
+2026-02-25 02:48:48,965 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 02:48:49,160 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-25 02:48:49,160 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-25 02:49:15,084 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 02:49:15,251 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-25 02:49:15,251 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-25 02:49:15,252 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 600023.SH from EastMoney
+2026-02-25 02:54:28,868 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 02:54:29,072 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-25 02:54:29,073 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-25 02:54:29,074 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 000001.SZ from EastMoney
+2026-02-25 02:56:38,908 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 02:56:39,106 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-25 02:56:39,106 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-25 02:56:39,109 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 600000.SH from EastMoney
+2026-02-25 02:58:00,697 - quanttool.infrastructure.data_providers.data_fetcher - WARNING - Tushare connection test failed (may have limited permissions): 抱歉，您没有接口访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。
+2026-02-25 02:58:00,862 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EastMoney connection verified
+2026-02-25 02:58:00,862 - quanttool.infrastructure.data_providers.data_fetcher - INFO - EnhancedDataFetcher initialized successfully
+2026-02-25 02:58:00,864 - quanttool.infrastructure.data_providers.data_fetcher - INFO - Attempting to fetch 600000.SH from EastMoney

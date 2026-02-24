@@ -1,0 +1,360 @@
+"""
+股票多维度打分系统
+基于趋势、动量、波动、资金、结构五个维度进行综合评分
+"""
+import numpy as np
+import pandas as pd
+from typing import Dict, Tuple, List
+
+
+class ScoringSystem:
+    """
+    股票多维度打分系统
+    满分10分，根据五个维度（趋势、动量、波动、资金、结构）进行综合评估
+    """
+
+    def __init__(self):
+        self.score_breakdown = {}
+
+    def calculate_all_scores(self, df: pd.DataFrame) -> Dict:
+        """
+        计算所有维度的得分
+
+        Returns:
+            Dict: 包含各维度得分、总分、评级和操作推荐的字典
+        """
+        if df.empty or len(df) < 20:
+            return {"error": "数据不足，无法打分"}
+
+        latest = df.iloc[-1]
+        prev = df.iloc[-5] if len(df) >= 5 else df.iloc[-1]  # 5周期前数据
+
+        # 各维度打分
+        trend_score, trend_detail = self._score_trend(df, latest)
+        momentum_score, momentum_detail = self._score_momentum(df, latest)
+        volatility_score, volatility_detail = self._score_volatility(df, latest)
+        capital_score, capital_detail = self._score_capital(df, latest, prev)
+        structure_score, structure_detail = self._score_structure(df, latest)
+
+        # 计算总分
+        total_score = trend_score + momentum_score + volatility_score + capital_score + structure_score
+
+        # 评级和操作推荐
+        rating, action, risk_level = self._get_rating_and_action(total_score, capital_score)
+
+        # 收集警告
+        warnings = []
+        if capital_score <= -3:
+            warnings.append("量价背离：价格上涨但量能不足或OBV下降，存在回调风险")
+        if momentum_score == -1 and "背离" in momentum_detail:
+            warnings.append("MACD背离：价格与动量指标出现背离")
+        if volatility_score == -2:
+            warnings.append("超买警告：价格接近布林带上轨，短期回调概率增加")
+
+        return {
+            "dimensions": {
+                "trend": {"name": "趋势维度", "check": "MA均线排列", "score": trend_score, "desc": trend_detail},
+                "momentum": {"name": "动量维度", "check": "MACD+RSI", "score": momentum_score, "desc": momentum_detail},
+                "volatility": {"name": "波动维度", "check": "布林带位置", "score": volatility_score, "desc": volatility_detail},
+                "capital": {"name": "资金维度", "check": "OBV+VR", "score": capital_score, "desc": capital_detail},
+                "structure": {"name": "结构维度", "check": "DMI+位置", "score": structure_score, "desc": structure_detail}
+            },
+            "total_score": total_score,
+            "rating": rating,
+            "action": action,
+            "risk_level": risk_level,
+            "warnings": warnings
+        }
+
+    def _score_trend(self, df: pd.DataFrame, latest: pd.Series) -> Tuple[int, str]:
+        """
+        趋势维度：基于MA均线系统评分
+        多头排列 +2，空头排列 -2，纠缠 0
+        """
+        ma20 = latest.get('ma_20', np.nan)
+        ma50 = latest.get('ma_50', np.nan)
+        ma200 = latest.get('ma_200', np.nan)
+        close = latest.get('close', np.nan)
+
+        # 检查数据有效性
+        if pd.isna(ma20) or pd.isna(ma50):
+            return 0, "均线数据不足"
+
+        # 判断多头排列：短期 > 中期 > 长期（如果有长期数据）
+        if not pd.isna(ma200):
+            if close > ma20 > ma50 > ma200:
+                return 2, f"多头排列（收盘价¥{close:.2f} > MA20¥{ma20:.2f} > MA50¥{ma50:.2f} > MA200¥{ma200:.2f}）"
+            elif close < ma20 < ma50 < ma200:
+                return -2, f"空头排列（收盘价¥{close:.2f} < MA20¥{ma20:.2f} < MA50¥{ma50:.2f} < MA200¥{ma200:.2f}）"
+            else:
+                return 0, f"均线纠缠（MA20¥{ma20:.2f} / MA50¥{ma50:.2f} / MA200¥{ma200:.2f}）"
+        else:
+            # 只有MA20和MA50
+            if close > ma20 > ma50:
+                return 2, f"短期多头（收盘价¥{close:.2f} > MA20¥{ma20:.2f} > MA50¥{ma50:.2f}）"
+            elif close < ma20 < ma50:
+                return -2, f"短期空头（收盘价¥{close:.2f} < MA20¥{ma20:.2f} < MA50¥{ma50:.2f}）"
+            else:
+                return 0, f"趋势不明（MA20¥{ma20:.2f} vs MA50¥{ma50:.2f}）"
+
+    def _score_momentum(self, df: pd.DataFrame, latest: pd.Series) -> Tuple[int, str]:
+        """
+        动量维度：基于MACD和RSI评分
+        双多 +2，双空 -2，背离 -1，中性 0
+        """
+        macd = latest.get('macd', np.nan)
+        rsi = latest.get('rsi_24', np.nan)
+
+        if pd.isna(macd) or pd.isna(rsi):
+            return 0, "动量数据不足"
+
+        macd_bull = macd > 0
+        rsi_bull = 30 < rsi < 70  # RSI在合理区间视为中性偏多
+        rsi_overbought = rsi > 70
+        rsi_oversold = rsi < 30
+
+        # 检查MACD背离（简化版：比较价格和MACD趋势）
+        if len(df) >= 10:
+            price_trend = df['close'].iloc[-1] > df['close'].iloc[-10]
+            macd_trend = df['macd'].iloc[-1] > df['macd'].iloc[-10]
+            divergence = price_trend != macd_trend
+        else:
+            divergence = False
+
+        if macd_bull and not rsi_overbought and not rsi_oversold:
+            if divergence:
+                return -1, f"MACD偏多但出现背离（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
+            return 2, f"动量健康向上（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
+        elif not macd_bull and (rsi_overbought or rsi_oversold):
+            if rsi_overbought:
+                return -2, f"动量偏空，RSI超买回调（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
+            else:
+                return -2, f"动量偏空，RSI超卖（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
+        elif macd_bull and rsi_overbought:
+            return -1, f"MACD向上但RSI超买警告（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
+        elif divergence:
+            return -1, f"价格与MACD背离，注意风险（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
+        else:
+            return 0, f"动量中性（MACD:{macd:.2f}, RSI:{rsi:.2f}）"
+
+    def _score_volatility(self, df: pd.DataFrame, latest: pd.Series) -> Tuple[int, str]:
+        """
+        波动维度：基于布林带位置评分
+        下轨附近 +2，上轨附近 -2，中间区 ±1
+        """
+        close = latest.get('close', np.nan)
+        boll_upper = latest.get('boll_upper', np.nan)
+        boll_mid = latest.get('boll_mid', np.nan)
+        boll_lower = latest.get('boll_lower', np.nan)
+
+        if pd.isna(boll_upper) or pd.isna(boll_lower) or pd.isna(boll_mid):
+            return 0, "布林带数据不足"
+
+        # 计算在布林带中的位置（0-100%）
+        band_range = boll_upper - boll_lower
+        if band_range == 0:
+            return 0, "布林带宽度为0"
+
+        position_pct = (close - boll_lower) / band_range * 100
+
+        if position_pct <= 10:  # 下轨10%以内
+            return 2, f"接近下轨超卖区（位置:{position_pct:.1f}%, 下轨¥{boll_lower:.2f}）"
+        elif position_pct >= 90:  # 上轨10%以内
+            return -2, f"接近上轨超买区（位置:{position_pct:.1f}%, 上轨¥{boll_upper:.2f}）"
+        elif position_pct <= 30:  # 下轨附近
+            return 1, f"偏下轨偏多（位置:{position_pct:.1f}%）"
+        elif position_pct >= 70:  # 上轨附近
+            return -1, f"偏上轨偏空（位置:{position_pct:.1f}%）"
+        else:
+            return 0, f"布林带中轨附近（位置:{position_pct:.1f}%, 中轨¥{boll_mid:.2f}）"
+
+    def _score_capital(self, df: pd.DataFrame, latest: pd.Series, prev: pd.Series) -> int:
+        """
+        资金维度：基于OBV和VR评分
+        量价齐升 +2，量价背离 -3，缩量/中性 0
+        返回 Tuple[int, str]
+        """
+        close = latest.get('close', np.nan)
+        volume = latest.get('volume', np.nan)
+        vr = latest.get('vr', np.nan)
+
+        # 计算OBV（如果还没计算）
+        if 'obv' in df.columns:
+            obv_current = latest.get('obv', np.nan)
+            obv_prev = prev.get('obv', np.nan)
+        else:
+            # 手动计算简单OBV趋势
+            if len(df) >= 10:
+                recent_df = df.tail(10)
+                obv_trend = self._calculate_obv_trend(recent_df)
+                obv_current = obv_trend
+                obv_prev = 0
+            else:
+                obv_current = np.nan
+                obv_prev = np.nan
+
+        prev_close = prev.get('close', close)
+        price_change = (close - prev_close) / prev_close if prev_close != 0 else 0
+
+        # 判断量价关系
+        if pd.isna(vr):
+            return 0, "成交量数据不足"
+
+        # 量价齐升
+        if price_change > 0.02 and vr > 120:  # 涨2%以上且成交量活跃
+            if not pd.isna(obv_current) and not np.isnan(obv_prev) and obv_current > obv_prev:
+                return 2, f"量价齐升（涨{price_change*100:.1f}%, VR:{vr:.1f}, OBV上升）"
+            return 1, f"价格上涨量能配合（涨{price_change*100:.1f}%, VR:{vr:.1f}）"
+
+        # 量价背离（价格涨但量能不足，或OBV下降）
+        if price_change > 0.02:
+            if vr < 80:  # 价格上涨但成交量萎缩
+                return -3, f"⚠️ 量价背离预警（涨{price_change*100:.1f}%, 但VR:{vr:.1f}缩量）"
+            if not pd.isna(obv_current) and not np.isnan(obv_prev) and obv_current < obv_prev:
+                return -3, f"⚠️ OBV顶背离（价格涨{price_change*100:.1f}%, OBV却下降）"
+
+        # 价格下跌放量
+        if price_change < -0.02 and vr > 150:
+            return -2, f"放量下跌（跌{price_change*100:.1f}%, VR:{vr:.1f}）"
+
+        # 缩量调整
+        if vr < 80:
+            return 0, f"成交量萎缩（VR:{vr:.1f}）"
+
+        return 0, f"量能中性（VR:{vr:.1f}）"
+
+    def _calculate_obv_trend(self, df: pd.DataFrame) -> float:
+        """计算OBV趋势值（简化版）"""
+        obv = 0
+        for i in range(1, len(df)):
+            if df['close'].iloc[i] > df['close'].iloc[i-1]:
+                obv += df['volume'].iloc[i]
+            elif df['close'].iloc[i] < df['close'].iloc[i-1]:
+                obv -= df['volume'].iloc[i]
+        return obv
+
+    def _score_structure(self, df: pd.DataFrame, latest: pd.Series) -> Tuple[int, str]:
+        """
+        结构维度：基于DMI趋势强度和关键位置评分
+        趋势强且顺势 +2，趋势衰竭 -2，震荡 0
+        """
+        adx = latest.get('dmi_adx', np.nan)
+        pdi = latest.get('dmi_pdi', np.nan)
+        mdi = latest.get('dmi_mdi', np.nan)
+        close = latest.get('close', np.nan)
+
+        if pd.isna(adx) or pd.isna(pdi) or pd.isna(mdi):
+            return 0, "DMI数据不足"
+
+        # ADX > 25 表示趋势明显
+        strong_trend = adx > 25
+        bullish = pdi > mdi
+
+        # 计算价格位置（相对于20日高低点）
+        if len(df) >= 20:
+            high_20 = df['high'].tail(20).max()
+            low_20 = df['low'].tail(20).min()
+            if high_20 != low_20:
+                position = (close - low_20) / (high_20 - low_20) * 100
+            else:
+                position = 50
+        else:
+            position = 50
+
+        if strong_trend:
+            if bullish:
+                if position > 70:
+                    return 2, f"强趋势多头且接近新高（ADX:{adx:.1f}, PDI>{mdi:.1f}, 位置:{position:.0f}%）"
+                else:
+                    return 1, f"强趋势多头（ADX:{adx:.1f}, PDI>{mdi:.1f}）"
+            else:
+                if position < 30:
+                    return -2, f"强趋势空头且接近新低（ADX:{adx:.1f}, MDI>{pdi:.1f}, 位置:{position:.0f}%）"
+                else:
+                    return -1, f"强趋势空头（ADX:{adx:.1f}, MDI>{pdi:.1f}）"
+        else:
+            # ADX < 25 震荡市
+            if 40 < position < 60:
+                return 0, f"震荡市中间位置（ADX:{adx:.1f}, 位置:{position:.0f}%）"
+            elif position >= 60:
+                return -1, f"震荡市偏高位（ADX:{adx:.1f}, 位置:{position:.0f}%）"
+            else:
+                return 1, f"震荡市偏低位（ADX:{adx:.1f}, 位置:{position:.0f}%）"
+
+    def _get_rating_and_action(self, total_score: float, capital_score: int) -> Tuple[str, str, str]:
+        """
+        根据总分和操作阈值确定评级和建议
+
+        Returns:
+            (评级, 操作建议, 风险等级)
+        """
+        # 检查是否有严重背离
+        has_divergence = capital_score <= -3
+
+        if total_score > 3:
+            if has_divergence:
+                return "谨慎偏多", "有买入信号但存在背离，建议小仓位试探", "中高风险"
+            return "强烈看多", "多维度共振，可考虑加仓", "中低风险"
+        elif total_score > 0:
+            return "偏多观望", "偏正面但信号不强，持仓观望", "低风险"
+        elif total_score >= -3:
+            if has_divergence:
+                return "偏空观望", "存在背离信号，建议减仓或停止开新仓", "中风险"
+            return "中性观望", "信号混合，暂无明确方向，观望为主", "低风险"
+        else:
+            if has_divergence:
+                return "强烈看空", "多重负面信号叠加背离，建议减仓离场", "高风险"
+            return "看空", "负面信号占优，考虑减仓", "中高风险"
+
+    def format_score_report(self, score_result: Dict) -> str:
+        """
+        格式化打分报告为 Markdown 表格
+        """
+        if "error" in score_result:
+            return f"\n**打分失败：** {score_result['error']}\n"
+
+        lines = []
+        lines.append("\n### 多维度量化打分")
+        lines.append("")
+
+        # 总分和评级
+        total = score_result['总分']
+        rating = score_result['评级']
+        action = score_result['操作建议']
+        risk = score_result['风险等级']
+
+        lines.append(f"**总分：{total:+d} 分** | **评级：{rating}** | **风险：{risk}**")
+        lines.append("")
+
+        # 打分表
+        lines.append("| 维度 | 得分 | 分值范围 | 详细说明 |")
+        lines.append("|------|------|----------|----------|")
+
+        dimensions = score_result['各维度得分']
+        for dim_name, dim_data in dimensions.items():
+            score = dim_data['score']
+            max_score = dim_data.get('max', 2)
+            min_score = dim_data.get('min', -2)
+            detail = dim_data['detail']
+
+            # 得分颜色标记
+            if score > 0:
+                score_str = f"**+{score}**"
+            elif score < 0:
+                score_str = f"**{score}**"
+            else:
+                score_str = f"{score}"
+
+            lines.append(f"| {dim_name} | {score_str} | {min_score} ~ +{max_score} | {detail} |")
+
+        lines.append("")
+
+        # 操作建议
+        lines.append(f"#### 📊 操作建议：{action}")
+        lines.append("")
+
+        # 阈值说明
+        lines.append("> **打分阈值：** >+3分买入，<-3分卖出，-3~+3分观望")
+        lines.append("")
+
+        return "\n".join(lines)

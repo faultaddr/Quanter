@@ -13,15 +13,20 @@ from quanttool.factors.stock_analyzer import StockAnalyzer
 app = typer.Typer()
 
 
-@app.command()
-def analyze(
+@app.command(name="single")
+def analyze_single(
     symbol: str = typer.Argument(..., help="Stock symbol to analyze (e.g., 601777, 000001.SZ)"),
     days: int = typer.Option(360, "--days", "-d", help="Number of days to analyze (default: 360)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file to save the analysis report")
 ):
-    """Analyze a stock with technical indicators and trading strategies."""
-    typer.echo(f"Analyzing stock: {symbol}")
-    typer.echo(f"Analysis period: {days} days")
+    """Analyze a single stock with technical indicators and trading strategies."""
+    _run_analysis(symbol, days, output)
+
+
+def _run_analysis(symbol: str, days: int, output: Optional[str]):
+    """Internal function to run the analysis."""
+    typer.echo(f"正在分析股票：{symbol}")
+    typer.echo(f"分析周期：{days} 天")
     typer.echo("-" * 50)
 
     # Create analyzer instance
@@ -37,7 +42,7 @@ def analyze(
     if output:
         with open(output, 'w', encoding='utf-8') as f:
             f.write(report)
-        typer.echo(f"\nAnalysis report saved to {output}")
+        typer.echo(f"\n分析报告已保存至：{output}")
 
 
 @app.command()
@@ -47,14 +52,14 @@ def scan(
     top_n: int = typer.Option(10, "--top", "-n", help="Number of top stocks to return (default: 10)")
 ):
     """Scan the market for potential opportunities based on technical indicators."""
-    typer.echo(f"Scanning {market} market for top {top_n} opportunities")
-    typer.echo(f"Analysis period: {days} days")
-    typer.echo("Note: This is a simplified version. Full scanning would require access to a list of symbols.")
+    typer.echo(f"正在扫描 {market} 市场，筛选前 {top_n} 个机会")
+    typer.echo(f"分析周期：{days} 天")
+    typer.echo("注意：这是简化版本，完整扫描需要获取股票列表。")
 
     # This is a placeholder - in a real implementation, you'd get a list of all stocks
     # and run the analysis on each one, then rank them based on certain criteria
-    typer.echo("This functionality requires a complete list of stock symbols and extended processing time.")
-    typer.echo("For a single stock analysis, please use the 'analyze' command.")
+    typer.echo("此功能需要完整的股票代码列表和较长的处理时间。")
+    typer.echo("如需分析单个股票，请使用 'analyze' 命令。")
 
 
 if __name__ == "__main__":

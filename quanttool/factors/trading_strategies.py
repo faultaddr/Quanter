@@ -145,10 +145,10 @@ class TradingStrategies:
     @staticmethod
     def evaluate_current_signal(signals: pd.Series, strategy_name: str = "Combined Strategy") -> Dict:
         """
-        Evaluate the current signal based on the latest data
+        评估当前信号（中文版本）
         """
         if len(signals) == 0:
-            return {"error": "No signals available"}
+            return {"error": "无可用信号"}
 
         latest_signal = signals.iloc[-1]
         prev_signal = signals.iloc[-2] if len(signals) > 1 else None
@@ -167,25 +167,25 @@ class TradingStrategies:
         }
 
         if latest_signal == 'STRONG_BUY':
-            evaluation["action"] = "Strong Buy - Consider adding to position"
+            evaluation["action"] = "强烈买入 - 建议积极加仓"
             evaluation["confidence"] = "High"
         elif latest_signal == 'WEAK_BUY':
-            evaluation["action"] = "Weak Buy - Consider small position"
+            evaluation["action"] = "弱势买入 - 可小仓位试探"
             evaluation["confidence"] = "Medium"
         elif latest_signal == 'STRONG_SELL':
-            evaluation["action"] = "Strong Sell - Consider reducing position"
+            evaluation["action"] = "强烈卖出 - 建议减仓规避风险"
             evaluation["confidence"] = "High"
         elif latest_signal == 'WEAK_SELL':
-            evaluation["action"] = "Weak Sell - Consider small reduction"
+            evaluation["action"] = "弱势卖出 - 可考虑小幅减仓"
             evaluation["confidence"] = "Medium"
         elif latest_signal == 'BUY':
-            evaluation["action"] = "Buy signal detected"
+            evaluation["action"] = "买入信号"
             evaluation["confidence"] = "Medium"
         elif latest_signal == 'SELL':
-            evaluation["action"] = "Sell signal detected"
+            evaluation["action"] = "卖出信号"
             evaluation["confidence"] = "Medium"
         else:
-            evaluation["action"] = "Hold position"
+            evaluation["action"] = "维持现状"
             evaluation["confidence"] = "Low"
 
         return evaluation
