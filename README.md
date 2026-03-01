@@ -22,21 +22,6 @@ QuantTool 是一个专为A股市场设计的量化分析平台，提供技术分
 | 成交量 | 10% | 量价配合度 |
 | K线形态 | 10% | 位置敏感评分 |
 
-#### 动能因子（权重35%）
-| 因子 | 权重 | 说明 |
-|------|------|------|
-| KDJ位置 | 30% | KDJ超买超卖判断 |
-| RSI强度 | 35% | RSI相对强弱 |
-| MTM动量 | 20% | 动量指标 |
-| ROC变动率 | 15% | 价格变动速率 |
-
-#### 资金因子（权重25%）
-| 因子 | 权重 | 说明 |
-|------|------|------|
-| OBV流向 | 40% | 能量潮指标 |
-| MFI强度 | 35% | 资金流量指标 |
-| 量价关系 | 25% | 成交量与价格配合 |
-
 ### 2. K线形态识别系统
 
 支持识别20+种经典K线形态：
@@ -51,23 +36,8 @@ QuantTool 是一个专为A股市场设计的量化分析平台，提供技术分
 - **看跌组合**：看跌吞没、暮星、乌云盖顶
 
 #### 形态可视化
-- ASCII艺术K线图（彩色显示）
+- ASCII艺术K线图（彩色显示：🟢绿色阳线/🔴红色阴线）
 - 形态示意图解说明
-
-```
-#### 📖 「锤子线」形态说明
-
-    ┌─────────────────┐
-    │      │          │  上影线短或无
-    │    ┌───┐        │
-    │    │   │ 小实体 │  实体在上方
-    │    └───┘        │
-    │       │         │
-    │       │         │  长下影线
-    │       │         │  (>=实体2倍)
-    └─────────────────┘
-    出现在低位 = 看涨反转信号
-```
 
 ### 3. 智能熔断机制
 
@@ -80,22 +50,19 @@ QuantTool 是一个专为A股市场设计的量化分析平台，提供技术分
 | 诱多陷阱熔断 | 高位+看涨+极端超买 | 强制观望 |
 | 极端超买熔断 | 3+指标同时爆表 | 位置系数≤0.30 |
 
-### 4. 位置修正系数
+### 4. 内置交易策略
 
-根据趋势方向动态调整风险：
-
-| 状态 | 位置系数 | 触发条件 |
-|------|----------|----------|
-| 安全区 | 1.00 | 布林中下轨，RSI 30-50 |
-| 适中区 | 0.75~0.95 | 布林中上轨，RSI 50-65 |
-| 警戒区 | 0.50~0.75 | 布林上轨附近，RSI 65-75 |
-| 危险区 | <0.50 | 极端超买，多指标爆表 |
-
-#### 趋势敏感修正
-- **下跌趋势+超卖**：系数0.50（接飞刀风险）
-- **下跌趋势+阻力位**：系数0.45（反弹遇阻）
-- **上升趋势+超买**：系数0.75（追高风险）
-- **长期高位（>70%分位）**：系数0.65-0.80
+| 策略名称 | 类型 | 说明 |
+|----------|------|------|
+| `ma_cross` | 趋势跟踪 | 均线交叉策略（金叉买入，死叉卖出） |
+| `dual_ma` | 趋势跟踪 | 双均线策略（支持自定义周期） |
+| `breakout` | 突破策略 | 价格突破N日高低点 |
+| `turtle` | 趋势跟踪 | 海龟交易策略（唐奇安通道） |
+| `ma_alignment` | 趋势跟踪 | 均线多头排列策略 |
+| `rsi` | 震荡指标 | RSI超买超卖策略 |
+| `macd` | 趋势指标 | MACD金叉死叉策略 |
+| `kdj` | 震荡指标 | KDJ金叉死叉策略 |
+| `bollinger` | 震荡指标 | 布林带回归策略 |
 
 ### 5. 四部分报告架构
 
@@ -126,20 +93,7 @@ QuantTool 是一个专为A股市场设计的量化分析平台，提供技术分
 └── 风险提示
 ```
 
-### 6. 技术指标计算
-
-内置30+种技术指标：
-
-| 类别 | 指标 |
-|------|------|
-| 趋势类 | MA、EMA、MACD、DMI、BOLL |
-| 动量类 | RSI、KDJ、MTM、ROC、CCI |
-| 成交量 | OBV、VOL、MFI、VWAP |
-| 波动率 | ATR、BIAS、WR |
-
 ## 安装
-
-### 从源码安装
 
 ```bash
 git clone https://github.com/yourusername/quanttool.git
@@ -147,56 +101,41 @@ cd quanttool
 pip install -e .
 ```
 
-### 开发模式安装
-
-```bash
-pip install -e ".[dev]"
-```
-
 ## 快速开始
 
 ### 1. 配置数据源
 
 ```bash
-# TuShare配置
 export TUSHARE_TOKEN="your_tushare_token"
-
-# 或创建.env文件
-echo "TUSHARE_TOKEN=your_tushare_token" > .env
 ```
 
-### 2. 分析单只股票
+### 2. 分析股票
 
 ```bash
-# 基本分析
+# 分析单只股票
 quant analyze 000001.SZ
 
-# 指定分析周期
+# 指定周期
 quant analyze 000001.SZ --days 360
 
-# 保存报告到文件
-quant analyze 000001.SZ --days 360 --output report.md
-```
-
-### 3. 市场扫描
-
-```bash
-# 扫描全市场
+# 市场扫描
 quant analyze scan --market all --days 360 --top 10
-
-# 扫描特定市场
-quant analyze scan --market sh --days 180 --top 20
 ```
 
-### 4. 回测策略
+### 3. 回测策略
 
 ```bash
-quant backtest run \
-  --strategy ma_cross \
-  --symbol 000001.SZ \
-  --start 2023-01-01 \
-  --end 2023-06-01 \
-  --cash 100000
+# 均线交叉策略
+quant backtest run --strategy ma_cross --symbol 000001.SZ \
+  --start 2023-01-01 --end 2023-06-01 --cash 100000
+
+# RSI策略
+quant backtest run --strategy rsi --symbol 000001.SZ \
+  --start 2023-01-01 --end 2023-06-01
+
+# 海龟策略
+quant backtest run --strategy turtle --symbol 000001.SZ \
+  --start 2023-01-01 --end 2023-06-01
 ```
 
 ## 项目架构
@@ -207,72 +146,41 @@ quanttool/
 │   ├── scoring_system.py       # 多维度评分系统
 │   ├── candlestick_patterns.py # K线形态识别
 │   ├── stock_analyzer.py       # 股票综合分析
-│   ├── tech_indicators.py      # 技术指标计算
-│   └── trading_strategies.py   # 交易策略
-├── application/                # 应用服务层
-│   ├── analysis_service.py     # 分析服务
-│   ├── backtest_service.py     # 回测服务
-│   ├── signal_service.py       # 信号服务
-│   └── portfolio_backtest_service.py
+│   └── tech_indicators.py      # 技术指标计算
+├── strategies/                 # 交易策略模块
+│   ├── ma_cross.py            # 均线交叉策略
+│   ├── dual_ma.py             # 双均线策略
+│   ├── breakout.py            # 突破策略
+│   ├── turtle.py              # 海龟策略
+│   ├── ma_alignment.py        # 均线排列策略
+│   ├── rsi.py                 # RSI策略
+│   ├── macd.py                # MACD策略
+│   ├── kdj.py                 # KDJ策略
+│   └── bollinger.py           # 布林带策略
 ├── infrastructure/             # 基础设施层
-│   ├── data_providers/         # 数据提供者
-│   │   ├── tushare_provider.py
-│   │   ├── ashare_provider.py
-│   │   └── data_fetcher.py
-│   ├── stores/                 # 存储层
-│   ├── scheduler/              # 任务调度
-│   └── notification/           # 通知服务
+│   ├── data_providers/        # 数据提供者
+│   └── stores/                # 存储层
 ├── reports/                    # 报告生成
-│   ├── generators.py
-│   ├── daily_report_generator.py
-│   └── templates/
 ├── cli/                        # 命令行接口
-│   ├── main.py
-│   └── commands/
-├── web/                        # Web API
-│   ├── app.py
-│   ├── api/routes.py
-│   └── websockets.py
-└── ml/                         # 机器学习模块
-    ├── models.py
-    ├── trainer.py
-    └── features.py
+└── web/                        # Web API
 ```
 
-## 使用示例
-
-### Python API
+## Python API
 
 ```python
 from quanttool.factors.stock_analyzer import StockAnalyzer
-from quanttool.factors.scoring_system import ScoringSystem
-
-# 创建分析器
-analyzer = StockAnalyzer()
-
-# 分析股票
-report = analyzer.analyze_stock("000001.SZ", days=360)
-print(report)
-
-# 获取评分结果
-scoring = ScoringSystem()
-result = scoring.calculate_score("000001.SZ", df)
-print(f"综合评分: {result['score']}")
-print(f"趋势方向: {result['trend_direction']}")
-print(f"位置系数: {result['position_modifier']}")
-print(f"操作建议: {result['execution']['action_guide']}")
-```
-
-### K线形态识别
-
-```python
 from quanttool.factors.candlestick_patterns import (
     CandlestickPatternRecognizer,
     draw_candlestick_chart,
     draw_pattern_illustration
 )
 
-# 识别形态
+# 分析股票
+analyzer = StockAnalyzer()
+report = analyzer.analyze_stock("000001.SZ", days=360)
+print(report)
+
+# 识别K线形态
 recognizer = CandlestickPatternRecognizer()
 patterns = recognizer.recognize_all_patterns(df, lookback=5)
 
@@ -294,80 +202,16 @@ print(illustration)
 
 **技术评分：70.5分（良好）**
 
-**评分构成：** 趋势分 70.5 × 位置系数 1.00 = 70.5
+### 📊 近期K线图
 
-**置信度：中高**（多数因子同向）
-
-### 💡 关键理由
-
-入场位置安全，趋势强势确立
-
----
-
-## 第二部分：多维信号共振分析
-
-### 📊 趋势状态
-
-- **状态**：上升趋势（强）
-- **说明**：均线多头排列+DMI多头占优，ADX=27.18
-
-### 🕯️ 形态特权区
-
-- **形态**：长上影线（强度：中）
-- **定性影响**：➖ 中性信号 - 上方抛压
-
-#### 📊 近期K线图
-
-```
 最高: ¥63.77
    │        │    │  ████ │     │
    │        │    │  ████ │     │
    │   │    ████ │  ████ ▓▓▓▓  │
    │   │    ████ │  ████ ▓▓▓▓  │
-   │   │    ████ │       ▓▓▓▓  │
-   │   │         │             │
 最低: ¥60.27
-```
-> 图例：🟢 绿色 = 阳线（涨） | 🔴 红色 = 阴线（跌） | │ = 影线
-```
 
-## 数据源
-
-| 数据源 | 类型 | 配置 | 用途 |
-|--------|------|------|------|
-| TuShare | 历史 | TUSHARE_TOKEN | 回测、分析 |
-| AShare | 实时 | ASHARE_ENDPOINT | 实时信号 |
-| CSV Mock | 模拟 | 数据目录 | 测试开发 |
-
-## 内置策略
-
-### MA Cross（均线交叉）
-```python
-strategy_params = {
-    "short_window": 5,
-    "long_window": 10
-}
-```
-
-### Breakout（突破策略）
-```python
-strategy_params = {
-    "lookback_period": 20,
-    "entry_threshold": 0.02
-}
-```
-
-## 开发
-
-```bash
-# 安装开发依赖
-pip install -e ".[dev]"
-
-# 运行测试
-pytest tests/ -v
-
-# 运行测试覆盖率
-pytest --cov=quanttool tests/
+> 图例：🟢 绿色 = 阳线（涨） | 🔴 红色 = 阴线（跌）
 ```
 
 ## 许可证
