@@ -1,21 +1,145 @@
-# QuantTool - A Comprehensive Quantitative Trading Platform for A-Share Stocks
+# QuantTool - A股量化交易分析平台
 
-QuantTool is a flexible, extensible platform for quantitative analysis, backtesting, and signal generation specifically designed for the Chinese A-share market. It supports multiple timeframes with strict time alignment to A-share trading hours.
+QuantTool 是一个专为A股市场设计的量化分析平台，提供技术分析、形态识别、多因子评分、风险熔断等核心功能。
 
-## Features
+## 核心功能
 
-- **Modular Architecture**: Plugin-based system for data providers, strategies, factors, and models
-- **A-Share Focused**: Optimized for Chinese stock market characteristics
-- **Multiple Timeframes**: Support for 1m, 5m, 10m, 1d bars with proper trading hours alignment
-- **Next-Bar Close Execution**: Accurate simulation of trading delays
-- **Multiple Interfaces**: CLI, Web API, and programmatic Python API
-- **Comprehensive Analysis**: Backtesting, factor mining, prediction, and portfolio analysis
-- **Machine Learning**: Built-in support for Random Forest, XGBoost, and LSTM models
-- **Real-time Signals**: Live signal monitoring with WebSocket support
+### 1. 多维度技术分析评分系统
 
-## Installation
+基于三大类因子的分层评分架构：
 
-### From Source
+```
+最终评分 = 趋势得分 × 位置修正系数
+```
+
+#### 趋势因子（权重40%）
+| 因子 | 权重 | 说明 |
+|------|------|------|
+| 趋势强度 | 20% | MA20乖离率，DMI状态修正 |
+| 均线斜率 | 20% | MA5斜率判断趋势方向 |
+| MACD动量 | 20% | MACD柱状图变化 |
+| 资金流向 | 20% | OBV资金流评分 |
+| 成交量 | 10% | 量价配合度 |
+| K线形态 | 10% | 位置敏感评分 |
+
+#### 动能因子（权重35%）
+| 因子 | 权重 | 说明 |
+|------|------|------|
+| KDJ位置 | 30% | KDJ超买超卖判断 |
+| RSI强度 | 35% | RSI相对强弱 |
+| MTM动量 | 20% | 动量指标 |
+| ROC变动率 | 15% | 价格变动速率 |
+
+#### 资金因子（权重25%）
+| 因子 | 权重 | 说明 |
+|------|------|------|
+| OBV流向 | 40% | 能量潮指标 |
+| MFI强度 | 35% | 资金流量指标 |
+| 量价关系 | 25% | 成交量与价格配合 |
+
+### 2. K线形态识别系统
+
+支持识别20+种经典K线形态：
+
+#### 单根形态
+- **看涨形态**：锤子线、倒锤子、大阳线
+- **看跌形态**：吊颈线、流星线、大阴线
+- **中性形态**：十字星、长上影线、长下影线、纺锤线
+
+#### 组合形态
+- **看涨组合**：看涨吞没、晨星、穿刺线
+- **看跌组合**：看跌吞没、暮星、乌云盖顶
+
+#### 形态可视化
+- ASCII艺术K线图（彩色显示）
+- 形态示意图解说明
+
+```
+#### 📖 「锤子线」形态说明
+
+    ┌─────────────────┐
+    │      │          │  上影线短或无
+    │    ┌───┐        │
+    │    │   │ 小实体 │  实体在上方
+    │    └───┘        │
+    │       │         │
+    │       │         │  长下影线
+    │       │         │  (>=实体2倍)
+    └─────────────────┘
+    出现在低位 = 看涨反转信号
+```
+
+### 3. 智能熔断机制
+
+多层风险控制体系：
+
+| 熔断规则 | 触发条件 | 效果 |
+|----------|----------|------|
+| 强力看跌熔断 | 大阴线+高位 | 评分降至≤25分，仓位0% |
+| 高位看跌熔断 | 高位+看跌形态 | 评分降至≤25分，仓位0% |
+| 诱多陷阱熔断 | 高位+看涨+极端超买 | 强制观望 |
+| 极端超买熔断 | 3+指标同时爆表 | 位置系数≤0.30 |
+
+### 4. 位置修正系数
+
+根据趋势方向动态调整风险：
+
+| 状态 | 位置系数 | 触发条件 |
+|------|----------|----------|
+| 安全区 | 1.00 | 布林中下轨，RSI 30-50 |
+| 适中区 | 0.75~0.95 | 布林中上轨，RSI 50-65 |
+| 警戒区 | 0.50~0.75 | 布林上轨附近，RSI 65-75 |
+| 危险区 | <0.50 | 极端超买，多指标爆表 |
+
+#### 趋势敏感修正
+- **下跌趋势+超卖**：系数0.50（接飞刀风险）
+- **下跌趋势+阻力位**：系数0.45（反弹遇阻）
+- **上升趋势+超买**：系数0.75（追高风险）
+- **长期高位（>70%分位）**：系数0.65-0.80
+
+### 5. 四部分报告架构
+
+```
+第一部分：核心结论区
+├── 操作指令（买入/卖出/观望）
+├── 技术评分（0-100分）
+├── 置信度评估
+└── 关键理由
+
+第二部分：多维信号共振分析
+├── 趋势状态（DMI+均线排列）
+├── 动能状态（MACD+RSI）
+├── 位置状态（布林带+CCI+WR）
+├── 形态特权区（K线形态定性）
+└── K线可视化图表
+
+第三部分：量化评分与因子拆解
+├── 综合评分计算公式
+├── 各因子得分明细
+├── 位置修正系数
+└── 红黑榜
+
+第四部分：交易执行计划
+├── 策略类型判定
+├── 入场/止损/目标位
+├── 仓位建议
+└── 风险提示
+```
+
+### 6. 技术指标计算
+
+内置30+种技术指标：
+
+| 类别 | 指标 |
+|------|------|
+| 趋势类 | MA、EMA、MACD、DMI、BOLL |
+| 动量类 | RSI、KDJ、MTM、ROC、CCI |
+| 成交量 | OBV、VOL、MFI、VWAP |
+| 波动率 | ATR、BIAS、WR |
+
+## 安装
+
+### 从源码安装
 
 ```bash
 git clone https://github.com/yourusername/quanttool.git
@@ -23,507 +147,229 @@ cd quanttool
 pip install -e .
 ```
 
-### Development Installation
+### 开发模式安装
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-## Quick Start
+## 快速开始
 
-### 1. Configuration
+### 1. 配置数据源
 
-Before using QuantTool, configure your data provider credentials:
-
-#### TuShare Configuration
-
-Set environment variable:
 ```bash
+# TuShare配置
 export TUSHARE_TOKEN="your_tushare_token"
+
+# 或创建.env文件
+echo "TUSHARE_TOKEN=your_tushare_token" > .env
 ```
 
-Or create a `.env` file in the project root:
-```
-TUSHARE_TOKEN=your_tushare_token
-```
-
-#### AShare Configuration (Optional, for real-time data)
+### 2. 分析单只股票
 
 ```bash
-export ASHARE_ENDPOINT="your_ashare_endpoint"
-export ASHARE_API_KEY="your_ashare_api_key"
+# 基本分析
+quant analyze 000001.SZ
+
+# 指定分析周期
+quant analyze 000001.SZ --days 360
+
+# 保存报告到文件
+quant analyze 000001.SZ --days 360 --output report.md
 ```
 
-### 2. CLI Usage
-
-QuantTool provides a comprehensive command-line interface for all operations.
-
-#### List Available Plugins
+### 3. 市场扫描
 
 ```bash
-quant plugins
+# 扫描全市场
+quant analyze scan --market all --days 360 --top 10
+
+# 扫描特定市场
+quant analyze scan --market sh --days 180 --top 20
 ```
 
-Output example:
-```
-Available Data Providers:
-  - tushare
-  - ashare
-  - csv_mock
+### 4. 回测策略
 
-Available Strategies:
-  - ma_cross
-  - breakout
-
-Available Factors:
-  - momentum
-  - returns_momentum
-  - price_volume_trend
-  - volatility
-  - atr
-  - rsi
-```
-
-#### Data Commands
-
-**Pull historical data:**
-```bash
-# Pull daily data from TuShare
-quant data pull --provider tushare \
-  --symbol 000001.SZ \
-  --symbol 000002.SZ \
-  --start 2023-01-01 \
-  --end 2023-12-31 \
-  --timeframe 1d \
-  --output ./data
-
-# Pull 10-minute data
-quant data pull --provider tushare \
-  --symbol 000001.SZ \
-  --start 2023-01-01 \
-  --end 2023-06-01 \
-  --timeframe 10m
-```
-
-**Search for symbols:**
-```bash
-# Search by name (Chinese or English)
-quant data search --provider tushare "平安银行"
-quant data search --provider tushare "pingan"
-
-# Output example:
-# Found 2 symbols:
-#   000001.SZ: 平安银行
-#   600000.SH: 浦发银行
-```
-
-#### Backtest Commands
-
-**Run a backtest with MA Cross strategy:**
 ```bash
 quant backtest run \
   --strategy ma_cross \
   --symbol 000001.SZ \
-  --symbol 000002.SZ \
   --start 2023-01-01 \
   --end 2023-06-01 \
-  --timeframe 10m \
-  --cash 100000 \
-  --commission 0.0003 \
-  --provider tushare
+  --cash 100000
 ```
 
-**Output example:**
-```
-Backtest completed!
-Strategy: ma_cross
-Symbols: ['000001.SZ', '000002.SZ']
-Period: 2023-01-01 00:00:00 to 2023-06-01 00:00:00
-Timeframe: 10m
-Initial Capital: $100,000.00
-Final Capital: $108,500.00
-Total Return: 8.50%
-Annual Return: 17.34%
-Win Rate: 55.20%
-Total Trades: 48
-Winning Trades: 27
-Losing Trades: 21
-```
-
-#### Analysis Commands
-
-**Analyze a single stock:**
-```bash
-# Basic analysis
-quant analyze 000001.SZ
-
-# Analysis with specific period
-quant analyze 000001.SZ --days 180
-
-# Save report to file
-quant analyze 000001.SZ --days 360 --output analysis_report.txt
-```
-
-**Output example:**
-```
-Analyzing stock: 000001.SZ
-Analysis period: 360 days
---------------------------------------------------
-Starting analysis for 000001.SZ...
-Fetching data for 000001.SZ from 2022-06-01 to 2023-06-01...
-Retrieved 240 records
-Calculating technical indicators...
-Technical indicators calculated successfully.
-Running trading strategies...
-Trading strategies completed.
-============================================================
-STOCK ANALYSIS REPORT FOR 000001.SZ
-============================================================
-Report Date: 2023-06-01 10:30:00
-Analysis Period: 2022-06-01 to 2023-06-01
-Number of Trading Days: 240
-
-CURRENT MARKET DATA:
-------------------------------
-Current Price: 12.50
-Today's Change: 1.20%
-Volume: 1,234,567
-High: 12.60 | Low: 12.40
-Open: 12.45
-
-TECHNICAL INDICATORS:
-------------------------------
-RSI(24): 58.34
-MACD: 0.25
-KDJ_K: 65.20 | KDJ_D: 60.15 | KDJ_J: 75.30
-MA20: 12.30 | MA50: 12.10 | MA200: 11.80
-...
-```
-
-**Market scan:**
-```bash
-# Scan all markets
-quant analyze scan --market all --days 360 --top 10
-
-# Scan specific market
-quant analyze scan --market sh --days 180 --top 20
-```
-
-### 3. Web API Usage
-
-QuantTool provides a RESTful Web API built with FastAPI.
-
-#### Start the Web Server
-
-```bash
-# Using uvicorn directly
-uvicorn quanttool.web.app:app --host 0.0.0.0 --port 8000 --reload
-
-# Or using quant CLI
-quant web start
-```
-
-The API documentation will be available at:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-
-#### API Endpoints
-
-**List Available Resources:**
-
-```bash
-# List data providers
-curl http://localhost:8000/api/data/providers
-# Response: ["tushare", "ashare", "csv_mock"]
-
-# List strategies
-curl http://localhost:8000/api/strategies
-# Response: ["ma_cross", "breakout"]
-
-# List factors
-curl http://localhost:8000/api/factors
-# Response: ["momentum", "returns_momentum", "price_volume_trend", ...]
-
-# List experiments
-curl http://localhost:8000/api/experiments
-# Response: [{"id": "...", "type": "backtest", "status": "completed", ...}]
-```
-
-**Run Backtest:**
-
-```bash
-curl -X POST http://localhost:8000/api/backtest/run \
-  -H "Content-Type: application/json" \
-  -d '{
-    "strategy_name": "ma_cross",
-    "symbols": ["000001.SZ"],
-    "start_date": "2023-01-01",
-    "end_date": "2023-06-01",
-    "timeframe": "10m",
-    "initial_cash": 100000,
-    "commission_rate": 0.0003,
-    "data_provider": "tushare",
-    "strategy_params": {
-      "short_window": 5,
-      "long_window": 10
-    }
-  }'
-```
-
-Response:
-```json
-{
-  "run_id": "uuid-string",
-  "result": {
-    "start_date": "2023-01-01T00:00:00",
-    "end_date": "2023-06-01T00:00:00",
-    "initial_capital": 100000.0,
-    "final_capital": 108500.0,
-    "total_return": 0.085,
-    "annual_return": 0.1734,
-    "total_trades": 48,
-    "win_rate": 0.552
-  }
-}
-```
-
-**Get Backtest Result:**
-
-```bash
-curl http://localhost:8000/api/backtest/runs/{run_id}
-```
-
-**Mine Factors:**
-
-```bash
-curl -X POST http://localhost:8000/api/factors/mine \
-  -H "Content-Type: application/json" \
-  -d '{
-    "factor_name": "momentum",
-    "symbols": ["000001.SZ", "000002.SZ"],
-    "start_date": "2023-01-01",
-    "end_date": "2023-06-01",
-    "data_provider": "tushare",
-    "factor_params": {
-      "period": 10
-    }
-  }'
-```
-
-Response:
-```json
-{
-  "run_id": "uuid-string",
-  "results": {
-    "000001.SZ": {
-      "factor_name": "momentum",
-      "ic": 0.125,
-      "rank_ic": 0.134,
-      "win_rate": 0.58,
-      "avg_return": 0.002,
-      "volatility": 0.015,
-      "sharpe_ratio": 1.2
-    },
-    "000002.SZ": {
-      ...
-    }
-  }
-}
-```
-
-## Architecture
-
-The platform follows a layered architecture:
+## 项目架构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Interface Layer                         │
-│  ┌────────────┐  ┌────────────┐  ┌────────────────────┐    │
-│  │    CLI     │  │  Web API   │  │   Python API       │    │
-│  └────────────┘  └────────────┘  └────────────────────┘    │
-├─────────────────────────────────────────────────────────────┤
-│                   Application Layer                         │
-│  ┌────────────┐  ┌────────────┐  ┌────────────────────┐    │
-│  │ Backtest   │  │  Factor    │  │  Signal Service    │    │
-│  │  Service   │  │  Service   │  │                    │    │
-│  └────────────┘  └────────────┘  └────────────────────┘    │
-│  ┌────────────┐  ┌────────────┐  ┌────────────────────┐    │
-│  │  Data      │  │ Prediction │  │  ML Models         │    │
-│  │  Service   │  │  Service   │  │  (RF/XGB/LSTM)     │    │
-│  └────────────┘  └────────────┘  └────────────────────┘    │
-├─────────────────────────────────────────────────────────────┤
-│                     Domain Layer                            │
-│  Interfaces: IDataProvider, IStrategy, IFactor, IModel,    │
-│              IStore, INotifier                              │
-│  Models: Bar, Trade, Order, Position, Portfolio, Signal    │
-├─────────────────────────────────────────────────────────────┤
-│                  Infrastructure Layer                       │
-│  Data Providers: TuShare, AShare, CSV Mock                 │
-│  Storage: Parquet Store, SQLite MetaDB                     │
-│  Reports: Text, HTML, PDF Generators                       │
-└─────────────────────────────────────────────────────────────┘
+quanttool/
+├── factors/                    # 因子分析模块
+│   ├── scoring_system.py       # 多维度评分系统
+│   ├── candlestick_patterns.py # K线形态识别
+│   ├── stock_analyzer.py       # 股票综合分析
+│   ├── tech_indicators.py      # 技术指标计算
+│   └── trading_strategies.py   # 交易策略
+├── application/                # 应用服务层
+│   ├── analysis_service.py     # 分析服务
+│   ├── backtest_service.py     # 回测服务
+│   ├── signal_service.py       # 信号服务
+│   └── portfolio_backtest_service.py
+├── infrastructure/             # 基础设施层
+│   ├── data_providers/         # 数据提供者
+│   │   ├── tushare_provider.py
+│   │   ├── ashare_provider.py
+│   │   └── data_fetcher.py
+│   ├── stores/                 # 存储层
+│   ├── scheduler/              # 任务调度
+│   └── notification/           # 通知服务
+├── reports/                    # 报告生成
+│   ├── generators.py
+│   ├── daily_report_generator.py
+│   └── templates/
+├── cli/                        # 命令行接口
+│   ├── main.py
+│   └── commands/
+├── web/                        # Web API
+│   ├── app.py
+│   ├── api/routes.py
+│   └── websockets.py
+└── ml/                         # 机器学习模块
+    ├── models.py
+    ├── trainer.py
+    └── features.py
 ```
 
-## Data Providers
+## 使用示例
 
-### TuShare
-- **Type**: Historical data
-- **Coverage**: All A-share stocks, daily and minute data
-- **Configuration**: `TUSHARE_TOKEN` environment variable
-- **Best for**: Backtesting, historical analysis
+### Python API
 
-### AShare
-- **Type**: Real-time data
-- **Coverage**: Real-time quotes and bars
-- **Configuration**: `ASHARE_ENDPOINT`, `ASHARE_API_KEY`
-- **Best for**: Live signals, real-time monitoring
+```python
+from quanttool.factors.stock_analyzer import StockAnalyzer
+from quanttool.factors.scoring_system import ScoringSystem
 
-### CSV Mock
-- **Type**: Mock data for testing
-- **Coverage**: Sample stocks with generated data
-- **Configuration**: Data directory path
-- **Best for**: Development, testing, CI/CD
+# 创建分析器
+analyzer = StockAnalyzer()
 
-## Built-in Strategies
+# 分析股票
+report = analyzer.analyze_stock("000001.SZ", days=360)
+print(report)
 
-### MA Cross (Moving Average Crossover)
+# 获取评分结果
+scoring = ScoringSystem()
+result = scoring.calculate_score("000001.SZ", df)
+print(f"综合评分: {result['score']}")
+print(f"趋势方向: {result['trend_direction']}")
+print(f"位置系数: {result['position_modifier']}")
+print(f"操作建议: {result['execution']['action_guide']}")
+```
+
+### K线形态识别
+
+```python
+from quanttool.factors.candlestick_patterns import (
+    CandlestickPatternRecognizer,
+    draw_candlestick_chart,
+    draw_pattern_illustration
+)
+
+# 识别形态
+recognizer = CandlestickPatternRecognizer()
+patterns = recognizer.recognize_all_patterns(df, lookback=5)
+
+# 绘制K线图
+chart = draw_candlestick_chart(df, num_candles=10)
+print(chart)
+
+# 获取形态示意图
+illustration = draw_pattern_illustration("锤子线")
+print(illustration)
+```
+
+## 报告示例
+
+```markdown
+## 第一部分：核心结论
+
+### 🟢 操作指令：买入
+
+**技术评分：70.5分（良好）**
+
+**评分构成：** 趋势分 70.5 × 位置系数 1.00 = 70.5
+
+**置信度：中高**（多数因子同向）
+
+### 💡 关键理由
+
+入场位置安全，趋势强势确立
+
+---
+
+## 第二部分：多维信号共振分析
+
+### 📊 趋势状态
+
+- **状态**：上升趋势（强）
+- **说明**：均线多头排列+DMI多头占优，ADX=27.18
+
+### 🕯️ 形态特权区
+
+- **形态**：长上影线（强度：中）
+- **定性影响**：➖ 中性信号 - 上方抛压
+
+#### 📊 近期K线图
+
+```
+最高: ¥63.77
+   │        │    │  ████ │     │
+   │        │    │  ████ │     │
+   │   │    ████ │  ████ ▓▓▓▓  │
+   │   │    ████ │  ████ ▓▓▓▓  │
+   │   │    ████ │       ▓▓▓▓  │
+   │   │         │             │
+最低: ¥60.27
+```
+> 图例：🟢 绿色 = 阳线（涨） | 🔴 红色 = 阴线（跌） | │ = 影线
+```
+
+## 数据源
+
+| 数据源 | 类型 | 配置 | 用途 |
+|--------|------|------|------|
+| TuShare | 历史 | TUSHARE_TOKEN | 回测、分析 |
+| AShare | 实时 | ASHARE_ENDPOINT | 实时信号 |
+| CSV Mock | 模拟 | 数据目录 | 测试开发 |
+
+## 内置策略
+
+### MA Cross（均线交叉）
 ```python
 strategy_params = {
-    "short_window": 5,   # Short-term MA period
-    "long_window": 10    # Long-term MA period
+    "short_window": 5,
+    "long_window": 10
 }
 ```
-- **Logic**: Buy when short MA crosses above long MA, sell when opposite
-- **Best for**: Trend following
 
-### Breakout
+### Breakout（突破策略）
 ```python
 strategy_params = {
-    "lookback_period": 20,      # Lookback for high/low
-    "entry_threshold": 0.02     # Entry threshold (2%)
+    "lookback_period": 20,
+    "entry_threshold": 0.02
 }
 ```
-- **Logic**: Buy on breakout above recent high, sell on breakdown below recent low
-- **Best for**: Momentum trading
 
-## Built-in Factors
-
-### Momentum Factors
-- **momentum**: Simple price momentum over N periods
-- **returns_momentum**: Average of returns over momentum period
-- **price_volume_trend**: Volume-weighted price trend
-
-### Volatility Factors
-- **volatility**: Standard deviation of returns
-- **atr**: Average True Range
-
-### Value Factors
-- **rsi**: Relative Strength Index
-
-## Machine Learning
-
-QuantTool supports several ML models for prediction:
-
-### Random Forest
-```python
-from quanttool.ml import RandomForestModel
-
-model = RandomForestModel({
-    'n_estimators': 100,
-    'max_depth': 10
-})
-```
-
-### XGBoost
-```python
-from quanttool.ml import XGBoostModel
-
-model = XGBoostModel({
-    'n_estimators': 100,
-    'learning_rate': 0.1
-})
-```
-
-### LSTM
-```python
-from quanttool.ml import LSTMModel
-
-model = LSTMModel({
-    'sequence_length': 20,
-    'units': [64, 32],
-    'epochs': 50
-})
-```
-
-## Report Generation
-
-Generate reports from backtest and analysis results:
-
-```python
-from quanttool.reports import BacktestReportGenerator, HTMLReportGenerator
-
-# Text report
-generator = BacktestReportGenerator(output_dir="./reports")
-report_path = generator.generate(result, strategy_name="ma_cross")
-
-# HTML report with charts
-generator = HTMLReportGenerator(output_dir="./reports")
-report_path = generator.generate_backtest_html(result, strategy_name="ma_cross")
-```
-
-## Development
-
-To contribute:
-
-1. Fork the repository
-2. Install in development mode: `pip install -e ".[dev]"`
-3. Set up pre-commit hooks: `pre-commit install`
-4. Run tests: `pytest`
-
-### Running Tests
+## 开发
 
 ```bash
-# Run all tests
+# 安装开发依赖
+pip install -e ".[dev]"
+
+# 运行测试
 pytest tests/ -v
 
-# Run specific test file
-pytest tests/test_strategies.py -v
-
-# Run with coverage
+# 运行测试覆盖率
 pytest --cov=quanttool tests/
 ```
 
-## Configuration File
-
-Create `config/default.yaml` for advanced configuration:
-
-```yaml
-# Data providers
-data_providers:
-  tushare:
-    token: ${TUSHARE_TOKEN}
-  ashare:
-    endpoint: ${ASHARE_ENDPOINT}
-    api_key: ${ASHARE_API_KEY}
-
-# Default parameters
-defaults:
-  initial_cash: 100000
-  commission_rate: 0.0003
-  timeframe: "10m"
-
-# Storage
-storage:
-  data_dir: "./data"
-  report_dir: "./reports"
-  model_dir: "./models"
-
-# Logging
-logging:
-  level: INFO
-  file: "./logs/quanttool.log"
-```
-
-## License
+## 许可证
 
 MIT License
