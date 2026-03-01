@@ -1,0 +1,57 @@
+# Default configuration for QuantTool
+
+# Data provider settings
+data:
+  tushare_token: ${TUSHARE_TOKEN}  # Token for TuShare API
+  ashare_config:
+    endpoint: ""
+    api_key: ""
+  providers:
+    - tushare
+    - ashare
+    - csv_mock
+
+# Calendar settings
+calendar:
+  timezone: Asia/Shanghai
+  trading_hours:
+    morning_start: "09:30"
+    morning_end: "11:30"
+    afternoon_start: "13:00"
+    afternoon_end: "15:00"
+  holidays: []
+  early_closes: []
+
+# Backtesting settings
+backtest:
+  initial_cash: 100000
+  commission_rate: 0.0003  # 0.03%
+  min_commission: 5.0       # Minimum commission per trade
+  slippage_rate: 0.0001     # 1bp slippage
+  execution_model: next_close
+
+# Trading settings
+trading:
+  max_position_size: 0.1    # Max 10% allocation per position
+  max_positions: 10         # Max number of concurrent positions
+
+# Prediction settings
+prediction:
+  default_horizon: 6        # Default 6 * 10m bars = 60 minutes ahead
+  probability_threshold: 0.55
+
+# Signal settings
+signal:
+  cooldown_bars: 3          # Minimum bars between same-direction signals for same symbol
+
+# Storage settings
+storage:
+  data_dir: "./data"
+  runs_dir: "./runs"
+  reports_dir: "./reports"
+
+# Logging settings
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "quanttool.log"

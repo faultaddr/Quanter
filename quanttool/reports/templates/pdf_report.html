@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+    <style>
+        /* 基础样式 */
+        @page {
+            size: A4;
+            margin: 2.5cm 2cm 2.5cm 2cm;
+            @top-center {
+                content: "{{ header_title }}";
+                font-size: 10pt;
+                color: #666;
+                font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK", sans-serif;
+            }
+            @bottom-center {
+                content: "第 " counter(page) " 页 / 共 " counter(pages) " 页";
+                font-size: 9pt;
+                color: #999;
+                font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK", sans-serif;
+            }
+            @bottom-left {
+                content: "生成时间: {{ generation_time }}";
+                font-size: 8pt;
+                color: #999;
+                font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK", sans-serif;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK", "Heiti SC", "WenQuanYi Micro Hei", sans-serif;
+            font-size: 11pt;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+
+        /* 标题样式 */
+        h1 {
+            font-size: 22pt;
+            font-weight: bold;
+            color: #1a1a1a;
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 15px;
+            border-bottom: 3px solid #007bff;
+        }
+
+        h2 {
+            font-size: 16pt;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            padding-left: 12px;
+            border-left: 5px solid #007bff;
+        }
+
+        h3 {
+            font-size: 13pt;
+            font-weight: bold;
+            color: #34495e;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+
+        /* 段落和文本 */
+        p {
+            margin: 10px 0;
+            text-align: justify;
+        }
+
+        /* 表格样式 */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            font-size: 10pt;
+        }
+
+        th, td {
+            padding: 8px 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+            color: #2c3e50;
+            border-top: 2px solid #333;
+            border-bottom: 2px solid #333;
+        }
+
+        tr:nth-child(even) {
+            background-color: #fafafa;
+        }
+
+        tr:hover {
+            background-color: #f0f0f0;
+        }
+
+        /* 指标卡片 */
+        .metrics-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .metric-card {
+            flex: 1 1 calc(33.333% - 15px);
+            min-width: 150px;
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+
+        .metric-label {
+            font-size: 10pt;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .metric-value {
+            font-size: 18pt;
+            font-weight: bold;
+            color: #333;
+            margin-top: 5px;
+        }
+
+        /* 状态颜色 */
+        .positive {
+            color: #27ae60;
+        }
+
+        .negative {
+            color: #e74c3c;
+        }
+
+        .neutral {
+            color: #7f8c8d;
+        }
+
+        .warning {
+            color: #f39c12;
+        }
+
+        /* 信息框 */
+        .info-box {
+            background-color: #e8f4f8;
+            border-left: 4px solid #3498db;
+            padding: 12px 15px;
+            margin: 15px 0;
+            border-radius: 0 5px 5px 0;
+        }
+
+        .success-box {
+            background-color: #e8f8f0;
+            border-left: 4px solid #27ae60;
+        }
+
+        .warning-box {
+            background-color: #fef5e7;
+            border-left: 4px solid #f39c12;
+        }
+
+        .error-box {
+            background-color: #fdeaea;
+            border-left: 4px solid #e74c3c;
+        }
+
+        /* 列表样式 */
+        ul, ol {
+            margin: 10px 0;
+            padding-left: 25px;
+        }
+
+        li {
+            margin: 5px 0;
+        }
+
+        /* 分隔线 */
+        hr {
+            border: none;
+            border-top: 1px solid #ddd;
+            margin: 25px 0;
+        }
+
+        /* 页脚说明 */
+        .disclaimer {
+            margin-top: 40px;
+            padding-top: 15px;
+            border-top: 1px solid #ddd;
+            font-size: 9pt;
+            color: #999;
+            text-align: center;
+        }
+
+        /* 打印优化 */
+        @media print {
+            body {
+                print-color-adjust: exact;
+                -webkit-print-color-adjust: exact;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>{{ title }}</h1>
+
+    {% if subtitle %}
+    <p style="text-align: center; color: #666; margin-top: -20px; margin-bottom: 30px;">{{ subtitle }}</p>
+    {% endif %}
+
+    {{ content_html | safe }}
+
+    <div class="disclaimer">
+        <p>免责声明：本报告仅供参考，不构成投资建议。投资有风险，入市需谨慎。</p>
+        <p>Generated by QuantTool Investment Analysis System</p>
+    </div>
+</body>
+</html>

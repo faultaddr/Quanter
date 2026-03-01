@@ -1,115 +1,219 @@
-# Quantitative Trading Tool for A-Share Market
+# QuantTool - A股量化交易分析平台
 
-A comprehensive quantitative trading tool designed specifically for the Chinese A-share market. The tool provides data fetching, strategy backtesting, and performance analysis capabilities.
+QuantTool 是一个专为A股市场设计的量化分析平台，提供技术分析、形态识别、多因子评分、风险熔断等核心功能。
 
-## Features
+## 核心功能
 
-- **Data Fetching**: Retrieve historical stock data from Chinese exchanges (Shanghai and Shenzhen)
-- **Strategy Backtesting**: Test trading strategies against historical data
-- **Performance Analysis**: Comprehensive performance metrics and risk analysis
-- **Multiple Strategies**: Support for various trading strategies (MA crossover, RSI, mean reversion, etc.)
-- **Web Interface**: Interactive dashboard for strategy testing and visualization
+### 1. 多维度技术分析评分系统
 
-## Installation
+基于三大类因子的分层评分架构：
 
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   cd quant_trade_a_share
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Install the package in development mode:
-   ```bash
-   pip install -e .
-   ```
-
-## Usage
-
-### Basic Usage
-
-```python
-from quant_trade_a_share import run_backtest, analyze_performance
-from quant_trade_a_share.strategies import MovingAverageCrossoverStrategy
-
-# Create a strategy
-strategy = MovingAverageCrossoverStrategy(short_window=10, long_window=30)
-
-# Run a backtest
-results = run_backtest(
-    strategy, 
-    '2022-01-01', 
-    '2022-12-31', 
-    initial_capital=100000,
-    symbol='000001'
-)
-
-# Analyze performance
-metrics = analyze_performance(results)
-print(f"Total Return: {metrics['total_return']:.2%}")
-print(f"Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
+```
+最终评分 = 趋势得分 × 位置修正系数
 ```
 
-### Using Mock Data for Testing
+#### 趋势因子（权重40%）
+| 因子 | 权重 | 说明 |
+|------|------|------|
+| 趋势强度 | 20% | MA20乖离率，DMI状态修正 |
+| 均线斜率 | 20% | MA5斜率判断趋势方向 |
+| MACD动量 | 20% | MACD柱状图变化 |
+| 资金流向 | 20% | OBV资金流评分 |
+| 成交量 | 10% | 量价配合度 |
+| K线形态 | 10% | 位置敏感评分 |
 
-For testing purposes when external data sources are unavailable:
+### 2. K线形态识别系统
 
-```python
-from quant_trade_a_share.utils.mock_data_generator import generate_mock_data
-from quant_trade_a_share.backtest.backtester import Backtester
+支持识别20+种经典K线形态：
 
-# Generate mock data
-data = generate_mock_data('000001', '2022-01-01', '2022-12-31')
+#### 单根形态
+- **看涨形态**：锤子线、倒锤子、大阳线
+- **看跌形态**：吊颈线、流星线、大阴线
+- **中性形态**：十字星、长上影线、长下影线、纺锤线
 
-# Run backtest with mock data
-backtester = Backtester()
-results = backtester.run_with_data(
-    strategy,
-    data,
-    initial_capital=100000,
-    symbol='000001'
-)
+#### 组合形态
+- **看涨组合**：看涨吞没、晨星、穿刺线
+- **看跌组合**：看跌吞没、暮星、乌云盖顶
+
+#### 形态可视化
+- ASCII艺术K线图（彩色显示：🟢绿色阳线/🔴红色阴线）
+- 形态示意图解说明
+
+### 3. 智能熔断机制
+
+多层风险控制体系：
+
+| 熔断规则 | 触发条件 | 效果 |
+|----------|----------|------|
+| 强力看跌熔断 | 大阴线+高位 | 评分降至≤25分，仓位0% |
+| 高位看跌熔断 | 高位+看跌形态 | 评分降至≤25分，仓位0% |
+| 诱多陷阱熔断 | 高位+看涨+极端超买 | 强制观望 |
+| 极端超买熔断 | 3+指标同时爆表 | 位置系数≤0.30 |
+
+### 4. 内置交易策略
+
+| 策略名称 | 类型 | 说明 |
+|----------|------|------|
+| `ma_cross` | 趋势跟踪 | 均线交叉策略（金叉买入，死叉卖出） |
+| `dual_ma` | 趋势跟踪 | 双均线策略（支持自定义周期） |
+| `breakout` | 突破策略 | 价格突破N日高低点 |
+| `turtle` | 趋势跟踪 | 海龟交易策略（唐奇安通道） |
+| `ma_alignment` | 趋势跟踪 | 均线多头排列策略 |
+| `rsi` | 震荡指标 | RSI超买超卖策略 |
+| `macd` | 趋势指标 | MACD金叉死叉策略 |
+| `kdj` | 震荡指标 | KDJ金叉死叉策略 |
+| `bollinger` | 震荡指标 | 布林带回归策略 |
+
+### 5. 四部分报告架构
+
+```
+第一部分：核心结论区
+├── 操作指令（买入/卖出/观望）
+├── 技术评分（0-100分）
+├── 置信度评估
+└── 关键理由
+
+第二部分：多维信号共振分析
+├── 趋势状态（DMI+均线排列）
+├── 动能状态（MACD+RSI）
+├── 位置状态（布林带+CCI+WR）
+├── 形态特权区（K线形态定性）
+└── K线可视化图表
+
+第三部分：量化评分与因子拆解
+├── 综合评分计算公式
+├── 各因子得分明细
+├── 位置修正系数
+└── 红黑榜
+
+第四部分：交易执行计划
+├── 策略类型判定
+├── 入场/止损/目标位
+├── 仓位建议
+└── 风险提示
 ```
 
-### Web Interface
-
-Run the web interface:
+## 安装
 
 ```bash
-python -m ui.app
+git clone https://github.com/yourusername/quanttool.git
+cd quanttool
+pip install -e .
 ```
 
-Then navigate to `http://127.0.0.1:8050` in your browser.
+## 快速开始
 
-## Components
+### 1. 配置数据源
 
-- `data/data_fetcher.py`: Module for fetching historical stock data
-- `strategies/`: Directory containing various trading strategies
-- `backtest/backtester.py`: Backtesting engine
-- `analysis/performance_analyzer.py`: Performance analysis tools
-- `ui/app.py`: Web interface using Dash
-- `utils/`: Utility functions and helpers
+```bash
+export TUSHARE_TOKEN="your_tushare_token"
+```
 
-## Available Strategies
+### 2. 分析股票
 
-- **Moving Average Crossover**: Buy when short MA crosses above long MA, sell when opposite
-- **RSI Strategy**: Buy when RSI is below oversold threshold, sell when above overbought threshold
-- **Mean Reversion**: Trade based on deviation from moving average
-- **Bollinger Bands**: Trade based on price position relative to Bollinger Bands
-- **MACD**: Trade based on MACD line and signal line crossovers
+```bash
+# 分析单只股票
+quant analyze 000001.SZ
 
-## Contributing
+# 指定周期
+quant analyze 000001.SZ --days 360
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+# 市场扫描
+quant analyze scan --market all --days 360 --top 10
+```
 
-## License
+### 3. 回测策略
 
-This project is licensed under the MIT License.
+```bash
+# 均线交叉策略
+quant backtest run --strategy ma_cross --symbol 000001.SZ \
+  --start 2023-01-01 --end 2023-06-01 --cash 100000
+
+# RSI策略
+quant backtest run --strategy rsi --symbol 000001.SZ \
+  --start 2023-01-01 --end 2023-06-01
+
+# 海龟策略
+quant backtest run --strategy turtle --symbol 000001.SZ \
+  --start 2023-01-01 --end 2023-06-01
+```
+
+## 项目架构
+
+```
+quanttool/
+├── factors/                    # 因子分析模块
+│   ├── scoring_system.py       # 多维度评分系统
+│   ├── candlestick_patterns.py # K线形态识别
+│   ├── stock_analyzer.py       # 股票综合分析
+│   └── tech_indicators.py      # 技术指标计算
+├── strategies/                 # 交易策略模块
+│   ├── ma_cross.py            # 均线交叉策略
+│   ├── dual_ma.py             # 双均线策略
+│   ├── breakout.py            # 突破策略
+│   ├── turtle.py              # 海龟策略
+│   ├── ma_alignment.py        # 均线排列策略
+│   ├── rsi.py                 # RSI策略
+│   ├── macd.py                # MACD策略
+│   ├── kdj.py                 # KDJ策略
+│   └── bollinger.py           # 布林带策略
+├── infrastructure/             # 基础设施层
+│   ├── data_providers/        # 数据提供者
+│   └── stores/                # 存储层
+├── reports/                    # 报告生成
+├── cli/                        # 命令行接口
+└── web/                        # Web API
+```
+
+## Python API
+
+```python
+from quanttool.factors.stock_analyzer import StockAnalyzer
+from quanttool.factors.candlestick_patterns import (
+    CandlestickPatternRecognizer,
+    draw_candlestick_chart,
+    draw_pattern_illustration
+)
+
+# 分析股票
+analyzer = StockAnalyzer()
+report = analyzer.analyze_stock("000001.SZ", days=360)
+print(report)
+
+# 识别K线形态
+recognizer = CandlestickPatternRecognizer()
+patterns = recognizer.recognize_all_patterns(df, lookback=5)
+
+# 绘制K线图
+chart = draw_candlestick_chart(df, num_candles=10)
+print(chart)
+
+# 获取形态示意图
+illustration = draw_pattern_illustration("锤子线")
+print(illustration)
+```
+
+## 报告示例
+
+```markdown
+## 第一部分：核心结论
+
+### 🟢 操作指令：买入
+
+**技术评分：70.5分（良好）**
+
+### 📊 近期K线图
+
+最高: ¥63.77
+   │        │    │  ████ │     │
+   │        │    │  ████ │     │
+   │   │    ████ │  ████ ▓▓▓▓  │
+   │   │    ████ │  ████ ▓▓▓▓  │
+最低: ¥60.27
+
+> 图例：🟢 绿色 = 阳线（涨） | 🔴 红色 = 阴线（跌）
+```
+
+## 许可证
+
+MIT License
