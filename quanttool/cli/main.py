@@ -12,6 +12,9 @@ import typer
 from .commands.data_commands import app as data_app
 from .commands.backtest_commands import app as backtest_app
 from .commands.analysis_commands import app as analysis_app
+from .commands.scheduler_commands import app as scheduler_app
+from .commands.portfolio_commands import app as portfolio_app
+from .commands.report_commands import app as report_app
 
 from quanttool.factors.stock_analyzer import StockAnalyzer
 
@@ -21,6 +24,9 @@ app = typer.Typer()
 app.add_typer(data_app, name="data", help="Data-related commands")
 app.add_typer(backtest_app, name="backtest", help="Backtesting commands")
 app.add_typer(analysis_app, name="analysis", help="Analysis commands (use 'analyze' for quick stock analysis)")
+app.add_typer(scheduler_app, name="scheduler", help="Scheduler daemon commands")
+app.add_typer(portfolio_app, name="portfolio", help="Portfolio backtest commands")
+app.add_typer(report_app, name="report", help="Daily report commands")
 
 
 @app.command()

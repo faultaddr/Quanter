@@ -19,6 +19,11 @@ dependencies = [
     "pyarrow>=6.0.0",
     "requests>=2.25.0",
     "fastapi>=0.68.0",
+    "apscheduler>=3.10.0",
+    "aiosmtplib>=3.0.0",
+    "jinja2>=3.0.0",
+    "weasyprint>=53.0",
+    "markdown>=3.0",
 ]
 
 [build-system]

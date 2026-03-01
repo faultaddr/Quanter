@@ -16,6 +16,11 @@ Requires-Dist: tushare>=1.2.0
 Requires-Dist: pyarrow>=6.0.0
 Requires-Dist: requests>=2.25.0
 Requires-Dist: fastapi>=0.68.0
+Requires-Dist: apscheduler>=3.10.0
+Requires-Dist: aiosmtplib>=3.0.0
+Requires-Dist: jinja2>=3.0.0
+Requires-Dist: weasyprint>=53.0
+Requires-Dist: markdown>=3.0
 Provides-Extra: dev
 Requires-Dist: pytest>=6.0; extra == "dev"
 Requires-Dist: pytest-cov; extra == "dev"

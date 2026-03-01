@@ -1,8 +1,10 @@
-"""Enhanced Data Fetcher with support for multiple data sources including Tushare, EastMoney, and AkShare."""
+"""Enhanced Data Fetcher with support for multiple data sources including Ashare, EastMoney, Tushare, and AkShare."""
 
 import os
-import tushare as ts
+import time
+import json
 import requests
+import tushare as ts
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
@@ -12,7 +14,6 @@ from ...core.registry import registry, ComponentType
 from ...core.logging import get_logger
 
 # Clear proxy environment variables at module level to avoid connection issues
-# This affects requests library used by AkShare and other data sources
 for _proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy',
                    'ALL_PROXY', 'all_proxy']:
     if _proxy_var in os.environ:
@@ -35,6 +36,151 @@ except ImportError:
     bs = None
 
 logger = get_logger(__name__)
+
+
+# ==================== Ashare 数据源（最高优先级）====================
+# 基于 https://github.com/mpquant/Ashare 的双核心架构
+# 新浪 + 腾讯数据源，自动故障切换，免费无需Token
+
+class AshareFetcher:
+    """
+    Ashare 数据获取器
+
+    特点：
+    - 双核心：新浪(主力) + 腾讯(备用)，自动故障切换
+    - 免费：无需注册和API Token
+    - 实时：支持日线、周线、月线、分钟线
+    - 轻量：单文件实现，无复杂依赖
+    """
+
+    @staticmethod
+    def _normalize_code(code: str) -> str:
+        """标准化股票代码为新浪/腾讯格式"""
+        # 处理聚宽格式 000001.XSHG -> sh000001
+        code = code.replace('.XSHG', '').replace('.XSHE', '')
+        code = code.replace('.SH', '').replace('.SZ', '')
+
+        if code.startswith(('sh', 'sz', 'SH', 'SZ')):
+            return code.lower()
+
+        # 根据代码判断市场
+        if code.startswith(('5', '6', '9')):
+            return f'sh{code}'
+        else:
+            return f'sz{code}'
+
+    @staticmethod
+    def _get_price_day_tx(code: str, end_date: str = '', count: int = 100, frequency: str = '1d') -> pd.DataFrame:
+        """腾讯日线数据获取"""
+        unit = 'week' if frequency == '1w' else 'month' if frequency == '1M' else 'day'
+
+        if end_date:
+            if isinstance(end_date, datetime):
+                end_date = end_date.strftime('%Y-%m-%d')
+            end_date = end_date.split(' ')[0]
+            if end_date == datetime.now().strftime('%Y-%m-%d'):
+                end_date = ''
+
+        url = f'http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={code},{unit},,{end_date},{count},qfq'
+
+        try:
+            response = requests.get(url, timeout=10)
+            st = json.loads(response.content)
+            ms = 'qfq' + unit
+            stk = st['data'][code]
+            buf = stk[ms] if ms in stk else stk[unit]
+
+            df = pd.DataFrame(buf, columns=['timestamp', 'open', 'close', 'high', 'low', 'volume'], dtype='float')
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+            # 添加 amount 列（腾讯不提供成交额，用 close * volume 估算）
+            df['amount'] = df['close'] * df['volume'] * 100  # 手转换为股
+
+            return df
+        except Exception as e:
+            logger.warning(f"腾讯数据获取失败: {str(e)}")
+            return pd.DataFrame()
+
+    @staticmethod
+    def _get_price_sina(code: str, end_date: str = '', count: int = 100, frequency: str = '1d') -> pd.DataFrame:
+        """新浪全周期数据获取"""
+        freq_map = {'1d': '240m', '1w': '1200m', '1M': '7200m'}
+        frequency = freq_map.get(frequency, frequency)
+
+        ts = int(frequency[:-1]) if frequency[:-1].isdigit() else 1
+        mcount = count
+
+        if end_date and frequency in ['240m', '1200m', '7200m']:
+            end_dt = pd.to_datetime(end_date) if not isinstance(end_date, datetime) else end_date
+            unit = 4 if frequency == '1200m' else 29 if frequency == '7200m' else 1
+            count = count + (datetime.now() - end_dt).days // unit
+
+        url = f'http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol={code}&scale={ts}&ma=5&datalen={count}'
+
+        try:
+            response = requests.get(url, timeout=10)
+            dstr = json.loads(response.content)
+
+            df = pd.DataFrame(dstr, columns=['day', 'open', 'high', 'low', 'close', 'volume'])
+            df['open'] = df['open'].astype(float)
+            df['high'] = df['high'].astype(float)
+            df['low'] = df['low'].astype(float)
+            df['close'] = df['close'].astype(float)
+            df['volume'] = df['volume'].astype(float)
+
+            df['day'] = pd.to_datetime(df['day'])
+            df = df.rename(columns={'day': 'timestamp'})
+
+            # 添加 amount 列
+            df['amount'] = df['close'] * df['volume'] * 100
+
+            if end_date and frequency in ['240m', '1200m', '7200m']:
+                end_dt = pd.to_datetime(end_date) if not isinstance(end_date, datetime) else end_date
+                df = df[df['timestamp'] <= end_dt][-mcount:]
+
+            return df
+        except Exception as e:
+            logger.warning(f"新浪数据获取失败: {str(e)}")
+            return pd.DataFrame()
+
+    @classmethod
+    def get_price(cls, code: str, end_date: str = '', count: int = 100, frequency: str = '1d') -> pd.DataFrame:
+        """
+        获取股票行情数据
+
+        Args:
+            code: 股票代码，支持多种格式 (sh600519, 600519.XSHG, 600519)
+            end_date: 结束日期 (YYYY-MM-DD)
+            count: 获取数量
+            frequency: 周期 ('1d', '1w', '1M', '1m', '5m', '15m', '30m', '60m')
+
+        Returns:
+            DataFrame with columns: time, open, high, low, close, volume, amount
+        """
+        xcode = cls._normalize_code(code)
+
+        # 日线、周线、月线
+        if frequency in ['1d', '1w', '1M']:
+            # 主力：新浪，备用：腾讯
+            try:
+                df = cls._get_price_sina(xcode, end_date=end_date, count=count, frequency=frequency)
+                if not df.empty:
+                    return df
+            except Exception:
+                pass
+
+            try:
+                df = cls._get_price_day_tx(xcode, end_date=end_date, count=count, frequency=frequency)
+                if not df.empty:
+                    return df
+            except Exception:
+                pass
+
+        # 分钟线（暂不支持，返回空）
+        if frequency in ['1m', '5m', '15m', '30m', '60m']:
+            logger.warning(f"Ashare 暂不支持分钟线数据: {frequency}")
+
+        return pd.DataFrame()
 
 
 def setup_tushare_api(token: str):
@@ -75,6 +221,10 @@ class EnhancedDataFetcher(IDataProvider):
         self.pro_api = setup_tushare_api(self.tushare_token)
         self._tushare_initialized = False
 
+        # TuShare rate limiting (50 stocks per minute)
+        self._tushare_request_count = 0
+        self._tushare_last_reset = time.time()
+
         # EastMoney headers
         self.eastmoney_headers = {
             'Cookie': self.eastmoney_cookie,
@@ -90,34 +240,86 @@ class EnhancedDataFetcher(IDataProvider):
     def initialize(self) -> None:
         """Initialize the data fetcher connections."""
         try:
-            # Try to verify Tushare connection, but be tolerant of permission errors
-            try:
-                df = self.pro_api.trade_cal(
-                    exchange="", start_date="20230101", end_date="20230102"
-                )
-                if df.empty:
-                    logger.warning("Tushare connection established but no data returned for test query")
-                else:
-                    logger.info("Tushare connection verified successfully")
-            except Exception as e:
-                # Log the error but continue - the token may have limited permissions
-                logger.warning(f"Tushare connection test failed (may have limited permissions): {str(e)}")
+            # Skip Tushare connection test - it's unreliable
+            # Just mark as initialized and fail later if needed
+            logger.info("Skipping Tushare connection test (unreliable)")
 
             # Verify EastMoney connection
             if self.eastmoney_cookie:
                 # Perform a simple request to verify cookie is valid
                 try:
                     test_url = "https://np-analyse.eastmoney.com/api/qt/ulist.np/get?po=1&pz=1&pn=1&np=1&fltt=2&invt=2&wbp2u=12915131124252524252135421&fid=f3&fs=m:0+t:6+f:!50&fields=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f24,f25,f26,f22,f33,f11,f62,f128,f136,f115,f152"
-                    response = requests.get(test_url, headers=self.eastmoney_headers)
+                    response = requests.get(test_url, headers=self.eastmoney_headers, timeout=10)
                     # Just check if we get a response without error
                     logger.info("EastMoney connection verified")
                 except Exception as e:
                     logger.warning(f"Could not verify EastMoney connection: {str(e)}")
 
             self._tushare_initialized = True
-            logger.info("EnhancedDataFetcher initialized successfully")
+            logger.info("EnhancedDataFetcher initialized successfully (Ashare as primary)")
         except Exception as e:
             raise DataProviderError(f"Failed to initialize EnhancedDataFetcher: {str(e)}")
+
+    def _fetch_from_ashare(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        从 Ashare 获取数据（最高优先级）
+
+        Ashare 特点：
+        - 双核心：新浪(主力) + 腾讯(备用)，自动故障切换
+        - 免费：无需注册和API Token
+        - 实时：支持日线、周线、月线
+        """
+        try:
+            # 计算需要获取的数据条数
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            days = (end_dt - start_dt).days + 1
+            count = min(days + 30, 1000)  # 多取一些数据确保覆盖
+
+            logger.info(f"Fetching {symbol} from Ashare (primary source)")
+
+            df = AshareFetcher.get_price(
+                code=symbol,
+                end_date=end_date,
+                count=count,
+                frequency='1d'
+            )
+
+            if df.empty:
+                logger.warning(f"Ashare returned no data for {symbol}")
+                return pd.DataFrame()
+
+            # AshareFetcher 已经返回正确格式的 DataFrame
+            # 确保 timestamp 是 datetime 类型
+            if 'timestamp' not in df.columns:
+                logger.warning(f"Ashare data missing timestamp column, columns: {list(df.columns)}")
+                return pd.DataFrame()
+
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+            # 过滤日期范围
+            start_dt = pd.to_datetime(start_date)
+            end_dt = pd.to_datetime(end_date)
+            df = df[(df['timestamp'] >= start_dt) & (df['timestamp'] <= end_dt)]
+
+            # 添加必要的列
+            df['symbol'] = symbol
+            df['timeframe'] = '1d'
+
+            # 确保列顺序正确
+            expected_cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'amount', 'timeframe', 'symbol']
+            available_cols = [col for col in expected_cols if col in df.columns]
+            df = df[available_cols]
+
+            df.sort_values('timestamp', inplace=True)
+            df.reset_index(drop=True, inplace=True)
+
+            logger.info(f"Successfully fetched {len(df)} bars from Ashare for {symbol}")
+            return df
+
+        except Exception as e:
+            logger.warning(f"Ashare fetch failed for {symbol}: {str(e)}")
+            return pd.DataFrame()
 
     def _fetch_from_eastmoney(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         """Fetch data from EastMoney if available."""
@@ -157,7 +359,7 @@ class EnhancedDataFetcher(IDataProvider):
                 'end': end_date.replace('-', '')
             }
 
-            response = requests.get(url, headers=self.eastmoney_headers, params=params)
+            response = requests.get(url, headers=self.eastmoney_headers, params=params, timeout=15)
             data = response.json()
 
             if data.get('rc') != 0:
@@ -227,27 +429,33 @@ class EnhancedDataFetcher(IDataProvider):
             start_formatted = start_date.replace('-', '')
             end_formatted = end_date.replace('-', '')
 
-            # Determine market prefix for AkShare
-            if base_symbol.startswith(('5', '6', '9')):
-                # Shanghai stocks
-                ak_symbol = f"sh{base_symbol}"
-            else:
-                # Shenzhen stocks
-                ak_symbol = f"sz{base_symbol}"
+            logger.info(f"Fetching {symbol} from AkShare using base symbol {base_symbol}")
 
-            logger.info(f"Fetching {symbol} from AkShare using {ak_symbol}")
+            # Use AkShare's stock_zh_a_hist interface with retry
+            max_retries = 3
+            df = pd.DataFrame()
+            last_error = None
 
-            # Use AkShare's stock_zh_a_hist interface
-            df = ak.stock_zh_a_hist(
-                symbol=base_symbol,
-                period="daily",
-                start_date=start_formatted,
-                end_date=end_formatted,
-                adjust="qfq"  # Forward adjusted
-            )
+            for attempt in range(max_retries):
+                try:
+                    df = ak.stock_zh_a_hist(
+                        symbol=base_symbol,
+                        period="daily",
+                        start_date=start_formatted,
+                        end_date=end_formatted,
+                        adjust="qfq"  # Forward adjusted
+                    )
+                    if not df.empty:
+                        break
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"AkShare attempt {attempt + 1} failed: {str(e)}")
+                    if attempt < max_retries - 1:
+                        time.sleep(1)  # Wait before retry
 
             if df.empty:
-                logger.warning(f"No AkShare data found for {symbol}")
+                error_msg = str(last_error) if last_error else "No data returned"
+                logger.warning(f"No AkShare data found for {symbol}: {error_msg}")
                 return pd.DataFrame()
 
             # Rename columns to match expected format
@@ -395,7 +603,13 @@ class EnhancedDataFetcher(IDataProvider):
     ) -> Dict[str, pd.DataFrame]:
         """
         Get OHLCV bars for the given symbols and timeframe.
-        Prioritizes Tushare data (most reliable), falls back to EastMoney, then AkShare.
+
+        数据源优先级：
+        1. Ashare（免费、无需Token、双核心：新浪+腾讯）
+        2. EastMoney（需要cookie）
+        3. AkShare（免费）
+        4. Tushare（需要Token、有频率限制）
+        5. BaoStock（免费）
 
         Args:
             symbols: List of symbols to retrieve
@@ -419,8 +633,39 @@ class EnhancedDataFetcher(IDataProvider):
             try:
                 df = pd.DataFrame()
 
-                # Try Tushare first (most reliable)
-                logger.info(f"Attempting to fetch {symbol} from Tushare")
+                # 1. 最高优先级：Ashare（免费、无需Token、双核心）
+                logger.info(f"Fetching {symbol} from Ashare (primary source)")
+                df = self._fetch_from_ashare(symbol, start_str, end_str)
+                if not df.empty:
+                    results[symbol] = df
+                    continue
+
+                # 2. 备用：EastMoney
+                if self.eastmoney_cookie:
+                    logger.info(f"Falling back to EastMoney for {symbol}")
+                    df = self._fetch_from_eastmoney(symbol, start_str, end_str)
+                    if not df.empty:
+                        results[symbol] = df
+                        continue
+
+                # 3. 备用：AkShare
+                if self.use_akshare:
+                    logger.info(f"Falling back to AkShare for {symbol}")
+                    df = self._fetch_from_akshare(symbol, start_str, end_str)
+                    if not df.empty:
+                        results[symbol] = df
+                        continue
+
+                # 4. 备用：BaoStock
+                if BAOSTOCK_AVAILABLE:
+                    logger.info(f"Falling back to BaoStock for {symbol}")
+                    df = self._fetch_from_baostock(symbol, start_str, end_str)
+                    if not df.empty:
+                        results[symbol] = df
+                        continue
+
+                # 5. 最后备用：Tushare（有频率限制，可能超时）
+                logger.info(f"Last resort: attempting to fetch {symbol} from Tushare")
 
                 # Convert to Tushare format
                 if '.' not in symbol:
@@ -437,6 +682,16 @@ class EnhancedDataFetcher(IDataProvider):
                 start_ts = start_date.strftime("%Y%m%d")
                 end_ts = end_date.strftime("%Y%m%d")
 
+                # TuShare rate limiting: wait after every 50 requests
+                if self._tushare_request_count >= 50:
+                    elapsed = time.time() - self._tushare_last_reset
+                    if elapsed < 60:
+                        sleep_time = 60 - elapsed
+                        logger.info(f"TuShare rate limit reached ({self._tushare_request_count} requests), waiting {sleep_time:.1f} seconds...")
+                        time.sleep(sleep_time)
+                    self._tushare_request_count = 0
+                    self._tushare_last_reset = time.time()
+
                 if timeframe == "1d":
                     try:
                         df = self.pro_api.daily(
@@ -446,6 +701,8 @@ class EnhancedDataFetcher(IDataProvider):
                         if df.empty:
                             logger.warning(f"No data found from Tushare for symbol {tushare_symbol}")
                         else:
+                            # Increment request counter on successful call
+                            self._tushare_request_count += 1
                             # Rename columns to match expected format
                             df.rename(
                                 columns={

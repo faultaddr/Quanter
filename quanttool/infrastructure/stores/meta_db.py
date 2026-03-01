@@ -165,6 +165,116 @@ class MetaDB:
             "CREATE INDEX IF NOT EXISTS idx_scan_records_date ON scan_records(scan_date)"
         )
 
+        # Table for portfolio backtests (投资组合回测)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS portfolio_backtests (
+                id TEXT PRIMARY KEY,
+                scan_id TEXT NOT NULL,
+                portfolio_name TEXT NOT NULL,
+                initial_capital REAL NOT NULL,
+                current_value REAL,
+                start_date TEXT NOT NULL,
+                end_date TEXT,
+                hold_days INTEGER DEFAULT 20,
+                status TEXT DEFAULT 'active',
+                total_return REAL,
+                annualized_return REAL,
+                sharpe_ratio REAL,
+                max_drawdown REAL,
+                volatility REAL,
+                win_rate REAL,
+                created_at TEXT,
+                completed_at TEXT,
+                FOREIGN KEY (scan_id) REFERENCES scan_records(id)
+            )
+        """
+        )
+
+        # Table for portfolio holdings (投资组合持仓明细)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS portfolio_holdings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                backtest_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                name TEXT,
+                entry_date TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                shares INTEGER NOT NULL,
+                weight REAL NOT NULL,
+                initial_value REAL NOT NULL,
+                exit_date TEXT,
+                exit_price REAL,
+                realized_return REAL,
+                max_return REAL,
+                max_drawdown REAL,
+                status TEXT DEFAULT 'holding',
+                created_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (backtest_id) REFERENCES portfolio_backtests(id)
+            )
+        """
+        )
+
+        # Table for portfolio daily values (组合每日净值)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS portfolio_daily_values (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                backtest_id TEXT NOT NULL,
+                date TEXT NOT NULL,
+                total_value REAL NOT NULL,
+                cash_value REAL NOT NULL,
+                market_value REAL NOT NULL,
+                daily_return REAL,
+                cumulative_return REAL,
+                benchmark_return REAL,
+                created_at TEXT,
+                FOREIGN KEY (backtest_id) REFERENCES portfolio_backtests(id),
+                UNIQUE(backtest_id, date)
+            )
+        """
+        )
+
+        # Table for email configurations (邮件配置)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS email_configs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                smtp_host TEXT NOT NULL,
+                smtp_port INTEGER DEFAULT 587,
+                username TEXT NOT NULL,
+                password TEXT NOT NULL,
+                from_addr TEXT NOT NULL,
+                to_addrs TEXT NOT NULL,
+                enabled BOOLEAN DEFAULT 1,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        """
+        )
+
+        # Create indexes for new tables
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_portfolio_backtests_scan_id ON portfolio_backtests(scan_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_portfolio_backtests_status ON portfolio_backtests(status)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_portfolio_holdings_backtest_id ON portfolio_holdings(backtest_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_portfolio_holdings_symbol ON portfolio_holdings(symbol)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_portfolio_daily_values_backtest_id ON portfolio_daily_values(backtest_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_portfolio_daily_values_date ON portfolio_daily_values(date)"
+        )
+
         conn.commit()
         conn.close()
 
@@ -923,3 +1033,439 @@ class MetaDB:
             "only_in_scan_1_count": len(only_in_1),
             "only_in_scan_2_count": len(only_in_2),
         }
+
+    # ==================== Portfolio Backtest Methods ====================
+
+    def create_portfolio_backtest(self, backtest_data: Dict[str, Any]) -> str:
+        """
+        Create a new portfolio backtest record.
+
+        Args:
+            backtest_data: Dictionary containing backtest information
+                - id: backtest ID (optional)
+                - scan_id: associated scan record ID
+                - portfolio_name: name of the portfolio
+                - initial_capital: initial capital amount
+                - start_date: start date of the backtest
+                - end_date: end date of the backtest (optional)
+                - status: status (active/closed/pending)
+
+        Returns:
+            backtest_id: The ID of the created backtest record
+        """
+        import uuid
+
+        backtest_id = backtest_data.get("id", str(uuid.uuid4()))
+        created_at = datetime.now().isoformat()
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO portfolio_backtests
+            (id, scan_id, portfolio_name, initial_capital, start_date, end_date, status,
+             total_return, annualized_return, sharpe_ratio, max_drawdown, created_at, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                backtest_id,
+                backtest_data.get("scan_id"),
+                backtest_data.get("portfolio_name", f"Portfolio_{backtest_id[:8]}"),
+                backtest_data.get("initial_capital", 500000),
+                backtest_data.get("start_date"),
+                backtest_data.get("end_date"),
+                backtest_data.get("status", "active"),
+                backtest_data.get("total_return"),
+                backtest_data.get("annualized_return"),
+                backtest_data.get("sharpe_ratio"),
+                backtest_data.get("max_drawdown"),
+                created_at,
+                backtest_data.get("completed_at"),
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Created portfolio backtest: {backtest_id}")
+        return backtest_id
+
+    def add_portfolio_holding(self, holding_data: Dict[str, Any]) -> int:
+        """
+        Add a holding to a portfolio backtest.
+
+        Args:
+            holding_data: Dictionary containing holding information
+
+        Returns:
+            holding_id: The ID of the created holding record
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO portfolio_holdings
+            (backtest_id, symbol, name, entry_date, entry_price, shares, weight, status, exit_date, exit_price, realized_return)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                holding_data.get("backtest_id"),
+                holding_data.get("symbol"),
+                holding_data.get("name"),
+                holding_data.get("entry_date"),
+                holding_data.get("entry_price"),
+                holding_data.get("shares"),
+                holding_data.get("weight"),
+                holding_data.get("status", "holding"),
+                holding_data.get("exit_date"),
+                holding_data.get("exit_price"),
+                holding_data.get("realized_return"),
+            ),
+        )
+
+        holding_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        return holding_id
+
+    def update_holding_exit(self, holding_id: int, exit_data: Dict[str, Any]):
+        """Update holding with exit information."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            UPDATE portfolio_holdings
+            SET exit_date = ?, exit_price = ?, realized_return = ?, status = 'closed'
+            WHERE id = ?
+        """,
+            (
+                exit_data.get("exit_date"),
+                exit_data.get("exit_price"),
+                exit_data.get("realized_return"),
+                holding_id,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    def record_daily_value(self, value_data: Dict[str, Any]):
+        """Record daily portfolio value."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO portfolio_daily_values
+            (backtest_id, date, total_value, cash_value, market_value, daily_return)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """,
+            (
+                value_data.get("backtest_id"),
+                value_data.get("date"),
+                value_data.get("total_value"),
+                value_data.get("cash_value"),
+                value_data.get("market_value"),
+                value_data.get("daily_return"),
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    def get_portfolio_backtest(self, backtest_id: str) -> Optional[Dict[str, Any]]:
+        """Get portfolio backtest by ID with holdings."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Get backtest record
+        cursor.execute(
+            """
+            SELECT id, scan_id, portfolio_name, initial_capital, start_date, end_date, status,
+                   total_return, annualized_return, sharpe_ratio, max_drawdown, created_at, completed_at
+            FROM portfolio_backtests WHERE id = ?
+        """,
+            (backtest_id,),
+        )
+
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return None
+
+        backtest = {
+            "id": row[0],
+            "scan_id": row[1],
+            "portfolio_name": row[2],
+            "initial_capital": row[3],
+            "start_date": row[4],
+            "end_date": row[5],
+            "status": row[6],
+            "total_return": row[7],
+            "annualized_return": row[8],
+            "sharpe_ratio": row[9],
+            "max_drawdown": row[10],
+            "created_at": row[11],
+            "completed_at": row[12],
+        }
+
+        # Get holdings
+        cursor.execute(
+            """
+            SELECT id, symbol, name, entry_date, entry_price, shares, weight, status,
+                   exit_date, exit_price, realized_return
+            FROM portfolio_holdings WHERE backtest_id = ?
+        """,
+            (backtest_id,),
+        )
+
+        holdings = []
+        for row in cursor.fetchall():
+            holdings.append(
+                {
+                    "id": row[0],
+                    "symbol": row[1],
+                    "name": row[2],
+                    "entry_date": row[3],
+                    "entry_price": row[4],
+                    "shares": row[5],
+                    "weight": row[6],
+                    "status": row[7],
+                    "exit_date": row[8],
+                    "exit_price": row[9],
+                    "realized_return": row[10],
+                }
+            )
+
+        backtest["holdings"] = holdings
+
+        # Get daily values
+        cursor.execute(
+            """
+            SELECT date, total_value, cash_value, market_value, daily_return
+            FROM portfolio_daily_values WHERE backtest_id = ? ORDER BY date
+        """,
+            (backtest_id,),
+        )
+
+        daily_values = []
+        for row in cursor.fetchall():
+            daily_values.append(
+                {
+                    "date": row[0],
+                    "total_value": row[1],
+                    "cash_value": row[2],
+                    "market_value": row[3],
+                    "daily_return": row[4],
+                }
+            )
+
+        backtest["daily_values"] = daily_values
+        conn.close()
+
+        return backtest
+
+    def get_active_portfolios(self) -> List[Dict[str, Any]]:
+        """Get all active (non-closed) portfolio backtests."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT id, scan_id, portfolio_name, initial_capital, start_date, status
+            FROM portfolio_backtests WHERE status = 'active' ORDER BY created_at DESC
+        """
+        )
+
+        portfolios = []
+        for row in cursor.fetchall():
+            portfolios.append(
+                {
+                    "id": row[0],
+                    "scan_id": row[1],
+                    "portfolio_name": row[2],
+                    "initial_capital": row[3],
+                    "start_date": row[4],
+                    "status": row[5],
+                }
+            )
+
+        conn.close()
+        return portfolios
+
+    def close_portfolio_backtest(self, backtest_id: str, metrics: Dict[str, Any]):
+        """Close a portfolio backtest and update metrics."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        completed_at = datetime.now().isoformat()
+
+        cursor.execute(
+            """
+            UPDATE portfolio_backtests
+            SET status = 'closed', end_date = ?, total_return = ?, annualized_return = ?,
+                sharpe_ratio = ?, max_drawdown = ?, completed_at = ?
+            WHERE id = ?
+        """,
+            (
+                metrics.get("end_date"),
+                metrics.get("total_return"),
+                metrics.get("annualized_return"),
+                metrics.get("sharpe_ratio"),
+                metrics.get("max_drawdown"),
+                completed_at,
+                backtest_id,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    # ==================== Email Config Methods ====================
+
+    def save_email_config(self, config_data: Dict[str, Any]) -> str:
+        """Save email configuration."""
+        import uuid
+
+        config_id = config_data.get("id", str(uuid.uuid4()))
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO email_configs
+            (id, smtp_host, smtp_port, username, password, from_addr, to_addrs, enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                config_id,
+                config_data.get("smtp_host"),
+                config_data.get("smtp_port"),
+                config_data.get("username"),
+                config_data.get("password"),
+                config_data.get("from_addr"),
+                json.dumps(config_data.get("to_addrs", [])),
+                config_data.get("enabled", True),
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+        return config_id
+
+    def get_email_config(self, config_id: str = None) -> Optional[Dict[str, Any]]:
+        """Get email configuration."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        if config_id:
+            cursor.execute(
+                """
+                SELECT id, smtp_host, smtp_port, username, password, from_addr, to_addrs, enabled
+                FROM email_configs WHERE id = ?
+            """,
+                (config_id,),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, smtp_host, smtp_port, username, password, from_addr, to_addrs, enabled
+                FROM email_configs WHERE enabled = 1 LIMIT 1
+            """
+            )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            return {
+                "id": row[0],
+                "smtp_host": row[1],
+                "smtp_port": row[2],
+                "username": row[3],
+                "password": row[4],
+                "from_addr": row[5],
+                "to_addrs": json.loads(row[6]) if row[6] else [],
+                "enabled": row[7],
+            }
+
+        return None
+
+    # ==================== Scheduled Task Methods ====================
+
+    def record_task_execution(self, task_data: Dict[str, Any]) -> str:
+        """Record a scheduled task execution."""
+        import uuid
+
+        execution_id = task_data.get("id", str(uuid.uuid4()))
+        executed_at = datetime.now().isoformat()
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO scheduled_tasks
+            (id, task_type, schedule_expr, executed_at, status, result, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                execution_id,
+                task_data.get("task_type"),
+                task_data.get("schedule_expr"),
+                executed_at,
+                task_data.get("status", "success"),
+                json.dumps(task_data.get("result")) if task_data.get("result") else None,
+                task_data.get("error"),
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+        return execution_id
+
+    def get_recent_task_executions(self, task_type: str = None, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent task executions."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        if task_type:
+            cursor.execute(
+                """
+                SELECT id, task_type, schedule_expr, executed_at, status, result, error
+                FROM scheduled_tasks WHERE task_type = ? ORDER BY executed_at DESC LIMIT ?
+            """,
+                (task_type, limit),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, task_type, schedule_expr, executed_at, status, result, error
+                FROM scheduled_tasks ORDER BY executed_at DESC LIMIT ?
+            """,
+                (limit,),
+            )
+
+        executions = []
+        for row in cursor.fetchall():
+            executions.append(
+                {
+                    "id": row[0],
+                    "task_type": row[1],
+                    "schedule_expr": row[2],
+                    "executed_at": row[3],
+                    "status": row[4],
+                    "result": json.loads(row[5]) if row[5] else None,
+                    "error": row[6],
+                }
+            )
+
+        conn.close()
+        return executions
