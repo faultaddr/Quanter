@@ -197,7 +197,8 @@ class TestScoringSystem:
         """Test ScoringSystem initialization."""
         assert scoring_system is not None
         assert hasattr(scoring_system, 'TREND_FACTOR_WEIGHTS')
-        assert 'candlestick_pattern' in scoring_system.TREND_FACTOR_WEIGHTS
+        # K线形态已移至独立筛选层，不再参与评分计算
+        # 筛选层测试在 test_screening.py 中
 
     def test_candlestick_weights_configured(self, scoring_system):
         """Test that candlestick pattern weights are configured."""

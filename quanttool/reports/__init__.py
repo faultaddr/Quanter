@@ -11,10 +11,19 @@ from .generators import (
     ReportFactory,
 )
 
+from .signal_backtest_report import (
+    SignalBacktestReporter,
+    SignalPerformance,
+    HistoricalSignalAnalysis,
+)
+
 __all__ = [
     "BaseReportGenerator",
     "BacktestReportGenerator",
     "FactorReportGenerator",
     "HTMLReportGenerator",
     "ReportFactory",
+    "SignalBacktestReporter",
+    "SignalPerformance",
+    "HistoricalSignalAnalysis",
 ]

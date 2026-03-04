@@ -190,29 +190,30 @@ class ScoringSystem:
     - 危险区: 0.35
     """
 
-    # 三大类因子权重配置
+    # 三大类因子权重配置（优化版：降低趋势追高权重，增加均值回归考量）
     FACTOR_GROUP_WEIGHTS = {
-        'trend': 0.40,    # 趋势因子权重
-        'momentum': 0.35, # 动能因子权重
+        'trend': 0.35,    # 趋势因子权重（降低）
+        'momentum': 0.40, # 动能因子权重（提高）
         'money': 0.25,    # 资金因子权重
     }
 
-    # 趋势因子权重（组内）- 与 _calculate_trend_score 中 factor_scores 键名一致
+    # 趋势因子权重（组内）- 优化版：降低追高风险
+    # 注意：K线形态已移至独立筛选层，不再参与评分计算
+    # 分析发现 ma_slope 与收益负相关，需要降低权重
     TREND_FACTOR_WEIGHTS = {
-        'trend_strength': 0.20,       # 趋势强度（MA20乖离率）
-        'ma_slope': 0.20,             # 均线斜率
-        'macd_momentum': 0.20,        # MACD动量
-        'money_flow': 0.20,           # 资金流向
-        'volume_ratio': 0.10,         # 成交量比率
-        'candlestick_pattern': 0.10,  # K线形态（新增）
+        'trend_strength': 0.30,      # 趋势强度（MA20乖离率）- 提高
+        'ma_slope': 0.10,            # 均线斜率 - 降低（负相关因子）
+        'macd_momentum': 0.30,       # MACD动量 - 提高（正相关因子）
+        'money_flow': 0.20,          # 资金流向
+        'volume_ratio': 0.10,        # 成交量比率
     }
 
-    # 动能因子权重（组内）
+    # 动能因子权重（组内）- 增加 RSI 均值回归
     MOMENTUM_FACTOR_WEIGHTS = {
-        'kdj_position': 0.30,   # KDJ位置
-        'rsi_strength': 0.35,   # RSI强度
+        'kdj_position': 0.25,   # KDJ位置
+        'rsi_strength': 0.35,   # RSI强度（关注超卖反弹）
         'mtm_momentum': 0.20,   # MTM动量
-        'roc_rate': 0.15,       # ROC变动率
+        'roc_rate': 0.20,       # ROC变动率（提高）
     }
 
     # 资金因子权重（组内）
@@ -270,15 +271,160 @@ class ScoringSystem:
         'mid_position': {'bullish': 1.0, 'bearish': 1.0},   # 中位: 正常权重
     }
 
-    def __init__(self, stop_loss_pct: float = 0.05):
+    def __init__(self, stop_loss_pct: float = 0.05, use_dynamic_weights: bool = False):
         """
         初始化评分系统
 
         Args:
             stop_loss_pct: 止损比例，默认5%（买入价×0.95）
+            use_dynamic_weights: 是否使用动态权重
         """
         self.stop_loss_pct = stop_loss_pct
+        self.use_dynamic_weights = use_dynamic_weights
         self.score_breakdown = {}
+
+        # 动态权重相关
+        self._dynamic_weights = None
+        self._market_regime = None
+
+        # 验证钩子
+        self._validation_callback = None
+
+    def set_dynamic_weights(self, weights: Dict[str, float]) -> None:
+        """
+        设置动态因子组权重
+
+        Args:
+            weights: 包含 'trend', 'momentum', 'money' 的权重字典
+        """
+        if weights:
+            # 验证权重
+            total = weights.get('trend', 0) + weights.get('momentum', 0) + weights.get('money', 0)
+            if abs(total - 1.0) > 0.01:
+                # 归一化权重
+                if total > 0:
+                    weights = {
+                        'trend': weights.get('trend', 0) / total,
+                        'momentum': weights.get('momentum', 0) / total,
+                        'money': weights.get('money', 0) / total
+                    }
+            self._dynamic_weights = weights
+            self.use_dynamic_weights = True
+
+    def set_market_regime(self, regime: str) -> None:
+        """
+        设置市场状态
+
+        Args:
+            regime: 市场状态 ('bull', 'bear', 'sideway', 'volatile')
+        """
+        self._market_regime = regime
+
+        # 根据市场状态设置默认权重
+        regime_weights = {
+            'bull': {'trend': 0.50, 'momentum': 0.30, 'money': 0.20},
+            'bear': {'trend': 0.30, 'momentum': 0.25, 'money': 0.45},
+            'sideway': {'trend': 0.25, 'momentum': 0.45, 'money': 0.30},
+            'volatile': {'trend': 0.35, 'momentum': 0.30, 'money': 0.35},
+        }
+        if regime in regime_weights:
+            self.set_dynamic_weights(regime_weights[regime])
+
+    def set_validation_callback(self, callback) -> None:
+        """
+        设置验证回调函数
+
+        Args:
+            callback: 回调函数，接收评分结果作为参数
+        """
+        self._validation_callback = callback
+
+    def get_current_weights(self) -> Dict[str, float]:
+        """获取当前使用的权重"""
+        if self.use_dynamic_weights and self._dynamic_weights:
+            return self._dynamic_weights.copy()
+        return self.FACTOR_GROUP_WEIGHTS.copy()
+
+    def calculate_comprehensive_score(self, df: pd.DataFrame) -> Dict:
+        """
+        计算综合评分（简化版，用于回测）
+
+        Args:
+            df: 股票数据DataFrame
+
+        Returns:
+            Dict: 包含 final_score 和各因子评分
+        """
+        if df.empty or len(df) < 30:
+            return {'final_score': 50, 'trend_score': 50, 'momentum_score': 50, 'money_score': 50}
+
+        latest = df.iloc[-1]
+
+        # 计算因子
+        factors = self._calculate_trend_factors(df, latest)
+        trend_score, factor_scores = self._calculate_trend_score(factors, df)
+
+        # 计算位置修正系数
+        position_modifier, _ = self._calculate_position_modifier(latest, factors)
+
+        # 最终评分
+        final_score = trend_score * position_modifier
+
+        # 获取各因子组评分
+        momentum_factors = factors.get('momentum_factors', {})
+        money_factors = factors.get('money_factors', {})
+        aux_factors = factors.get('aux_factors', {})
+
+        momentum_score = sum(
+            momentum_factors.get(k, 50) * self.MOMENTUM_FACTOR_WEIGHTS.get(k, 0.25)
+            for k in self.MOMENTUM_FACTOR_WEIGHTS
+        )
+        money_score = sum(
+            money_factors.get(k, 50) * self.MONEY_FACTOR_WEIGHTS.get(k, 0.33)
+            for k in self.MONEY_FACTOR_WEIGHTS
+        )
+
+        # ========== 均值回归信号增强 ==========
+        # 分析发现：超卖信号（低BIAS + 低RSI）有显著正收益
+        mean_reversion_bonus = 0.0
+        bias20 = aux_factors.get('bias20', 0)
+        rsi = momentum_factors.get('rsi', 50)
+
+        # 超卖反转信号：BIAS20 < -3% 且 RSI < 40
+        if bias20 < -0.03 and rsi < 40:
+            mean_reversion_bonus = 15.0  # 强超卖反转信号
+        elif bias20 < -0.02 and rsi < 50:
+            mean_reversion_bonus = 8.0   # 中等超卖信号
+        elif bias20 < -0.01:
+            mean_reversion_bonus = 3.0   # 轻微超卖
+        # 超买风险警示：BIAS20 > +3% 且 RSI > 60
+        elif bias20 > 0.03 and rsi > 60:
+            mean_reversion_bonus = -10.0  # 强超买，有回调风险
+        elif bias20 > 0.02 and rsi > 55:
+            mean_reversion_bonus = -5.0   # 中等超买
+
+        # 应用均值回归修正
+        final_score = final_score + mean_reversion_bonus
+
+        result = {
+            'final_score': round(max(0, min(100, final_score)), 2),
+            'trend_score': round(trend_score, 2),
+            'momentum_score': round(momentum_score, 2),
+            'money_score': round(money_score, 2),
+            'position_modifier': round(position_modifier, 2),
+            'mean_reversion_bonus': mean_reversion_bonus,
+            'factor_scores': factor_scores,
+            'factors_raw': factors
+        }
+
+        # 验证钩子
+        if self._validation_callback:
+            try:
+                self._validation_callback(result)
+            except Exception:
+                pass
+
+        return result
 
     def calculate_all_scores(self, df: pd.DataFrame,
                             stock_code: str = "",
@@ -736,19 +882,8 @@ class ScoringSystem:
         }, aux_factors)  # 传入 aux_factors 用于均线排列判断
         factor_scores['volume_ratio'] = self._score_volume_ratio(volume_ratio, trend_direction)
 
-        # 6. K线形态评分（位置敏感）
-        if df is not None:
-            position_ratio = aux_factors.get('position_ratio', 0.5)
-            pctb = aux_factors.get('pctb', 0.5)
-            cs_score, cs_detail = self._calculate_candlestick_score(
-                df, position_ratio, bias20, pctb
-            )
-            # 将K线形态评分转换为0-100范围
-            factor_scores['candlestick_pattern'] = 50 + cs_score * (50/30)
-            # 保存详情到 factors 中
-            factors['candlestick_detail'] = cs_detail
-        else:
-            factor_scores['candlestick_pattern'] = 50.0  # 默认中性分
+        # K线形态已移至独立筛选层，不再参与评分计算
+        # 如需获取K线形态筛选结果，请在评分后调用 screening.CandlestickPatternScreener
 
         # 加权计算总分
         total_score = sum(
@@ -981,6 +1116,11 @@ class ScoringSystem:
         """
         计算K线形态评分（位置敏感）
 
+        .. deprecated::
+            此方法已废弃，K线形态已移至独立筛选层。
+            请使用 quanttool.factors.screening.CandlestickPatternScreener 替代。
+            保留此方法仅为向后兼容，将在未来版本中移除。
+
         核心逻辑：先判位置，再判形态
         - 低位 + 看涨形态 = 强力加分
         - 高位 + 看涨形态 = 减分（警惕诱多）
@@ -996,6 +1136,13 @@ class ScoringSystem:
         Returns:
             Tuple[float, Dict]: (评分 -30~+30, 详情字典)
         """
+        import warnings
+        warnings.warn(
+            "_calculate_candlestick_score 已废弃，请使用 screening.CandlestickPatternScreener",
+            DeprecationWarning,
+            stacklevel=2
+        )
+
         # 调用形态识别
         patterns_result = analyze_candlestick_patterns(df, lookback=5)
 
@@ -1155,25 +1302,32 @@ class ScoringSystem:
 
     def _score_ma_slope(self, slope: float, ma10: float, ma20: float) -> float:
         """
-        均线斜率评分
+        均线斜率评分（优化版：考虑均值回归）
+
+        核心逻辑：
+        - 温和上涨的斜率最好（可持续）
+        - 过于陡峭的斜率可能面临回调风险
+        - 下跌斜率在低位可能是买入机会
         """
         score = 50  # 基础分
 
-        # 斜率贡献
-        if slope > 0.02:  # 陡峭向上
-            score += 30
-        elif slope > 0.005:  # 温和向上
-            score += 20
-        elif slope > 0:  # 微弱向上
+        # 斜率贡献（优化：温和上涨最优，陡峭上涨风险大）
+        if slope > 0.03:  # 陡峭向上 - 可能过热，降低评分
+            score += 5  # 降低加分（原30）
+        elif slope > 0.01:  # 温和向上 - 最佳区间
+            score += 25
+        elif slope > 0.003:  # 微弱向上
+            score += 15
+        elif slope > -0.005:  # 平稳
             score += 10
-        elif slope > -0.01:  # 平稳
-            score += 0
-        else:  # 向下
-            score -= 20
+        elif slope > -0.02:  # 温和下跌 - 可能是买点
+            score += 5
+        else:  # 陡峭下跌
+            score -= 10  # 降低减分（原20）
 
-        # 金叉加分
+        # 金叉加分（降低权重）
         if ma10 > 0 and ma20 > 0 and ma10 > ma20:
-            score += 20
+            score += 10  # 降低加分（原20）
 
         return max(0, min(100, score))
 

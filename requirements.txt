@@ -12,3 +12,7 @@ seaborn>=0.11.0
 sqlalchemy>=1.4.0
 websockets>=10.0
 zoneinfo;python_version<"3.9"
+
+# 微软 Qlib 量化框架 (可选)
+pyqlib>=0.9.0
+lightgbm>=3.0.0

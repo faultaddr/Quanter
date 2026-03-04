@@ -90,6 +90,8 @@ class Position(BaseModel):
     timestamp: datetime
     unrealized_pnl: float = 0.0
     realized_pnl: float = 0.0
+    # T+1 规则支持：记录可卖日期（A股当天买入次日才可卖）
+    sellable_date: Optional[datetime] = None  # 可以卖出的日期
 
 
 class Portfolio(BaseModel):

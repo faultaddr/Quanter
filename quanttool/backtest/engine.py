@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 
 
 class BacktestEngine:
-    """Event-driven backtest engine."""
+    """Event-driven backtest engine with T+1 support for A-shares."""
 
     def __init__(self):
         """Initialize backtest engine."""
@@ -23,6 +23,7 @@ class BacktestEngine:
         self.slippage_rate = 0.0001
         self.max_position_size = 0.1
         self.max_positions = 10
+        self.enable_t_plus_1 = True  # A股 T+1 规则开关
 
         # Runtime state
         self.current_portfolio = None
@@ -54,6 +55,23 @@ class BacktestEngine:
     def set_max_positions(self, num: int):
         """Set maximum number of simultaneous positions."""
         self.max_positions = num
+
+    def set_t_plus_1(self, enabled: bool):
+        """Enable or disable T+1 rule for A-shares."""
+        self.enable_t_plus_1 = enabled
+
+    def _get_next_trading_day(self, current_date: datetime) -> datetime:
+        """
+        Get the next trading day from current date.
+        Simplified implementation: add 1 day, skip weekends.
+        For production, use a trading calendar.
+        """
+        from datetime import timedelta
+        next_day = current_date + timedelta(days=1)
+        # Skip weekends (Saturday=5, Sunday=6)
+        while next_day.weekday() >= 5:
+            next_day += timedelta(days=1)
+        return next_day
 
     def run_backtest(
         self,
@@ -233,14 +251,21 @@ class BacktestEngine:
                         existing_pos.quantity = total_qty
                         existing_pos.avg_price = avg_price
                         existing_pos.timestamp = exec_time
+                        # T+1: 新买入部分次日才能卖，但原有部分可以卖
+                        # 简化处理：混合持仓的可卖日期取最早的
+                        if existing_pos.sellable_date is None:
+                            existing_pos.sellable_date = self._get_next_trading_day(exec_time)
                     else:
-                        # Create new position
+                        # Create new position with T+1 restriction
+                        from datetime import timedelta
+                        sellable_date = self._get_next_trading_day(exec_time) if self.enable_t_plus_1 else exec_time
                         pos = Position(
                             symbol=symbol,
                             side="long",
                             quantity=quantity,
                             avg_price=price,
                             timestamp=exec_time,
+                            sellable_date=sellable_date,
                         )
                         self.positions[symbol] = pos
                         self.current_portfolio.positions.append(pos)
@@ -261,6 +286,12 @@ class BacktestEngine:
             # Check if we have a position in this symbol
             if symbol in self.positions and self.positions[symbol].side == "long":
                 pos = self.positions[symbol]
+
+                # T+1 检查：当天买入的股票不能卖出
+                if self.enable_t_plus_1 and pos.sellable_date is not None:
+                    if exec_time < pos.sellable_date:
+                        # 跳过卖出信号，因为还在 T+1 限制期内
+                        return
 
                 # Determine how much to sell (could be partial)
                 sell_quantity = min(pos.quantity, signal.get("quantity", pos.quantity))
