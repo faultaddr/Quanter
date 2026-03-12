@@ -24,6 +24,7 @@ dependencies = [
     "jinja2>=3.0.0",
     "weasyprint>=53.0",
     "markdown>=3.0",
+    "mcp>=1.0.0",
 ]
 
 [build-system]
@@ -60,6 +61,13 @@ data = [
     "pyarrow>=6.0.0",
     "polars>=0.13.0"
 ]
+agent = [
+    "mcp>=1.0.0",
+]
+qlib = [
+    "pyqlib>=0.8.0",
+]
 
 [project.scripts]
 quant = "quanttool.cli.main:app"
+quanttool-mcp = "quanttool.agent.server:main"

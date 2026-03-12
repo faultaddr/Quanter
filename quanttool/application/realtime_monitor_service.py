@@ -34,7 +34,7 @@ class MonitorConfig:
     buy_threshold: int = 50                      # 买入阈值
     sell_threshold: int = 40                     # 卖出阈值
     notifiers: List[str] = field(default_factory=lambda: ["console"])
-    history_days: int = 60                       # 历史数据天数
+    history_days: int = 120                      # 历史数据天数（确保至少60个交易日）
     trading_hours_only: bool = True              # 仅交易时间运行
     cooldown_minutes: int = 15                   # 冷却期(分钟)
 

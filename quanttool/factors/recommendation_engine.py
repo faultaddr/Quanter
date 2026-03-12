@@ -31,6 +31,14 @@ from .analysis_context import (
 )
 
 
+# 低位超卖保护仓位配置
+PROTECTION_POSITION_SIZES = {
+    "strong": "30-40%",    # 强保护触发：极端低位，反弹概率高
+    "standard": "20-30%",  # 标准保护触发：低位超卖，轻仓试探
+    "weak": "10-20%",      # 弱保护触发：观察为主
+}
+
+
 class RecommendationEngine:
     """
     统一推荐引擎
@@ -379,12 +387,20 @@ class RecommendationEngine:
                 recommendation.action = ActionType.LIGHT_POSITION
                 recommendation.warnings.append("位置偏高，建议轻仓")
 
-        # 趋势风险检查
+        # 趋势风险检查（考虑低位超卖保护）
         if classic.trend_score < 40:
-            if position.position_modifier >= self.POSITION_SAFE_THRESHOLD:
-                recommendation.warnings.append("【接飞刀风险】位置虽低但趋势极弱，切勿盲目抄底")
-            if recommendation.action in [ActionType.BUY, ActionType.LIGHT_POSITION]:
-                recommendation.action = ActionType.WAIT
+            # 检查是否有低位超卖保护
+            protection_level = self._get_protection_level(context)
+
+            if protection_level:
+                # 有保护：不强制转为观望，添加警告
+                recommendation.warnings.append("【趋势偏弱】但低位超卖保护生效，可轻仓观察")
+            else:
+                # 无保护：正常趋势风险检查
+                if position.position_modifier >= self.POSITION_SAFE_THRESHOLD:
+                    recommendation.warnings.append("【接飞刀风险】位置虽低但趋势极弱，切勿盲目抄底")
+                if recommendation.action in [ActionType.BUY, ActionType.LIGHT_POSITION]:
+                    recommendation.action = ActionType.WAIT
 
     def _apply_position_adjustment(
         self,
@@ -394,11 +410,31 @@ class RecommendationEngine:
         """应用位置修正"""
         position = context.position_assessment
 
-        # 设置仓位
+        # 获取低位超卖保护级别
+        protection_level = self._get_protection_level(context)
+
+        # 低位超卖保护覆盖回避信号
+        if protection_level:
+            if recommendation.action == ActionType.AVOID:
+                if protection_level == "strong":
+                    recommendation.action = ActionType.LIGHT_POSITION
+                    recommendation.position_size = PROTECTION_POSITION_SIZES["strong"]
+                    recommendation.reasons.append("【强保护】极度低位超卖，建议轻仓试探")
+                elif protection_level == "standard":
+                    recommendation.action = ActionType.LIGHT_POSITION
+                    recommendation.position_size = PROTECTION_POSITION_SIZES["standard"]
+                    recommendation.reasons.append("【标准保护】低位超卖，存在反弹机会")
+                else:  # weak
+                    recommendation.action = ActionType.WAIT
+                    recommendation.position_size = PROTECTION_POSITION_SIZES["weak"]
+                    recommendation.reasons.append("【弱保护】偏低位超卖，建议观察")
+
+        # 设置仓位（如果未被保护逻辑覆盖）
         if recommendation.action not in [ActionType.AVOID, ActionType.SELL]:
-            recommendation.position_size = self.POSITION_SIZES.get(
-                recommendation.action, "0%"
-            )
+            if not protection_level:  # 无保护时使用默认仓位
+                recommendation.position_size = self.POSITION_SIZES.get(
+                    recommendation.action, "0%"
+                )
 
         # 高位追高警告
         if position.short_term_position == 'high':
@@ -410,8 +446,35 @@ class RecommendationEngine:
         if (position.long_term_position == 'low' and
             position.short_term_position == 'low'):
             if recommendation.action == ActionType.WAIT:
-                recommendation.action = ActionType.LIGHT_POSITION
-                recommendation.reasons.append("长短期双低位，存在反弹机会")
+                # 检查是否有保护，如果有保护则更积极
+                if protection_level:
+                    recommendation.action = ActionType.LIGHT_POSITION
+                    recommendation.reasons.append("长短期双低位+超卖保护，存在反弹机会")
+                else:
+                    recommendation.action = ActionType.LIGHT_POSITION
+                    recommendation.reasons.append("长短期双低位，存在反弹机会")
+
+    def _get_protection_level(self, context: AnalysisContext) -> Optional[str]:
+        """
+        从经典评分中获取保护级别
+
+        从 classic_score.warnings 中提取保护级别信息
+
+        Returns:
+            "strong" | "standard" | "weak" | None
+        """
+        # 从经典评分的警告中提取
+        warnings = context.classic_score.warnings or []
+
+        for warning in warnings:
+            if "强保护" in warning:
+                return "strong"
+            elif "标准保护" in warning:
+                return "standard"
+            elif "弱保护" in warning:
+                return "weak"
+
+        return None
 
     def _calculate_entry_and_stop(
         self,

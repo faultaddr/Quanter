@@ -1468,6 +1468,49 @@ class ScoringSystem:
             else:
                 return 60  # 缩量震荡
 
+    def _check_low_oversold_protection(self, aux_factors: Dict, momentum_factors: Dict) -> Tuple[bool, str]:
+        """
+        低位超卖保护检测
+
+        核心逻辑：低位超卖应该有独立的保护逻辑，不应该被趋势惩罚完全覆盖
+
+        阈值定义（基于量化交易通用实践）：
+        - 强保护：60日分位≤10% + RSI≤30
+        - 标准保护：60日分位≤20% + RSI≤30 或 60日分位≤20% + WR≥80/布林带位置≤15%
+        - 弱保护：60日分位≤30% + RSI≤35
+
+        Args:
+            aux_factors: 辅助因子字典，包含 position_ratio, pctb, wr 等
+            momentum_factors: 动量因子字典，包含 rsi 等
+
+        Returns:
+            (is_protected, protection_level) - 是否触发保护，保护级别: "strong"/"standard"/"weak"/""
+        """
+        position_ratio = aux_factors.get('position_ratio', 0.5)  # 60日分位
+        rsi = momentum_factors.get('rsi', 50)
+        wr = aux_factors.get('wr', 50)
+        pctb = aux_factors.get('pctb', 0.5)
+
+        # 强保护：极度低位 + 极端超卖
+        if position_ratio <= 0.10 and rsi <= 30:
+            return True, "strong"
+
+        # 标准保护：低位 + 超卖
+        if position_ratio <= 0.20 and rsi <= 30:
+            return True, "standard"
+
+        # 多维度组合保护（WR或布林带位置）- 在弱保护之前检查
+        # 这样 WR>=80 或布林带位置<=15% 可以触发标准保护
+        if position_ratio <= 0.20:
+            if wr >= 80 or pctb <= 0.15:
+                return True, "standard"
+
+        # 弱保护：偏低位 + 超卖
+        if position_ratio <= 0.30 and rsi <= 35:
+            return True, "weak"
+
+        return False, ""
+
     def _calculate_position_modifier(self, latest: pd.Series, factors: Dict) -> Tuple[float, List[str]]:
         """
         计算位置修正系数（风险控制）- 趋势敏感版
@@ -1536,25 +1579,70 @@ class ScoringSystem:
                 is_uptrend = True
                 trend_desc = "均线支撑"
 
+        # ==================== 低位超卖保护机制 ====================
+        # 在下跌趋势惩罚之前，先检查低位超卖保护
+        is_protected, protection_level = self._check_low_oversold_protection(aux_factors, momentum_factors)
+
+        if is_protected:
+            if protection_level == "strong":
+                warnings.append("🟢【强保护】极度低位+极端超卖(60日分位≤10%+RSI≤30)，反弹概率较高")
+                # 强保护：完全禁止下跌趋势惩罚，保持较高评分
+                # 不应用任何下跌趋势惩罚，直接返回
+                return max(0.8, modifier), warnings
+            elif protection_level == "standard":
+                warnings.append("📊【标准保护】低位超卖(60日分位≤20%+RSI≤30或WR≥80)，关注反转信号")
+                # 标准保护：下跌趋势惩罚改为观望而非回避
+                # 继续执行后续逻辑，但限制最终 modifier 不低于 0.7
+            else:  # weak
+                warnings.append("⚠️【弱保护】偏低位超卖(60日分位≤30%+RSI≤35)，建议观察")
+                # 弱保护：限制 modifier 不低于 0.6
+
         # ==================== 关键修复：下跌趋势风险惩罚 ====================
-        # 在下跌趋势中，任何位置都是高风险
+        # 在下跌趋势中，任何位置都是高风险（但低位超卖有保护）
         if is_downtrend:
-            # 下跌趋势 + 布林带下轨附近 = 接飞刀风险
-            if pctb < 0.2:
-                modifier *= 0.5
-                warnings.append(f"🔴【下跌趋势+超卖】布林下轨附近({pctb*100:.1f}%)，接飞刀风险极高！")
-            # 下跌趋势 + 布林带上轨附近 = 反弹到阻力位
-            elif pctb > 0.7:
-                modifier *= 0.45
-                warnings.append(f"🔴【下跌趋势+阻力位】布林上轨附近({pctb*100:.1f}%)，反弹遇阻风险！")
-            # 下跌趋势 + 中位 = 下跌中继
+            # 如果触发了保护，降低惩罚力度
+            if is_protected:
+                if protection_level == "standard":
+                    # 标准保护：降低惩罚，建议轻仓观察
+                    if pctb < 0.2:
+                        modifier *= 0.85  # 原来是 0.5
+                        warnings.append(f"🟡【低位超卖保护】布林下轨附近({pctb*100:.1f}%)，下跌趋势但存在反弹机会")
+                    elif pctb > 0.7:
+                        modifier *= 0.75  # 原来是 0.45
+                        warnings.append(f"🟡【低位超卖保护】布林上轨附近({pctb*100:.1f}%)，关注突破确认")
+                    else:
+                        modifier *= 0.80  # 原来是 0.6
+                        warnings.append(f"🟡【低位超卖保护】{trend_desc}，轻仓观察")
+                elif protection_level == "weak":
+                    # 弱保护：轻微减轻惩罚
+                    if pctb < 0.2:
+                        modifier *= 0.70  # 原来是 0.5
+                        warnings.append(f"🟠【弱保护】布林下轨附近({pctb*100:.1f}%)，谨慎观察")
+                    elif pctb > 0.7:
+                        modifier *= 0.60  # 原来是 0.45
+                        warnings.append(f"🟠【弱保护】布林上轨附近({pctb*100:.1f}%)，风险仍存")
+                    else:
+                        modifier *= 0.70  # 原来是 0.6
+                        warnings.append(f"🟠【弱保护】{trend_desc}，建议观察")
+                # 强保护已经在前面返回了
             else:
-                modifier *= 0.6
-                warnings.append(f"🟠【下跌趋势】{trend_desc}，不建议买入")
+                # 无保护：正常应用下跌趋势惩罚
+                # 下跌趋势 + 布林带下轨附近 = 接飞刀风险
+                if pctb < 0.2:
+                    modifier *= 0.5
+                    warnings.append(f"🔴【下跌趋势+超卖】布林下轨附近({pctb*100:.1f}%)，接飞刀风险极高！")
+                # 下跌趋势 + 布林带上轨附近 = 反弹到阻力位
+                elif pctb > 0.7:
+                    modifier *= 0.45
+                    warnings.append(f"🔴【下跌趋势+阻力位】布林上轨附近({pctb*100:.1f}%)，反弹遇阻风险！")
+                # 下跌趋势 + 中位 = 下跌中继
+                else:
+                    modifier *= 0.6
+                    warnings.append(f"🟠【下跌趋势】{trend_desc}，不建议买入")
 
             # 下跌趋势中，MA20和MA50是强阻力
             if close < ma20 and ma20 > 0:
-                warnings.append(f"⚠️ MA20({ma20:.2f})为强阻力位，买入即被套风险大")
+                warnings.append(f"⚠️ MA20({ma20:.2f})为强阻力位，注意风险")
 
         # ==================== 上升趋势风险调整 ====================
         elif is_uptrend:

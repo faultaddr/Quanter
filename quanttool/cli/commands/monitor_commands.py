@@ -14,6 +14,7 @@ from rich.table import Table
 from rich.panel import Panel
 
 from ...application.realtime_monitor_service import RealtimeMonitorService, MonitorConfig
+from ...infrastructure.data_providers.real_data_provider import RealAShareDataProvider
 from ...core.registry import registry, ComponentType
 from ...core.logging import get_logger
 
@@ -182,9 +183,17 @@ def start_monitor(
         cooldown_minutes=cooldown,
     )
 
+    # 初始化数据提供者
+    data_provider = RealAShareDataProvider(
+        primary_source="baostock",  # baostock 不需要 token
+        use_fallback=True
+    )
+    data_provider.initialize()
+
     # Create and start service
     service = RealtimeMonitorService(
         config=config,
+        data_provider=data_provider,
         notifiers=notifier_instances,
     )
 

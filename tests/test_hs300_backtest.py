@@ -1,428 +1,387 @@
 #!/usr/bin/env python
 """
-沪深300策略终极优化
+沪深 300 股票池回测分析
 
-目标年化收益 > 10%
-
-使用 TrendMomentumScoring 评分系统
+使用最佳模型进行扩展测试，分析：
+- 最大回撤
+- 风险敞口
+- 策略泛化能力
 """
 import sys
-import os
 from pathlib import Path
-
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+import warnings
+warnings.filterwarnings('ignore')
+
+# 先导入 PyTorch 避免崩溃
+import torch
+import torch.nn as nn
 
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import json
+import time
 
-# 导入新的评分系统
-from quanttool.factors.trend_momentum_scoring import TrendMomentumScoring
-
-try:
-    import baostock as bs
-    BAOSTOCK_AVAILABLE = True
-except ImportError:
-    BAOSTOCK_AVAILABLE = False
-
-try:
-    import akshare as ak
-    AKSHARE_AVAILABLE = True
-except ImportError:
-    AKSHARE_AVAILABLE = False
+from quanttool.strategies.qlib_strategy import QlibStrategy
+from quanttool.backtest.engine import BacktestEngine
+from quanttool.infrastructure.data_providers.data_fetcher import AshareFetcher
 
 
-INITIAL_CAPITAL = 1000000
-DAYS_LOOKBACK = 365
+# 沪深 300 部分成分股（按行业分布选取代表性股票）
+HS300_STOCKS = [
+    # 金融
+    '600036',  # 招商银行
+    '601318',  # 中国平安
+    '601166',  # 兴业银行
+    '600000',  # 浦发银行
+    '601398',  # 工商银行
+    # 科技
+    '000063',  # 中兴通讯
+    '002415',  # 海康威视
+    '000725',  # 京东方A
+    '002475',  # 立讯精密
+    '600588',  # 用友网络
+    # 消费
+    '000858',  # 五粮液
+    '000568',  # 泸州老窖
+    '600887',  # 伊利股份
+    '000333',  # 美的集团
+    '000651',  # 格力电器
+    # 医药
+    '000661',  # 长春高新
+    '300760',  # 迈瑞医疗
+    '600276',  # 恒瑞医药
+    '000538',  # 云南白药
+    '300015',  # 爱尔眼科
+    # 新能源
+    '300750',  # 宁德时代
+    '002594',  # 比亚迪
+    '600900',  # 长江电力
+    '601012',  # 隆基绿能
+    '002129',  # 中环股份
+    # 基建/地产
+    '600048',  # 保利发展
+    '000002',  # 万科A
+    '601668',  # 中国建筑
+    '600585',  # 海螺水泥
+    '601888',  # 中国中免
+    # 制造业
+    '600031',  # 三一重工
+    '002050',  # 三花智控
+    '600690',  # 海尔智家
+    '002352',  # 顺丰控股
+    # 周期
+    '601899',  # 紫金矿业
+    '600028',  # 中国石化
+    '601088',  # 中国神华
+    '600309',  # 万华化学
+    '600346',  # 恒力石化
+]
+
+# 测试模型
+TEST_MODELS = [
+    ('catboost', 'GBDT'),
+    ('tabnet', '深度学习'),
+]
+
+# 策略参数
+DEFAULT_PARAMS = {
+    'feature_set': 'Alpha158',
+    'buy_threshold': 0.55,
+    'sell_threshold': 0.45,
+    'stop_loss_pct': 0.05,
+    'take_profit_pct': 0.10,
+    'commission': 0.0003,
+    'device': 'cpu',
+}
+
+INITIAL_CAPITAL = 100000.0
+LOOKBACK_DAYS = 365 * 2
+EPOCHS = 10
 
 
-def get_hs300_stocks() -> list:
-    """获取沪深300成分股列表"""
-    if not AKSHARE_AVAILABLE:
-        return []
+def fetch_stock_data(symbol: str, days: int = LOOKBACK_DAYS) -> pd.DataFrame:
+    """获取股票历史数据"""
+    end_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+
     try:
-        df = ak.index_stock_cons_weight_csindex(symbol='000300')
-        codes = df['成分券代码'].tolist()
-        names = df['成分券名称'].tolist()
-        print(f"✅ 获取沪深300成分股 {len(codes)} 只")
-        return list(zip(codes, names))
+        df = AshareFetcher.get_price(
+            code=symbol,
+            end_date=end_date,
+            count=days + 100,
+            frequency='1d'
+        )
+
+        if df.empty:
+            return pd.DataFrame()
+
+        if 'timestamp' not in df.columns:
+            if 'time' in df.columns:
+                df = df.rename(columns={'time': 'timestamp'})
+
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df = df.sort_values('timestamp').reset_index(drop=True)
+
+        if len(df) > days:
+            df = df.tail(days).reset_index(drop=True)
+
+        return df
+
     except Exception as e:
-        print(f"❌ 获取失败: {e}")
-        return []
+        return pd.DataFrame()
 
 
-def fetch_all_data_batch(symbols: list, days: int = 365) -> dict:
-    """批量获取数据"""
-    print(f"\n批量获取 {len(symbols)} 只股票数据...")
+def run_backtest(model_type: str, stock_data: dict, params: dict, epochs: int = EPOCHS) -> dict:
+    """运行回测并返回详细结果"""
+    import gc
 
-    all_data = {}
-    lg = bs.login()
-    if lg.error_code != '0':
-        return {}
+    all_results = []
 
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days + 100)
-
-    for i, symbol in enumerate(symbols):
-        if (i + 1) % 50 == 0:
-            print(f"  进度: {i+1}/{len(symbols)}")
+    for symbol, df in stock_data.items():
+        if len(df) < 120:
+            continue
 
         try:
-            bs_code = f"sh.{symbol}" if symbol.startswith('6') else f"sz.{symbol}"
-            rs = bs.query_history_k_data_plus(
-                bs_code, "date,code,open,high,low,close,volume,amount",
-                start_date=start_date.strftime('%Y-%m-%d'),
-                end_date=end_date.strftime('%Y-%m-%d'),
-                frequency="d", adjustflag="2"
+            strategy = QlibStrategy(
+                feature_set=params.get('feature_set', 'Alpha158'),
+                model_type=model_type,
+                buy_threshold=params.get('buy_threshold', 0.55),
+                sell_threshold=params.get('sell_threshold', 0.45),
+                stop_loss_pct=params.get('stop_loss_pct', 0.05),
+                take_profit_pct=params.get('take_profit_pct', 0.10),
+                epochs=epochs,
+                hidden_size=64,
+                num_layers=2,
+                device=params.get('device', 'cpu'),
             )
 
-            if rs.error_code != '0':
-                continue
+            train_size = int(len(df) * 0.7)
+            train_data = df.iloc[:train_size]
+            strategy.train_model(train_data, horizon=10)
 
-            data_list = []
-            while (rs.error_code == '0') & rs.next():
-                data_list.append(rs.get_row_data())
+            engine = BacktestEngine()
+            engine.set_initial_cash(INITIAL_CAPITAL)
+            engine.set_commission_rate(params.get('commission', 0.0003))
+            engine.set_t_plus_1(True)
 
-            if not data_list:
-                continue
+            data = {symbol: df.copy()}
+            result = engine.run_backtest(
+                strategy=strategy,
+                data=data,
+                start_date=df['timestamp'].iloc[0],
+                end_date=df['timestamp'].iloc[-1]
+            )
 
-            df = pd.DataFrame(data_list, columns=rs.fields)
-            df['timestamp'] = pd.to_datetime(df['date'])
-            for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            df = df.dropna().sort_values('timestamp').reset_index(drop=True)
+            all_results.append({
+                'symbol': symbol,
+                'annual_return': result.annual_return,
+                'total_return': result.total_return,
+                'sharpe_ratio': result.sharpe_ratio,
+                'max_drawdown': result.max_drawdown,
+                'win_rate': result.win_rate,
+                'total_trades': result.total_trades,
+            })
 
-            if len(df) >= 100:
-                all_data[symbol] = df
-        except Exception:
+            del strategy
+            del engine
+            gc.collect()
+
+        except Exception as e:
             pass
 
-    bs.logout()
-    print(f"✅ 成功获取 {len(all_data)} 只股票数据")
-    return all_data
+    if not all_results:
+        return None
 
+    returns = [r['annual_return'] for r in all_results]
+    drawdowns = [r['max_drawdown'] for r in all_results]
+    sharpe_ratios = [r['sharpe_ratio'] for r in all_results]
+    win_rates = [r['win_rate'] for r in all_results]
+    trades = [r['total_trades'] for r in all_results]
 
-# 使用新的评分系统实例
-_scoring_system = TrendMomentumScoring(buy_threshold=55.0)
-
-
-def calculate_trend_score(df: pd.DataFrame) -> dict:
-    """
-    趋势动量评分系统 v3 (封装 TrendMomentumScoring)
-
-    核心思路：抓住趋势启动点，而非等待形态确认
-    """
-    result = _scoring_system.calculate_score(df)
+    total_capital = INITIAL_CAPITAL * len(all_results)
+    total_final = sum(INITIAL_CAPITAL * (1 + r['total_return']) for r in all_results)
+    portfolio_return = (total_final - total_capital) / total_capital
+    portfolio_annual = (1 + portfolio_return) ** (252 / LOOKBACK_DAYS) - 1
 
     return {
-        'score': result.final_score,
-        'signal': result.signal,
-        'stop_loss': result.stop_loss,
-        'take_profit': result.take_profit,
-        'signals': result.signals
+        'model_type': model_type,
+        'n_stocks': len(all_results),
+        'portfolio_annual_return': portfolio_annual,
+        'portfolio_total_return': portfolio_return,
+        'avg_annual_return': np.mean(returns),
+        'median_annual_return': np.median(returns),
+        'std_annual_return': np.std(returns),
+        'avg_max_drawdown': np.mean(drawdowns),
+        'max_drawdown': np.max(drawdowns),
+        'avg_sharpe': np.mean(sharpe_ratios),
+        'avg_win_rate': np.mean(win_rates),
+        'total_trades': sum(trades),
+        'positive_ratio': sum(1 for r in returns if r > 0) / len(returns),
+        'stock_results': all_results,
     }
 
 
-def run_backtest_v3(
-    all_data: dict,
-    score_threshold: int = 55,
-    max_positions: int = 20,
-    stop_loss_pct: float = 0.07,
-    take_profit_pct: float = 0.15,
-    min_trade_interval: int = 3,  # 最小交易间隔
-) -> dict:
-    """回测 v3"""
-    print(f"\n{'='*60}")
-    print(f"趋势动量策略回测 v3")
-    print(f"{'='*60}")
-    print(f"参数: 阈值={score_threshold}, 持仓={max_positions}, 止损={stop_loss_pct*100}%, 止盈={take_profit_pct*100}%")
-
-    portfolio = {
-        'cash': INITIAL_CAPITAL,
-        'positions': {},
-        'trades': [],
-        'signals': [],
-        'last_trade_date': {}  # 记录上次交易日期
-    }
-
-    lookback = 60
-
-    all_dates = set()
-    for df in all_data.values():
-        all_dates.update(df['timestamp'].dt.date.tolist())
-    common_dates = sorted(list(all_dates))
-
-    print(f"\n开始回测 ({len(common_dates)} 交易日)...")
-
-    for date_idx, current_date in enumerate(common_dates):
-        if date_idx < lookback:
-            continue
-
-        if date_idx % 50 == 0:
-            pnl = portfolio['cash'] - INITIAL_CAPITAL
-            print(f"  {current_date} | 持仓:{len(portfolio['positions'])} | 盈亏:{pnl:+.0f}")
-
-        # 止损止盈检查
-        symbols_to_sell = []
-        for symbol, pos in list(portfolio['positions'].items()):
-            if symbol not in all_data:
-                continue
-
-            df = all_data[symbol]
-            date_mask = df['timestamp'].dt.date == current_date
-            if not date_mask.any():
-                continue
-
-            current_price = df.loc[date_mask, 'close'].iloc[0]
-
-            # 动态止损：盈利后提高止损
-            if current_price > pos['entry_price']:
-                dynamic_stop = pos['entry_price'] * 1.02  # 盈利后保本止损
-            else:
-                dynamic_stop = pos['stop_loss']
-
-            if current_price <= dynamic_stop:
-                symbols_to_sell.append((symbol, current_price, 'stop_loss'))
-            elif current_price >= pos['take_profit']:
-                symbols_to_sell.append((symbol, current_price, 'take_profit'))
-
-        # 执行卖出
-        for symbol, price, reason in symbols_to_sell:
-            pos = portfolio['positions'][symbol]
-            sell_value = pos['shares'] * price
-            pnl = (price - pos['entry_price']) * pos['shares']
-
-            portfolio['cash'] += sell_value
-            portfolio['trades'].append({
-                'symbol': symbol,
-                'entry_date': str(pos['entry_date']),
-                'exit_date': str(current_date),
-                'entry_price': pos['entry_price'],
-                'exit_price': price,
-                'shares': pos['shares'],
-                'pnl': pnl,
-                'return': pnl / (pos['entry_price'] * pos['shares']),
-                'exit_reason': reason
-            })
-            del portfolio['positions'][symbol]
-            portfolio['last_trade_date'][symbol] = current_date
-
-        # 买入信号
-        if len(portfolio['positions']) < max_positions:
-            candidates = []
-
-            for symbol, df in all_data.items():
-                if symbol in portfolio['positions']:
-                    continue
-
-                # 控制交易频率
-                if symbol in portfolio['last_trade_date']:
-                    last_trade = portfolio['last_trade_date'][symbol]
-                    days_since = (current_date - last_trade).days if hasattr(current_date, '__sub__') else 0
-                    if days_since < min_trade_interval:
-                        continue
-
-                hist_df = df[df['timestamp'].dt.date <= current_date].copy()
-                if len(hist_df) < lookback + 10:
-                    continue
-
-                try:
-                    result = calculate_trend_score(hist_df)
-                    if result['signal'] and result['score'] >= score_threshold:
-                        candidates.append({
-                            'symbol': symbol,
-                            'score': result['score'],
-                            'price': hist_df['close'].iloc[-1],
-                            'stop_loss': hist_df['close'].iloc[-1] * (1 - stop_loss_pct),
-                            'take_profit': hist_df['close'].iloc[-1] * (1 + take_profit_pct),
-                        })
-                        portfolio['signals'].append({
-                            'date': str(current_date),
-                            'symbol': symbol,
-                            'score': result['score']
-                        })
-                except Exception:
-                    pass
-
-            candidates.sort(key=lambda x: x['score'], reverse=True)
-
-            slots = max_positions - len(portfolio['positions'])
-            for c in candidates[:slots]:
-                price = c['price']
-                pos_val = portfolio['cash'] / (slots + 1)
-                shares = int(pos_val / price / 100) * 100
-
-                if shares > 0:
-                    cost = shares * price
-                    portfolio['cash'] -= cost
-                    portfolio['positions'][c['symbol']] = {
-                        'shares': shares,
-                        'entry_price': price,
-                        'entry_date': current_date,
-                        'stop_loss': c['stop_loss'],
-                        'take_profit': c['take_profit']
-                    }
-
-    # 最后平仓
-    final_date = common_dates[-1]
-    for symbol, pos in list(portfolio['positions'].items()):
-        if symbol not in all_data:
-            continue
-        df = all_data[symbol]
-        date_mask = df['timestamp'].dt.date == final_date
-        if date_mask.any():
-            final_price = df.loc[date_mask, 'close'].iloc[0]
-            pnl = (final_price - pos['entry_price']) * pos['shares']
-            portfolio['cash'] += pos['shares'] * final_price
-            portfolio['trades'].append({
-                'symbol': symbol,
-                'entry_date': str(pos['entry_date']),
-                'exit_date': str(final_date),
-                'entry_price': pos['entry_price'],
-                'exit_price': final_price,
-                'shares': pos['shares'],
-                'pnl': pnl,
-                'return': pnl / (pos['entry_price'] * pos['shares']),
-                'exit_reason': 'end_of_test'
-            })
-
-    # 统计
-    total_return = (portfolio['cash'] - INITIAL_CAPITAL) / INITIAL_CAPITAL
-    annual_return = total_return
-
-    trades = portfolio['trades']
-    if trades:
-        returns = [t['return'] for t in trades]
-        win_trades = [t for t in trades if t['pnl'] > 0]
-        win_rate = len(win_trades) / len(trades)
-
-        equity_curve = [INITIAL_CAPITAL]
-        for t in sorted(trades, key=lambda x: x['exit_date']):
-            equity_curve.append(equity_curve[-1] + t['pnl'])
-
-        peak = INITIAL_CAPITAL
-        max_dd = 0
-        for eq in equity_curve:
-            if eq > peak:
-                peak = eq
-            dd = (peak - eq) / peak
-            if dd > max_dd:
-                max_dd = dd
-    else:
-        win_rate = 0
-        max_dd = 0
+def analyze_risk_exposure(results: dict) -> dict:
+    """分析风险敞口"""
+    stock_results = results['stock_results']
+    returns = [r['annual_return'] for r in stock_results]
+    drawdowns = [r['max_drawdown'] for r in stock_results]
 
     return {
-        'annual_return': annual_return,
-        'total_return': total_return,
-        'final_capital': portfolio['cash'],
-        'total_trades': len(trades),
-        'win_rate': win_rate,
-        'max_drawdown': max_dd,
-        'total_signals': len(portfolio['signals']),
-        'params': {
-            'score_threshold': score_threshold,
-            'max_positions': max_positions,
-            'stop_loss_pct': stop_loss_pct,
-            'take_profit_pct': take_profit_pct
-        }
+        'return_90th': np.percentile(returns, 90),
+        'return_75th': np.percentile(returns, 75),
+        'return_50th': np.percentile(returns, 50),
+        'return_25th': np.percentile(returns, 25),
+        'return_10th': np.percentile(returns, 10),
+        'drawdown_90th': np.percentile(drawdowns, 90),
+        'drawdown_75th': np.percentile(drawdowns, 75),
+        'drawdown_50th': np.percentile(drawdowns, 50),
+        'drawdown_25th': np.percentile(drawdowns, 25),
+        'drawdown_10th': np.percentile(drawdowns, 10),
+        'return_per_drawdown': results['avg_annual_return'] / results['avg_max_drawdown'] if results['avg_max_drawdown'] > 0 else 0,
+        'max_single_loss': min(returns),
+        'max_single_gain': max(returns),
+        'worst_drawdown': max(drawdowns),
+        'win_rate': results['positive_ratio'],
     }
-
-
-def ultimate_optimize(all_data: dict, target_return: float = 0.10) -> dict:
-    """终极优化"""
-    print(f"\n{'='*60}")
-    print(f"终极参数优化 - 目标年化收益 > {target_return*100}%")
-    print(f"{'='*60}")
-
-    best_result = None
-    best_return = -float('inf')
-
-    # 更激进的参数组合
-    param_combinations = [
-        {'score_threshold': 50, 'max_positions': 15, 'stop_loss_pct': 0.06, 'take_profit_pct': 0.12},
-        {'score_threshold': 50, 'max_positions': 20, 'stop_loss_pct': 0.07, 'take_profit_pct': 0.15},
-        {'score_threshold': 45, 'max_positions': 15, 'stop_loss_pct': 0.06, 'take_profit_pct': 0.12},
-        {'score_threshold': 45, 'max_positions': 20, 'stop_loss_pct': 0.07, 'take_profit_pct': 0.15},
-        {'score_threshold': 40, 'max_positions': 20, 'stop_loss_pct': 0.08, 'take_profit_pct': 0.15},
-        {'score_threshold': 40, 'max_positions': 25, 'stop_loss_pct': 0.08, 'take_profit_pct': 0.18},
-        {'score_threshold': 35, 'max_positions': 20, 'stop_loss_pct': 0.08, 'take_profit_pct': 0.15},
-        {'score_threshold': 35, 'max_positions': 25, 'stop_loss_pct': 0.10, 'take_profit_pct': 0.20},
-        {'score_threshold': 50, 'max_positions': 25, 'stop_loss_pct': 0.07, 'take_profit_pct': 0.15},
-        {'score_threshold': 45, 'max_positions': 25, 'stop_loss_pct': 0.08, 'take_profit_pct': 0.18},
-        {'score_threshold': 40, 'max_positions': 30, 'stop_loss_pct': 0.08, 'take_profit_pct': 0.18},
-        {'score_threshold': 35, 'max_positions': 30, 'stop_loss_pct': 0.10, 'take_profit_pct': 0.20},
-        # 宽止损宽止盈
-        {'score_threshold': 50, 'max_positions': 20, 'stop_loss_pct': 0.10, 'take_profit_pct': 0.20},
-        {'score_threshold': 45, 'max_positions': 20, 'stop_loss_pct': 0.10, 'take_profit_pct': 0.25},
-        {'score_threshold': 40, 'max_positions': 25, 'stop_loss_pct': 0.10, 'take_profit_pct': 0.25},
-    ]
-
-    for i, params in enumerate(param_combinations):
-        print(f"\n[{i+1}/{len(param_combinations)}] 阈值={params['score_threshold']}, 持仓={params['max_positions']}, 止损={params['stop_loss_pct']*100}%, 止盈={params['take_profit_pct']*100}%")
-
-        result = run_backtest_v3(all_data, **params)
-
-        print(f"  收益: {result['annual_return']*100:.2f}% | 交易: {result['total_trades']} | 胜率: {result['win_rate']*100:.1f}% | 回撤: {result['max_drawdown']*100:.2f}%")
-
-        if result['annual_return'] > best_return:
-            best_return = result['annual_return']
-            best_result = result
-
-        if result['annual_return'] >= target_return:
-            print(f"\n✅ 达到目标收益率！")
-            return result
-
-    print(f"\n最佳结果: 年化收益 {best_return*100:.2f}%")
-    return best_result
 
 
 def main():
-    print("="*60)
-    print("沪深300策略终极优化")
-    print("="*60)
+    print("=" * 80)
+    print("沪深 300 股票池回测分析")
+    print("=" * 80)
 
-    if not BAOSTOCK_AVAILABLE:
-        print("❌ BaoStock不可用")
+    print("\n获取沪深 300 成分股数据...")
+    stock_data = {}
+    failed = []
+
+    for i, symbol in enumerate(HS300_STOCKS):
+        print(f"  [{i+1}/{len(HS300_STOCKS)}] 获取 {symbol}...", end=" ")
+        df = fetch_stock_data(symbol)
+        if not df.empty and len(df) >= 120:
+            stock_data[symbol] = df
+            print(f"✅ {len(df)} 条")
+        else:
+            failed.append(symbol)
+            print("❌ 数据不足")
+
+    print(f"\n成功获取: {len(stock_data)} 只股票")
+    print(f"失败: {len(failed)} 只")
+
+    if len(stock_data) < 10:
+        print("❌ 数据不足，无法进行回测")
         return
 
-    stocks = get_hs300_stocks()
-    if not stocks:
-        return
+    all_model_results = []
 
-    symbols = [s[0] for s in stocks]
-    all_data = fetch_all_data_batch(symbols, days=DAYS_LOOKBACK)
+    for model_type, model_cat in TEST_MODELS:
+        print(f"\n{'='*80}")
+        print(f"测试 {model_type.upper()} ({model_cat})")
+        print("=" * 80)
 
-    if not all_data:
-        return
+        start_time = time.time()
+        result = run_backtest(model_type, stock_data, DEFAULT_PARAMS, EPOCHS)
+        elapsed = time.time() - start_time
 
-    result = ultimate_optimize(all_data, target_return=0.10)
+        if result:
+            print(f"\n✅ 回测完成 (耗时: {elapsed:.1f}s)")
+            print(f"   有效股票: {result['n_stocks']} 只")
+            print(f"   组合年化收益: {result['portfolio_annual_return']*100:.2f}%")
+            print(f"   平均年化收益: {result['avg_annual_return']*100:.2f}%")
+            print(f"   平均最大回撤: {result['avg_max_drawdown']*100:.2f}%")
+            print(f"   平均夏普比: {result['avg_sharpe']:.2f}")
+            print(f"   盈利股票比例: {result['positive_ratio']*100:.1f}%")
+            all_model_results.append(result)
 
-    print(f"\n{'='*60}")
-    print(f"📋 最终结果")
-    print(f"{'='*60}")
-    print(f"  年化收益率: {result['annual_return']*100:.2f}%")
-    print(f"  总收益率: {result['total_return']*100:.2f}%")
-    print(f"  交易次数: {result['total_trades']}")
-    print(f"  胜率: {result['win_rate']*100:.1f}%")
-    print(f"  最大回撤: {result['max_drawdown']*100:.2f}%")
-    print(f"  是否达标: {'✅ 是' if result['annual_return'] >= 0.10 else '❌ 否'}")
+    print("\n" + "=" * 80)
+    print("投资组合风险分析报告")
+    print("=" * 80)
 
-    if 'params' in result:
-        print(f"\n最佳参数:")
-        for k, v in result['params'].items():
-            print(f"  {k}: {v}")
+    for result in all_model_results:
+        model_type = result['model_type']
+        risk = analyze_risk_exposure(result)
 
-    output_file = Path(__file__).parent.parent / 'reports' / f'hs300_ultimate_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(result, f, ensure_ascii=False, indent=2, default=str)
-    print(f"\n结果已保存至: {output_file}")
+        print(f"\n{'─'*80}")
+        print(f"模型: {model_type.upper()}")
+        print(f"{'─'*80}")
 
-    return result
+        print("\n【收益分布】")
+        print(f"  90分位: {risk['return_90th']*100:>8.2f}%")
+        print(f"  75分位: {risk['return_75th']*100:>8.2f}%")
+        print(f"  50分位: {risk['return_50th']*100:>8.2f}%")
+        print(f"  25分位: {risk['return_25th']*100:>8.2f}%")
+        print(f"  10分位: {risk['return_10th']*100:>8.2f}%")
+
+        print("\n【最大回撤分布】")
+        print(f"  90分位: {risk['drawdown_90th']*100:>8.2f}%")
+        print(f"  75分位: {risk['drawdown_75th']*100:>8.2f}%")
+        print(f"  50分位: {risk['drawdown_50th']*100:>8.2f}%")
+        print(f"  25分位: {risk['drawdown_25th']*100:>8.2f}%")
+        print(f"  10分位: {risk['drawdown_10th']*100:>8.2f}%")
+
+        print("\n【风险指标】")
+        print(f"  最大单股亏损: {risk['max_single_loss']*100:.2f}%")
+        print(f"  最大单股盈利: {risk['max_single_gain']*100:.2f}%")
+        print(f"  最差回撤: {risk['worst_drawdown']*100:.2f}%")
+        print(f"  收益/回撤比: {risk['return_per_drawdown']:.2f}")
+        print(f"  盈利股票比例: {risk['win_rate']*100:.1f}%")
+
+    if len(all_model_results) >= 2:
+        print("\n" + "=" * 80)
+        print("模型对比")
+        print("=" * 80)
+
+        print(f"\n{'指标':<20} {'CatBoost':>15} {'TABNET':>15} {'差异':>15}")
+        print("─" * 65)
+
+        r1, r2 = all_model_results[0], all_model_results[1]
+
+        metrics = [
+            ('组合年化收益', 'portfolio_annual_return', '%'),
+            ('平均年化收益', 'avg_annual_return', '%'),
+            ('平均最大回撤', 'avg_max_drawdown', '%'),
+            ('平均夏普比', 'avg_sharpe', ''),
+            ('盈利比例', 'positive_ratio', '%'),
+            ('总交易次数', 'total_trades', ''),
+        ]
+
+        for name, key, unit in metrics:
+            v1, v2 = r1[key], r2[key]
+            diff = v2 - v1
+            if unit == '%':
+                print(f"{name:<20} {v1*100:>14.2f}% {v2*100:>14.2f}% {diff*100:>14.2f}%")
+            else:
+                print(f"{name:<20} {v1:>15.2f} {v2:>15.2f} {diff:>15.2f}")
+
+    print("\n" + "=" * 80)
+    print("投资建议")
+    print("=" * 80)
+
+    if all_model_results:
+        best = max(all_model_results, key=lambda x: x['portfolio_annual_return'])
+        risk = analyze_risk_exposure(best)
+
+        print(f"""
+1. 模型选择建议:
+   - 推荐使用: {best['model_type'].upper()}
+   - 组合年化收益: {best['portfolio_annual_return']*100:.2f}%
+   - 风险控制: 平均回撤 {best['avg_max_drawdown']*100:.2f}%
+
+2. 风险提示:
+   - 单股最大亏损可能达 {abs(risk['max_single_loss'])*100:.2f}%
+   - 建议单股仓位控制在 5-10%
+   - 总仓位建议控制在 70-80%
+
+3. 策略优化方向:
+   - 可考虑加入止损止盈机制
+   - 建议结合市场情绪指标过滤信号
+   - 考虑行业分散配置降低集中度风险
+""")
+
+    return all_model_results
 
 
-if __name__ == '__main__':
-    result = main()
+if __name__ == "__main__":
+    results = main()

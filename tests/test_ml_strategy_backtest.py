@@ -499,18 +499,18 @@ def optimize_on_validation(
 
     import random
 
-    # 参数范围 - 简化策略，防止过拟合
-    position_min_range = [0.10, 0.15, 0.20]  # 缩小范围
-    position_max_range = [0.80, 0.85, 0.90]  # 缩小范围
-    probability_percentile_range = [50, 60, 70]  # 缩小范围
-    stop_loss_atr_range = [2.0, 2.5, 3.0]
-    take_profit_atr_range = [2.5, 3.0, 3.5, 4.0]
+    # 参数范围 - 第3轮：更保守的参数，减少过拟合
+    position_min_range = [0.10, 0.15]  # 固定较小范围
+    position_max_range = [0.85, 0.90]  # 固定较小范围
+    probability_percentile_range = [55, 60, 65]  # 提高阈值，减少交易
+    stop_loss_atr_range = [2.0, 2.5]  # 固定止损
+    take_profit_atr_range = [3.0, 3.5]  # 固定止盈
 
-    # 模型超参数 - 增加正则化，简化模型
-    n_estimators_range = [100, 200, 300]  # 减少树数量
-    max_depth_range = [3, 4, 5]  # 降低树深度，防止过拟合
-    learning_rate_range = [0.01, 0.02, 0.03]  # 降低学习率
-    feature_selection_range = [20, 30, 40]  # 减少特征数量
+    # 模型超参数 - 极简模型，强正则化
+    n_estimators_range = [100, 150]  # 更少的树
+    max_depth_range = [2, 3]  # 更浅的树
+    learning_rate_range = [0.01]  # 更低学习率
+    feature_selection_range = [15, 20]  # 更少的特征
 
     # 生成有效参数组合
     all_combos = []

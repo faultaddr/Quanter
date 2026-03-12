@@ -280,15 +280,16 @@ def optimize_parameters(
     train_end: str,
     test_start: str,
     test_end: str,
-    target_return: float = 0.15
+    target_return: float = 0.18
 ) -> Tuple[Dict, Dict]:
-    """优化参数 - 扩大参数搜索范围"""
+    """优化参数 - 聚焦高收益参数组合"""
 
-    # 参数范围 - 扩大搜索
-    min_score_range = [70, 75, 80, 85]
+    # 参数范围 - 聚焦高效组合，减少搜索空间
+    min_score_range = [75, 80, 85]
     stop_loss_range = [2.0, 2.5, 3.0]
-    take_profit_range = [2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+    take_profit_range = [3.0, 3.5, 4.0, 4.5, 5.0]
     hold_days_range = [15, 20, 25, 30]
+    max_positions_range = [4, 5, 6]
 
     best_params = None
     best_score = -1
@@ -299,51 +300,53 @@ def optimize_parameters(
     for min_score in min_score_range:
         for sl in stop_loss_range:
             for tp in take_profit_range:
-                if tp <= sl * 1.1:  # 止盈必须比止损大至少10%
+                if tp <= sl * 1.1:
                     continue
 
                 for hold_days in hold_days_range:
-                    params = {
-                        'min_trend_score': min_score,
-                        'stop_loss_atr_mult': sl,
-                        'take_profit_atr_mult': tp,
-                        'hold_days': hold_days
-                    }
+                    for max_pos in max_positions_range:
+                        params = {
+                            'min_trend_score': min_score,
+                            'stop_loss_atr_mult': sl,
+                            'take_profit_atr_mult': tp,
+                            'hold_days': hold_days,
+                            'max_positions': max_pos
+                        }
 
-                    # 测试集测试
-                    test_result = run_trend_backtest(
-                        stock_data=stock_data,
-                        start_date=test_start,
-                        end_date=test_end,
-                        **params
-                    )
+                        # 测试集测试
+                        test_result = run_trend_backtest(
+                            stock_data=stock_data,
+                            start_date=test_start,
+                            end_date=test_end,
+                            **params
+                        )
 
-                    if 'error' in test_result:
-                        continue
+                        if 'error' in test_result:
+                            continue
 
-                    test_annual = test_result['annual_return']
-                    win_rate = test_result.get('win_rate', 0)
-                    trades = test_result.get('total_trades', 0)
+                        test_annual = test_result['annual_return']
+                        win_rate = test_result.get('win_rate', 0)
+                        trades = test_result.get('total_trades', 0)
+                        max_dd = test_result.get('max_drawdown', 0)
 
-                    # 至少需要10笔交易
-                    if trades < 10:
-                        continue
+                        if trades < 10:
+                            continue
 
-                    # 综合评分：收益 + 胜率加成
-                    score = test_annual + (win_rate - 0.4) * 0.2  # 胜率>40%加分
+                        # 综合评分：收益优先，考虑胜率和回撤
+                        score = test_annual * 2 + (win_rate - 0.4) * 0.1 - max_dd * 0.2
 
-                    results.append((params, test_annual, win_rate, trades))
+                        results.append((params, test_annual, win_rate, trades, max_dd))
 
-                    if score > best_score:
-                        best_score = score
-                        best_params = params
-                        best_test_result = test_result
+                        if score > best_score:
+                            best_score = score
+                            best_params = params
+                            best_test_result = test_result
 
     # 打印前10个最好的结果
     print("\n测试集收益前10名:")
     results.sort(key=lambda x: x[1], reverse=True)
-    for i, (params, ret, wr, tr) in enumerate(results[:10]):
-        print(f"  {i+1}. {params}, 收益: {ret:.2%}, 胜率: {wr:.2%}, 交易: {tr}")
+    for i, (params, ret, wr, tr, dd) in enumerate(results[:10]):
+        print(f"  {i+1}. {params}, 收益: {ret:.2%}, 胜率: {wr:.2%}, 交易: {tr}, 回撤: {dd:.2%}")
 
     if best_params:
         print(f"\n最优参数: {best_params}")

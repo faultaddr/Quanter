@@ -3,6 +3,11 @@
 
 集成微软开源量化框架 Qlib 的 Alpha158 特征集和预训练模型
 GitHub: https://github.com/microsoft/qlib
+
+支持 21 种原生模型:
+- GBDT 系列: LightGBM, XGBoost, CatBoost, DoubleEnsemble
+- PyTorch 序列: LSTM, GRU, ALSTM, Transformer, TCN, Localformer
+- PyTorch 高级: GATs, SFM, TabNet, ADARNN, ADD, HIST, IGMTF, KRNN, TRA, TCTS, Sandwich
 """
 
 import numpy as np
@@ -31,6 +36,14 @@ except ImportError:
     QLIB_AVAILABLE = False
     logger.warning("pyqlib 未正确安装，QlibStrategy 将使用模拟特征")
 
+# 导入模型工厂
+try:
+    from .qlib import QlibModelFactory, QlibModelConfig, list_available_models
+    MODEL_FACTORY_AVAILABLE = True
+except ImportError:
+    MODEL_FACTORY_AVAILABLE = False
+    logger.warning("Qlib 模型工厂不可用")
+
 
 @dataclass
 class QlibConfig:
@@ -39,10 +52,17 @@ class QlibConfig:
     feature_set: str = "Alpha158"  # Alpha158 或 Alpha360
 
     # 模型参数
-    model_type: str = "lgb"  # lgb, mlp, gru, transformer
+    model_type: str = "lgb"  # 支持 21 种模型
     learning_rate: float = 0.01
     max_depth: int = 6
     n_estimators: int = 200
+
+    # PyTorch 参数
+    hidden_size: int = 64
+    num_layers: int = 2
+    dropout: float = 0.1
+    batch_size: int = 256
+    epochs: int = 100
 
     # 信号参数
     buy_threshold: float = 0.55
@@ -52,6 +72,9 @@ class QlibConfig:
     # 止盈止损
     stop_loss_pct: float = 0.05
     take_profit_pct: float = 0.10
+
+    # 设备
+    device: str = "auto"  # auto, cpu, cuda, mps
 
 
 class QlibFeatureEngineer:
@@ -239,30 +262,82 @@ class QlibModel:
     """
     Qlib 模型封装器
 
-    支持 LightGBM, MLP, GRU, Transformer 等模型
+    支持 21 种 Qlib 原生模型:
+    - GBDT: lgb, xgboost, catboost, double_ensemble
+    - PyTorch 序列: lstm, gru, alstm, transformer, tcn, localformer
+    - PyTorch 高级: gats, sfm, tabnet, adarnn, add, hist, igmtf, krnn, tra, tcts, sandwich
     """
+
+    # 支持的模型类型
+    SUPPORTED_MODELS = [
+        # GBDT
+        'lgb', 'lightgbm', 'xgboost', 'xgb', 'catboost', 'double_ensemble',
+        # PyTorch 序列
+        'lstm', 'gru', 'alstm', 'transformer', 'tcn', 'localformer',
+        # PyTorch 高级
+        'gats', 'sfm', 'tabnet', 'adarnn', 'add', 'hist', 'igmtf', 'krnn', 'tra', 'tcts', 'sandwich',
+    ]
 
     def __init__(
         self,
         model_type: str = "lgb",
         learning_rate: float = 0.01,
         max_depth: int = 6,
-        n_estimators: int = 200
+        n_estimators: int = 200,
+        hidden_size: int = 64,
+        num_layers: int = 2,
+        dropout: float = 0.1,
+        batch_size: int = 256,
+        epochs: int = 100,
+        device: str = "auto",
     ):
         """
         初始化模型
 
         Args:
-            model_type: 模型类型 (lgb, mlp, gru, transformer)
+            model_type: 模型类型 (支持 21 种)
             learning_rate: 学习率
-            max_depth: 树深度 (LGB)
-            n_estimators: 树数量 (LGB) 或 迭代次数
+            max_depth: 树深度 (GBDT)
+            n_estimators: 树数量 (GBDT) 或 迭代次数
+            hidden_size: 隐藏层大小 (PyTorch)
+            num_layers: 层数 (PyTorch)
+            dropout: Dropout 率 (PyTorch)
+            batch_size: 批大小 (PyTorch)
+            epochs: 训练轮数 (PyTorch)
+            device: 设备 (auto, cpu, cuda, mps)
         """
-        self.model_type = model_type
+        self.model_type = model_type.lower()
         self.model = None
         self.is_fitted = False
+        self._model_available = False
 
-        if model_type == "lgb":
+        # 使用模型工厂
+        if MODEL_FACTORY_AVAILABLE:
+            try:
+                config = QlibModelConfig(
+                    model_type=self.model_type,
+                    learning_rate=learning_rate,
+                    max_depth=max_depth,
+                    n_estimators=n_estimators,
+                    hidden_size=hidden_size,
+                    num_layers=num_layers,
+                    dropout=dropout,
+                    batch_size=batch_size,
+                    epochs=epochs,
+                    device=device,
+                )
+                self.model = QlibModelFactory.create(self.model_type, config=config)
+                self._model_available = True
+                logger.info(f"使用 Qlib 模型工厂创建 {self.model_type} 模型")
+            except Exception as e:
+                logger.warning(f"模型工厂创建失败: {e}，使用简化实现")
+                self._init_fallback_model(learning_rate, max_depth, n_estimators)
+        else:
+            self._init_fallback_model(learning_rate, max_depth, n_estimators)
+
+    def _init_fallback_model(self, learning_rate: float, max_depth: int, n_estimators: int):
+        """初始化回退模型 (LightGBM)"""
+        if self.model_type in ['lgb', 'lightgbm']:
             try:
                 import lightgbm as lgb
                 self.model = lgb.LGBMClassifier(
@@ -279,9 +354,8 @@ class QlibModel:
                 logger.warning("LightGBM 未安装，请运行: pip install lightgbm")
                 self._model_available = False
         else:
-            # 其他模型类型使用简化实现
+            logger.info(f"模型类型 {self.model_type} 使用简化实现")
             self._model_available = False
-            logger.info(f"模型类型 {model_type} 使用简化实现")
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> 'QlibModel':
         """训练模型"""
@@ -294,7 +368,7 @@ class QlibModel:
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """预测概率"""
         if self._model_available and self.is_fitted:
-            return self.model.predict_proba(X)[:, 1]
+            return self.model.predict_proba(X)
 
         # 简化实现: 基于特征的加权平均
         weights = np.zeros(len(X))
@@ -353,10 +427,24 @@ class QlibStrategy(IStrategy):
 
     特点:
     1. 158+ 量化因子 (Alpha158)
-    2. 多种 ML 模型支持 (LGB, MLP, GRU, Transformer)
+    2. 21 种 ML 模型支持
+       - GBDT: LightGBM, XGBoost, CatBoost, DoubleEnsemble
+       - PyTorch 序列: LSTM, GRU, ALSTM, Transformer, TCN, Localformer
+       - PyTorch 高级: GATs, SFM, TabNet, ADARNN, ADD, HIST, IGMTF, KRNN, TRA, TCTS, Sandwich
     3. 基于概率的信号生成
     4. 自动特征选择
+    5. 支持 GPU/MPS 加速
     """
+
+    # 支持的模型类型
+    SUPPORTED_MODELS = [
+        # GBDT
+        'lgb', 'lightgbm', 'xgboost', 'xgb', 'catboost', 'double_ensemble',
+        # PyTorch 序列
+        'lstm', 'gru', 'alstm', 'transformer', 'tcn', 'localformer',
+        # PyTorch 高级
+        'gats', 'sfm', 'tabnet', 'adarnn', 'add', 'hist', 'igmtf', 'krnn', 'tra', 'tcts', 'sandwich',
+    ]
 
     def __init__(
         self,
@@ -367,32 +455,61 @@ class QlibStrategy(IStrategy):
         stop_loss_pct: float = 0.05,
         take_profit_pct: float = 0.10,
         use_qlib_native: bool = False,
+        # PyTorch 参数
+        hidden_size: int = 64,
+        num_layers: int = 2,
+        dropout: float = 0.1,
+        batch_size: int = 256,
+        epochs: int = 100,
+        device: str = "auto",
     ):
         """
         初始化 Qlib 策略
 
         Args:
             feature_set: 特征集类型 (Alpha158, Alpha360)
-            model_type: 模型类型 (lgb, mlp, gru, transformer)
+            model_type: 模型类型 (支持 21 种模型)
             buy_threshold: 买入概率阈值
             sell_threshold: 卖出概率阈值
             stop_loss_pct: 止损比例
             take_profit_pct: 止盈比例
             use_qlib_native: 是否使用 Qlib 原生 API
+            hidden_size: 隐藏层大小 (PyTorch 模型)
+            num_layers: 层数 (PyTorch 模型)
+            dropout: Dropout 率 (PyTorch 模型)
+            batch_size: 批大小 (PyTorch 模型)
+            epochs: 训练轮数 (PyTorch 模型)
+            device: 设备 (auto, cpu, cuda, mps)
         """
         self.feature_set = feature_set
-        self.model_type = model_type
+        self.model_type = model_type.lower()
         self.buy_threshold = buy_threshold
         self.sell_threshold = sell_threshold
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
         self.use_qlib_native = use_qlib_native and QLIB_AVAILABLE
 
+        # PyTorch 参数
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.dropout = dropout
+        self.batch_size = batch_size
+        self.epochs = epochs
+        self.device = device
+
         # 特征工程器
         self.feature_engineer = QlibFeatureEngineer(feature_set)
 
         # 模型
-        self.model = QlibModel(model_type=model_type)
+        self.model = QlibModel(
+            model_type=self.model_type,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
+            batch_size=batch_size,
+            epochs=epochs,
+            device=device,
+        )
 
         # 策略参数
         self.parameters = {
@@ -402,6 +519,12 @@ class QlibStrategy(IStrategy):
             'sell_threshold': sell_threshold,
             'stop_loss_pct': stop_loss_pct,
             'take_profit_pct': take_profit_pct,
+            'hidden_size': hidden_size,
+            'num_layers': num_layers,
+            'dropout': dropout,
+            'batch_size': batch_size,
+            'epochs': epochs,
+            'device': device,
         }
 
         # 信号历史
@@ -421,9 +544,25 @@ class QlibStrategy(IStrategy):
         self.stop_loss_pct = self.parameters.get('stop_loss_pct', 0.05)
         self.take_profit_pct = self.parameters.get('take_profit_pct', 0.10)
 
+        # PyTorch 参数
+        self.hidden_size = self.parameters.get('hidden_size', 64)
+        self.num_layers = self.parameters.get('num_layers', 2)
+        self.dropout = self.parameters.get('dropout', 0.1)
+        self.batch_size = self.parameters.get('batch_size', 256)
+        self.epochs = self.parameters.get('epochs', 100)
+        self.device = self.parameters.get('device', 'auto')
+
         # 重新初始化组件
         self.feature_engineer = QlibFeatureEngineer(self.feature_set)
-        self.model = QlibModel(model_type=self.model_type)
+        self.model = QlibModel(
+            model_type=self.model_type,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+            dropout=self.dropout,
+            batch_size=self.batch_size,
+            epochs=self.epochs,
+            device=self.device,
+        )
 
     def train_model(
         self,
@@ -470,7 +609,8 @@ class QlibStrategy(IStrategy):
     def get_signal(
         self,
         current_bar: pd.Series,
-        historical_bars: pd.DataFrame
+        historical_bars: pd.DataFrame,
+        verbose: bool = False
     ) -> Dict[str, Any]:
         """
         获取交易信号
@@ -478,6 +618,7 @@ class QlibStrategy(IStrategy):
         Args:
             current_bar: 当前 K 线
             historical_bars: 历史 K 线
+            verbose: 是否输出详细分析
 
         Returns:
             信号字典
@@ -521,6 +662,9 @@ class QlibStrategy(IStrategy):
             # 置信度
             confidence = abs(prob - 0.5) * 2
 
+            # 分析买入/卖出原因
+            reasons = self._analyze_reasons(features.iloc[-1], prob, direction)
+
             # 构建信号
             signal = QlibSignal(
                 direction=direction,
@@ -536,7 +680,7 @@ class QlibStrategy(IStrategy):
             self.last_signal = signal
             self.signals_history.append(signal)
 
-            return {
+            result = {
                 'direction': direction,
                 'signal': signal_type,
                 'probability': prob,
@@ -545,8 +689,15 @@ class QlibStrategy(IStrategy):
                 'stop_loss': stop_loss,
                 'take_profit': take_profit,
                 'strategy_name': f'QlibStrategy({self.feature_set})',
-                'timestamp': current_bar.get('timestamp', datetime.now())
+                'timestamp': current_bar.get('timestamp', datetime.now()),
+                'reasons': reasons,
+                'indicators': self._extract_key_indicators(features.iloc[-1]),
             }
+
+            if verbose:
+                self._print_signal_analysis(result, current_bar, features.iloc[-1])
+
+            return result
 
         except Exception as e:
             logger.error(f"信号生成失败: {e}")
@@ -555,6 +706,202 @@ class QlibStrategy(IStrategy):
                 'signal': 'hold',
                 'error': str(e)
             }
+
+    def _extract_key_indicators(self, features: pd.Series) -> Dict[str, Any]:
+        """提取关键技术指标"""
+        indicators = {}
+
+        # RSI
+        for w in [6, 12, 24]:
+            key = f'RSI({w})'
+            if key in features.index:
+                indicators[key] = float(features[key])
+
+        # MACD
+        for key in ['MACD_DIF', 'MACD_DEA', 'MACD_HIST']:
+            if key in features.index:
+                indicators[key] = float(features[key])
+
+        # KDJ
+        for n in [9, 14]:
+            for k in ['K', 'D', 'J']:
+                key = f'{k}({n})'
+                if key in features.index:
+                    indicators[key] = float(features[key])
+
+        # 布林带
+        for w in [10, 20]:
+            for k in ['BOLLUP', 'BOLLLOW', 'BOLLW']:
+                key = f'{k}({w})'
+                if key in features.index:
+                    indicators[key] = float(features[key])
+
+        # 价格位置
+        for w in [5, 10, 20, 60]:
+            key = f'POS({w})'
+            if key in features.index:
+                indicators[key] = float(features[key])
+
+        # 波动率
+        for w in [5, 10, 20]:
+            key = f'VOL({w})'
+            if key in features.index:
+                indicators[key] = float(features[key])
+
+        # 动量
+        for w in [5, 10, 20]:
+            key = f'REF({w})'
+            if key in features.index:
+                indicators[key] = float(features[key])
+
+        return indicators
+
+    def _analyze_reasons(self, features: pd.Series, prob: float, direction: Optional[str]) -> List[str]:
+        """分析买入/卖出原因"""
+        reasons = []
+
+        if direction == 'buy':
+            if prob >= self.buy_threshold:
+                reasons.append(f"✅ 模型预测概率 {prob*100:.1f}% > 阈值 {self.buy_threshold*100:.0f}%")
+
+            # RSI 超卖
+            if 'RSI(12)' in features.index:
+                rsi = features['RSI(12)']
+                if rsi < 40:
+                    reasons.append(f"✅ RSI 超卖 ({rsi:.1f} < 40)，反弹概率高")
+                elif rsi < 50:
+                    reasons.append(f"⚠️ RSI 偏低 ({rsi:.1f})")
+
+            # MACD 金叉
+            if 'MACD_DIF' in features.index and 'MACD_DEA' in features.index:
+                if features['MACD_DIF'] > features['MACD_DEA']:
+                    reasons.append("✅ MACD 金叉确认")
+                    if 'MACD_HIST' in features.index and features['MACD_HIST'] > 0:
+                        reasons.append("✅ MACD 柱状图转正")
+
+            # KDJ 超卖
+            if 'J(9)' in features.index:
+                j = features['J(9)']
+                if j < 20:
+                    reasons.append(f"✅ KDJ-J 超卖 ({j:.1f} < 20)")
+
+            # 价格位置
+            if 'POS(20)' in features.index:
+                pos = features['POS(20)']
+                if pos < 0.3:
+                    reasons.append(f"✅ 价格处于20日低位 ({pos*100:.0f}%)")
+                elif pos < 0.5:
+                    reasons.append(f"⚠️ 价格位置偏低 ({pos*100:.0f}%)")
+
+            # 布林带下轨
+            if 'BOLLLOW(20)' in features.index:
+                boll_low = features['BOLLLOW(20)']
+                if boll_low < 0.1:
+                    reasons.append("⚠️ 价格接近布林带下轨")
+
+            # 动量
+            if 'REF(10)' in features.index:
+                mom = features['REF(10)']
+                if mom > 0:
+                    reasons.append(f"✅ 10日动量为正 ({mom*100:.1f}%)")
+
+        elif direction == 'sell':
+            if prob <= self.sell_threshold:
+                reasons.append(f"🔴 模型预测概率 {prob*100:.1f}% < 阈值 {self.sell_threshold*100:.0f}%")
+
+            # RSI 超买
+            if 'RSI(12)' in features.index:
+                rsi = features['RSI(12)']
+                if rsi > 70:
+                    reasons.append(f"🔴 RSI 超买 ({rsi:.1f} > 70)")
+                elif rsi > 60:
+                    reasons.append(f"⚠️ RSI 偏高 ({rsi:.1f})")
+
+            # MACD 死叉
+            if 'MACD_DIF' in features.index and 'MACD_DEA' in features.index:
+                if features['MACD_DIF'] < features['MACD_DEA']:
+                    reasons.append("🔴 MACD 死叉确认")
+
+            # 价格位置
+            if 'POS(20)' in features.index:
+                pos = features['POS(20)']
+                if pos > 0.8:
+                    reasons.append(f"🔴 价格处于20日高位 ({pos*100:.0f}%)")
+        else:
+            reasons.append("⏸️ 信号不明确，持有观望")
+            if prob > self.sell_threshold and prob < self.buy_threshold:
+                reasons.append(f"   概率 {prob*100:.1f}% 在 [{self.sell_threshold*100:.0f}%, {self.buy_threshold*100:.0f}%] 区间内")
+
+        return reasons
+
+    def _print_signal_analysis(self, result: Dict, current_bar: pd.Series, features: pd.Series):
+        """打印详细的信号分析"""
+        symbol = current_bar.get('symbol', 'UNKNOWN')
+        close = current_bar['close']
+
+        print("\n" + "═" * 70)
+        print(f"📊 QlibStrategy 信号分析 - {symbol}")
+        print("═" * 70)
+
+        # 交易信号
+        direction = result['direction'] or 'hold'
+        direction_emoji = {'buy': '🟢 买入', 'sell': '🔴 卖出', 'hold': '⏸️ 持有'}[direction]
+        print(f"\n【交易信号】{direction_emoji} (置信度: {result['confidence']*100:.0f}%)")
+        print(f"├── 预测概率: {result['probability']*100:.1f}% (买入阈值: {self.buy_threshold*100:.0f}%, 卖出阈值: {self.sell_threshold*100:.0f}%)")
+        print(f"├── 综合得分: {result['score']:.3f}")
+        print(f"├── 止损价: {result['stop_loss']:.2f} (-{self.stop_loss_pct*100:.0f}%)")
+        print(f"├── 止盈价: {result['take_profit']:.2f} (+{self.take_profit_pct*100:.0f}%)")
+        print(f"└── 当前价: {close:.2f}")
+
+        # 关键技术指标
+        print("\n【关键技术指标】")
+        indicators = result.get('indicators', {})
+
+        # RSI
+        if 'RSI(12)' in indicators:
+            rsi = indicators['RSI(12)']
+            rsi_status = "⚠️ 超卖" if rsi < 40 else ("⚠️ 超买" if rsi > 70 else "")
+            print(f"├── RSI(12): {rsi:.1f} {rsi_status}")
+
+        # MACD
+        if 'MACD_DIF' in indicators and 'MACD_DEA' in indicators:
+            dif = indicators['MACD_DIF']
+            dea = indicators['MACD_DEA']
+            hist = indicators.get('MACD_HIST', 0)
+            cross = "金叉 ✅" if dif > dea else "死叉 🔴"
+            print(f"├── MACD: {cross}")
+            print(f"│   └── DIF: {dif:.4f}, DEA: {dea:.4f}, HIST: {hist:.4f}")
+
+        # KDJ
+        if 'K(9)' in indicators:
+            k, d, j = indicators.get('K(9)', 0), indicators.get('D(9)', 0), indicators.get('J(9)', 0)
+            kdj_status = "超卖" if j < 20 else ("超买" if j > 80 else "")
+            print(f"├── KDJ(9): K={k:.1f}, D={d:.1f}, J={j:.1f} {kdj_status}")
+
+        # 布林带
+        if 'BOLLLOW(20)' in indicators:
+            boll_low = indicators['BOLLLOW(20)']
+            print(f"├── 布林带位置(20): {boll_low:.2f} (0=下轨, 1=上轨)")
+
+        # 价格位置
+        if 'POS(20)' in indicators:
+            pos = indicators['POS(20)']
+            pos_desc = "低位" if pos < 0.3 else ("高位" if pos > 0.7 else "中位")
+            print(f"├── 价格位置(20日): {pos*100:.0f}% ({pos_desc})")
+
+        # 波动率
+        if 'VOL(20)' in indicators:
+            vol = indicators['VOL(20)']
+            print(f"└── 20日波动率: {vol*100:.1f}%")
+
+        # 原因分析
+        reasons = result.get('reasons', [])
+        if reasons:
+            print("\n【信号原因】")
+            for reason in reasons:
+                print(f"  {reason}")
+
+        print("\n" + "═" * 70)
 
     def _calculate_score(self, features: pd.Series, prob: float) -> float:
         """
@@ -664,12 +1011,32 @@ class QlibStrategy(IStrategy):
 
     def get_description(self) -> str:
         """获取策略描述"""
+        model_category = self._get_model_category()
         return (
             f"微软 Qlib 策略: 特征集={self.feature_set}, "
-            f"模型={self.model_type}, "
+            f"模型={self.model_type} ({model_category}), "
             f"买入阈值={self.buy_threshold}, "
             f"止损={self.stop_loss_pct*100}%"
         )
+
+    def _get_model_category(self) -> str:
+        """获取模型类别"""
+        if self.model_type in ['lgb', 'lightgbm', 'xgboost', 'xgb', 'catboost', 'double_ensemble']:
+            return 'GBDT'
+        elif self.model_type in ['lstm', 'gru', 'alstm', 'transformer', 'tcn', 'localformer']:
+            return 'PyTorch序列'
+        elif self.model_type in ['gats', 'sfm', 'tabnet', 'adarnn', 'add', 'hist', 'igmtf', 'krnn', 'tra', 'tcts', 'sandwich']:
+            return 'PyTorch高级'
+        return '未知'
+
+    @staticmethod
+    def list_supported_models() -> Dict[str, List[str]]:
+        """列出所有支持的模型"""
+        return {
+            'GBDT系列': ['lgb', 'lightgbm', 'xgboost', 'xgb', 'catboost', 'double_ensemble'],
+            'PyTorch序列': ['lstm', 'gru', 'alstm', 'transformer', 'tcn', 'localformer'],
+            'PyTorch高级': ['gats', 'sfm', 'tabnet', 'adarnn', 'add', 'hist', 'igmtf', 'krnn', 'tra', 'tcts', 'sandwich'],
+        }
 
 
 class QlibStockSelector:
