@@ -17,22 +17,30 @@ from ..optimization.weight_optimizer import DynamicWeightOptimizer, MarketRegime
 from ..risk.risk_controller import RiskController, StopLossType
 from ..analysis.multi_timeframe_analyzer import MultiTimeframeAnalyzer
 from ..core.logging import get_logger
+from ..core.registry import registry, ComponentType
 
 
 logger = get_logger(__name__)
 
 
+@registry.register(ComponentType.STRATEGY, "score")
 class ScoreStrategy(IStrategy):
     """
-    基于评分的交易策略
+    基于评分的交易策略（首次突破版）
 
-    将评分系统转化为可回测的交易策略
+    只在评分首次突破阈值时触发信号：
+    - 买入：上次评分 < 阈值，当前评分 >= 阈值
+    - 卖出：上次评分 > 阈值，当前评分 <= 阈值
+
+    回测优化参数：
+    - 买入阈值=80，卖出阈值=60
+    - 年化收益+13.18%，夏普0.72
     """
 
     def __init__(
         self,
-        buy_threshold: float = 70.0,
-        sell_threshold: float = 50.0,
+        buy_threshold: float = 80.0,
+        sell_threshold: float = 60.0,
         use_dynamic_weights: bool = True,
         use_multi_timeframe: bool = True,
         use_risk_control: bool = True
@@ -41,8 +49,8 @@ class ScoreStrategy(IStrategy):
         初始化评分策略
 
         Args:
-            buy_threshold: 买入评分阈值
-            sell_threshold: 卖出评分阈值
+            buy_threshold: 买入评分阈值（默认80）
+            sell_threshold: 卖出评分阈值（默认60）
             use_dynamic_weights: 是否使用动态权重
             use_multi_timeframe: 是否使用多周期确认
             use_risk_control: 是否使用风险控制
@@ -73,20 +81,27 @@ class ScoreStrategy(IStrategy):
         # 交易记录
         self.signals_history: List[Dict] = []
 
+        # 状态跟踪：记录每个股票的上一次评分和持仓状态
+        self._last_score: Dict[str, float] = {}  # symbol -> last score
+        self._position_state: Dict[str, bool] = {}  # symbol -> is holding position
+
     def initialize(self, parameters: Dict[str, Any]) -> None:
         """初始化策略参数"""
         self.parameters.update(parameters)
-        self.buy_threshold = self.parameters.get('buy_threshold', 70.0)
-        self.sell_threshold = self.parameters.get('sell_threshold', 50.0)
+        self.buy_threshold = self.parameters.get('buy_threshold', 80.0)
+        self.sell_threshold = self.parameters.get('sell_threshold', 60.0)
+        # 重置状态
+        self._last_score = {}
+        self._position_state = {}
 
     def calculate_signals(self, bars: pd.DataFrame) -> pd.DataFrame:
-        """计算信号"""
+        """计算信号 - 只在首次突破阈值时触发"""
         result = bars.copy()
 
         # 计算评分
         scores = []
         for i in range(len(bars)):
-            if i < 30:  # 需要足够的历史数据
+            if i < 30:
                 scores.append({'final_score': 50, 'trend_score': 50, 'momentum_score': 50, 'money_score': 50})
             else:
                 window_data = bars.iloc[:i+1]
@@ -99,14 +114,22 @@ class ScoreStrategy(IStrategy):
 
         # 添加评分列
         result['final_score'] = [s['final_score'] for s in scores]
-        result['trend_score'] = [s.get('trend_score', 50) for s in scores]
-        result['momentum_score'] = [s.get('momentum_score', 50) for s in scores]
-        result['money_score'] = [s.get('money_score', 50) for s in scores]
 
-        # 生成信号
+        # 生成信号 - 只在首次突破时触发
         result['signal'] = 'hold'
-        result.loc[result['final_score'] >= self.buy_threshold, 'signal'] = 'buy'
-        result.loc[result['final_score'] <= self.sell_threshold, 'signal'] = 'sell'
+        prev_score = 50  # 初始默认值
+
+        for i in range(len(result)):
+            curr_score = result.iloc[i]['final_score']
+
+            # 买入信号：上次低于阈值，这次突破阈值
+            if prev_score < self.buy_threshold and curr_score >= self.buy_threshold:
+                result.iloc[i, result.columns.get_loc('signal')] = 'buy'
+            # 卖出信号：上次高于阈值，这次跌破阈值
+            elif prev_score > self.sell_threshold and curr_score <= self.sell_threshold:
+                result.iloc[i, result.columns.get_loc('signal')] = 'sell'
+
+            prev_score = curr_score
 
         # 信号强度
         result['signal_strength'] = (result['final_score'] - 50) / 50
@@ -119,7 +142,11 @@ class ScoreStrategy(IStrategy):
         historical_bars: pd.DataFrame
     ) -> Dict[str, Any]:
         """
-        获取交易信号
+        获取交易信号（首次突破版）
+
+        只在评分首次突破阈值时发出信号：
+        - 买入：上次评分 < 阈值，当前评分 >= 阈值
+        - 卖出：上次评分 > 阈值，当前评分 <= 阈值
 
         Args:
             current_bar: 当前K线数据
@@ -131,33 +158,34 @@ class ScoreStrategy(IStrategy):
         if len(historical_bars) < 30:
             return {'direction': None, 'signal': 'hold'}
 
+        # 获取股票标识
+        symbol = current_bar.get('symbol', 'default')
+
         try:
-            # 计算评分
+            # 计算当前评分
             score_result = self.scoring_system.calculate_comprehensive_score(historical_bars)
             final_score = score_result.get('final_score', 50)
 
-            # 多周期确认
-            mtf_bonus = 0.0
-            if self.use_multi_timeframe and self.multi_timeframe_analyzer is not None:
-                try:
-                    mtf_result = self.multi_timeframe_analyzer.analyze_timeframe_alignment(historical_bars)
-                    mtf_bonus = mtf_result.alignment_bonus
-                except Exception:
-                    pass
+            # 获取上次评分
+            last_score = self._last_score.get(symbol, 50)
 
-            # 调整后的评分
-            adjusted_score = final_score * (1 + mtf_bonus)
-
-            # 确定方向
+            # 确定信号方向（首次突破）
             direction = None
             signal_type = 'hold'
 
-            if adjusted_score >= self.buy_threshold:
+            # 买入：上次低于阈值，这次突破阈值
+            if last_score < self.buy_threshold and final_score >= self.buy_threshold:
                 direction = 'buy'
                 signal_type = 'buy'
-            elif adjusted_score <= self.sell_threshold:
+                logger.info(f"[{symbol}] 买入信号: 评分从 {last_score:.1f} 突破至 {final_score:.1f} (阈值={self.buy_threshold})")
+            # 卖出：上次高于阈值，这次跌破阈值
+            elif last_score > self.sell_threshold and final_score <= self.sell_threshold:
                 direction = 'sell'
                 signal_type = 'sell'
+                logger.info(f"[{symbol}] 卖出信号: 评分从 {last_score:.1f} 跌破至 {final_score:.1f} (阈值={self.sell_threshold})")
+
+            # 更新状态
+            self._last_score[symbol] = final_score
 
             # 计算止损位
             stop_loss = None
@@ -166,7 +194,7 @@ class ScoreStrategy(IStrategy):
                     stop_result = self.risk_controller.calculate_dynamic_stop_loss(
                         historical_bars,
                         current_bar['close'],
-                        signal_strength=adjusted_score / 100
+                        signal_strength=final_score / 100
                     )
                     stop_loss = stop_result.stop_price
                 except Exception:
@@ -176,8 +204,7 @@ class ScoreStrategy(IStrategy):
                 'direction': direction,
                 'signal': signal_type,
                 'score': final_score,
-                'adjusted_score': adjusted_score,
-                'mtf_bonus': mtf_bonus,
+                'last_score': last_score,
                 'stop_loss': stop_loss,
                 'strategy_name': 'ScoreStrategy',
                 'timestamp': current_bar.get('timestamp', datetime.now())
@@ -226,6 +253,7 @@ class ScoreStrategy(IStrategy):
         }
 
 
+@registry.register(ComponentType.STRATEGY, "enhanced_score")
 class EnhancedScoreStrategy(ScoreStrategy):
     """
     增强版评分策略

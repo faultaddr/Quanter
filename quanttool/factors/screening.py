@@ -15,7 +15,7 @@ from enum import Enum
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 
-from .candlestick_patterns import analyze_candlestick_patterns
+from .talib_patterns import recognize_talib_patterns
 
 
 class ScreenResult(Enum):
@@ -45,14 +45,14 @@ class CandlestickPatternScreener:
     - 低位 + 看跌形态 = WARNING（可能洗盘）
     """
 
-    # 强看涨形态
-    STRONG_BULLISH = ['晨星', '看涨吞没', '白色三兵']
+    # 强看涨形态（TA-Lib形态名称）
+    STRONG_BULLISH = ['晨星', '十字晨星', '看涨吞没', '三个白兵', '弃婴', '南方三星']
     # 中等看涨形态
-    MEDIUM_BULLISH = ['锤子线', '倒锤子', '穿刺线', '大阳线']
+    MEDIUM_BULLISH = ['锤头', '倒锤头', '刺透形态', '光头光脚阳', '蜻蜓十字']
     # 强看跌形态
-    STRONG_BEARISH = ['暮星', '看跌吞没', '黑色三鸦']
+    STRONG_BEARISH = ['暮星', '十字暮星', '看跌吞没', '三只乌鸦', '墓碑十字']
     # 中等看跌形态
-    MEDIUM_BEARISH = ['流星线', '吊颈线', '乌云盖顶', '大阴线']
+    MEDIUM_BEARISH = ['射击之星', '上吊线', '乌云盖顶', '光头光脚阴']
 
     def __init__(self):
         """初始化K线形态筛选器"""
@@ -78,9 +78,9 @@ class CandlestickPatternScreener:
             ScreeningOutcome: 筛选结果
         """
         # 调用形态识别
-        patterns_result = analyze_candlestick_patterns(df, lookback=5)
+        patterns_result = recognize_talib_patterns(df, lookback=5)
 
-        if "error" in patterns_result or not patterns_result.get("patterns"):
+        if not patterns_result or not patterns_result.get("patterns"):
             # 无形态识别结果，默认通过
             return ScreeningOutcome(
                 result=ScreenResult.PASS,

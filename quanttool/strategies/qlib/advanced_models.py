@@ -42,6 +42,256 @@ def _ensure_qlib_initialized():
             pass
 
 
+def _patch_qlib_gats():
+    """
+    修复 Qlib GATs 的多个 bug：
+
+    1. fit() 创建 base model 时没有传递参数
+    2. 单股票数据时按日期分组导致 batch size=1 的标量错误
+    """
+    if not QLIB_AVAILABLE:
+        return
+
+    try:
+        import qlib.contrib.model.pytorch_gats as gats_module
+        import copy
+        import torch
+
+        def _patched_fit(self, dataset, evals_result=None, save_path=None):
+            """修复后的 fit 方法"""
+            from qlib.data.dataset import DatasetH
+            from qlib.data.dataset.handler import DataHandlerLP
+            from qlib.contrib.model.pytorch_lstm import LSTMModel
+            from qlib.contrib.model.pytorch_gru import GRUModel
+            from qlib.utils import get_or_create_path
+
+            if evals_result is None:
+                evals_result = {}
+
+            df_train, df_valid, df_test = dataset.prepare(
+                ["train", "valid", "test"],
+                col_set=["feature", "label"],
+                data_key=DataHandlerLP.DK_L,
+            )
+            if df_train.empty or df_valid.empty:
+                raise ValueError("Empty data from dataset, please check your dataset config.")
+
+            x_train, y_train = df_train["feature"], df_train["label"]
+            x_valid, y_valid = df_valid["feature"], df_valid["label"]
+
+            save_path = get_or_create_path(save_path)
+            stop_steps = 0
+            best_score = -np.inf
+            best_epoch = 0
+            evals_result["train"] = []
+            evals_result["valid"] = []
+
+            # ===== 修复1：传递正确的参数给 base model =====
+            if self.base_model == "LSTM":
+                pretrained_model = LSTMModel(
+                    d_feat=self.d_feat,
+                    hidden_size=self.hidden_size,
+                    num_layers=self.num_layers,
+                    dropout=self.dropout
+                )
+            elif self.base_model == "GRU":
+                pretrained_model = GRUModel(
+                    d_feat=self.d_feat,
+                    hidden_size=self.hidden_size,
+                    num_layers=self.num_layers,
+                    dropout=self.dropout
+                )
+            else:
+                raise ValueError("unknown base model name `%s`" % self.base_model)
+
+            if self.model_path is not None:
+                self.logger.info("Loading pretrained model...")
+                pretrained_model.load_state_dict(torch.load(self.model_path, map_location=self.device))
+
+            model_dict = self.GAT_model.state_dict()
+            pretrained_dict = {
+                k: v for k, v in pretrained_model.state_dict().items() if k in model_dict
+            }
+            model_dict.update(pretrained_dict)
+            self.GAT_model.load_state_dict(model_dict)
+            self.logger.info("Loading pretrained model Done...")
+
+            self.logger.info("training...")
+            self.fitted = True
+
+            # ===== 修复2：使用 batch 训练而非按日期分组 =====
+            # Qlib GATs 没有 batch_size 属性，使用合理的默认值
+            batch_size = min(getattr(self, 'batch_size', len(x_train)), len(x_train))
+
+            # 获取数据
+            x_train_values = x_train.values
+            y_train_values = np.squeeze(y_train.values)
+            x_valid_values = x_valid.values
+            y_valid_values = np.squeeze(y_valid.values)
+
+            for step in range(self.n_epochs):
+                self.logger.info("Epoch%d:", step)
+
+                # 训练一个 epoch
+                self.GAT_model.train()
+                n_samples = len(x_train_values)
+                indices = np.random.permutation(n_samples)
+
+                for start in range(0, n_samples, batch_size):
+                    end = min(start + batch_size, n_samples)
+                    batch_indices = indices[start:end]
+
+                    feature = torch.from_numpy(x_train_values[batch_indices]).float().to(self.device)
+                    label = torch.from_numpy(y_train_values[batch_indices]).float().to(self.device)
+
+                    pred = self.GAT_model(feature)
+                    loss = self.loss_fn(pred, label)
+
+                    self.train_optimizer.zero_grad()
+                    loss.backward()
+                    # 移除梯度裁剪以避免潜在的崩溃问题
+                    self.train_optimizer.step()
+
+                # 评估
+                self.GAT_model.eval()
+                train_losses, train_scores = [], []
+                valid_losses, valid_scores = [], []
+
+                with torch.no_grad():
+                    # 训练集评估
+                    for start in range(0, len(x_train_values), batch_size):
+                        end = min(start + batch_size, len(x_train_values))
+                        feature = torch.from_numpy(x_train_values[start:end]).float().to(self.device)
+                        label = torch.from_numpy(y_train_values[start:end]).float().to(self.device)
+                        pred = self.GAT_model(feature)
+                        train_losses.append(self.loss_fn(pred, label).item())
+                        train_scores.append(self.metric_fn(pred, label).item())
+
+                    # 验证集评估
+                    for start in range(0, len(x_valid_values), batch_size):
+                        end = min(start + batch_size, len(x_valid_values))
+                        feature = torch.from_numpy(x_valid_values[start:end]).float().to(self.device)
+                        label = torch.from_numpy(y_valid_values[start:end]).float().to(self.device)
+                        pred = self.GAT_model(feature)
+                        valid_losses.append(self.loss_fn(pred, label).item())
+                        valid_scores.append(self.metric_fn(pred, label).item())
+
+                train_score = np.mean(train_scores)
+                val_score = np.mean(valid_scores)
+
+                self.logger.info("train %.6f, valid %.6f" % (train_score, val_score))
+                evals_result["train"].append(train_score)
+                evals_result["valid"].append(val_score)
+
+                if val_score > best_score:
+                    best_score = val_score
+                    stop_steps = 0
+                    best_epoch = step
+                    best_param = copy.deepcopy(self.GAT_model.state_dict())
+                else:
+                    stop_steps += 1
+                    if stop_steps >= self.early_stop:
+                        self.logger.info("early stop")
+                        break
+
+            self.logger.info("best score: %.6lf @ %d" % (best_score, best_epoch))
+            self.GAT_model.load_state_dict(best_param)
+            torch.save(best_param, save_path)
+
+            if hasattr(self, 'use_gpu') and self.use_gpu:
+                torch.cuda.empty_cache()
+
+        # 应用 patch
+        gats_module.GATs.fit = _patched_fit
+        logger.info("已修复 Qlib GATs 参数和批处理 bug")
+
+    except Exception as e:
+        logger.warning(f"无法 patch Qlib GATs: {e}")
+
+
+def _patch_qlib_hist():
+    """
+    修复 Qlib HIST 的类似 bug
+    """
+    if not QLIB_AVAILABLE:
+        return
+
+    try:
+        import qlib.contrib.model.pytorch_hist as hist_module
+        import copy
+
+        _original_fit = hist_module.HIST.fit
+
+        def _patched_fit(self, dataset, evals_result=None, save_path=None):
+            """修复后的 HIST fit 方法"""
+            from qlib.data.dataset import DatasetH
+            from qlib.data.dataset.handler import DataHandlerLP
+            from qlib.utils import get_or_create_path
+            import torch
+
+            if evals_result is None:
+                evals_result = {}
+
+            df_train, df_valid, df_test = dataset.prepare(
+                ["train", "valid", "test"],
+                col_set=["feature", "label"],
+                data_key=DataHandlerLP.DK_L,
+            )
+            if df_train.empty or df_valid.empty:
+                raise ValueError("Empty data from dataset, please check your dataset config.")
+
+            x_train, y_train = df_train["feature"], df_train["label"]
+            x_valid, y_valid = df_valid["feature"], df_valid["label"]
+
+            save_path = get_or_create_path(save_path)
+            stop_steps = 0
+            best_score = -np.inf
+            best_epoch = 0
+            evals_result["train"] = []
+            evals_result["valid"] = []
+
+            # HIST 的初始化逻辑可能不同，跳过预训练模型加载
+            self.logger.info("training...")
+            self.fitted = True
+
+            for step in range(self.n_epochs):
+                self.logger.info("Epoch%d:", step)
+                self.logger.info("training...")
+                self.train_epoch(x_train, y_train)
+                self.logger.info("evaluating...")
+                train_loss, train_score = self.test_epoch(x_train, y_train)
+                val_loss, val_score = self.test_epoch(x_valid, y_valid)
+                self.logger.info("train %.6f, valid %.6f" % (train_score, val_score))
+                evals_result["train"].append(train_score)
+                evals_result["valid"].append(val_score)
+
+                if val_score > best_score:
+                    best_score = val_score
+                    stop_steps = 0
+                    best_epoch = step
+                    best_param = copy.deepcopy(self.HIST_model.state_dict())
+                else:
+                    stop_steps += 1
+                    if stop_steps >= self.early_stop:
+                        self.logger.info("early stop")
+                        break
+
+            self.logger.info("best score: %.6lf @ %d" % (best_score, best_epoch))
+            self.HIST_model.load_state_dict(best_param)
+            torch.save(best_param, save_path)
+
+        hist_module.HIST.fit = _patched_fit
+        logger.info("已修复 Qlib HIST 参数问题")
+
+    except Exception as e:
+        logger.warning(f"无法 patch Qlib HIST: {e}")
+
+
+# 在模块加载时应用 patches
+_patch_qlib_gats()
+_patch_qlib_hist()
+
+
 def _get_gpu_id(device: str) -> int:
     """将设备字符串转换为 GPU ID"""
     if device == 'cuda':
@@ -140,7 +390,9 @@ class QlibNativeModelBase(QlibModelBase):
             try:
                 _ensure_qlib_initialized()
                 logger.info(f"使用 Qlib 原生 fit(dataset) 方法训练 {self.MODEL_NAME}...")
-                self._qlib_model.fit(self._dataset)
+                logger.info(f"DEBUG: 开始调用 _qlib_model.fit(), _qlib_model 类型: {type(self._qlib_model)}")
+                result = self._qlib_model.fit(self._dataset)
+                logger.info(f"DEBUG: _qlib_model.fit() 返回, result={result}")
                 if self.INTERNAL_ATTR:
                     self._internal_model = getattr(self._qlib_model, self.INTERNAL_ATTR, None)
                 logger.info(f"Qlib 原生 {self.MODEL_NAME} 模型训练完成，特征数: {len(self.feature_names_)}")
@@ -350,7 +602,7 @@ class TabNetModelWrapper(QlibNativeModelBase):
 
     MODEL_NAME = "tabnet"
     QLIB_MODULE = "qlib.contrib.model.pytorch_tabnet"
-    QLIB_CLASS = "TabNetModel"
+    QLIB_CLASS = "TabnetModel"
     INTERNAL_ATTR = ""
     DEFAULT_PARAMS = {'n_d': 8, 'n_a': 8, 'n_steps': 3}
 

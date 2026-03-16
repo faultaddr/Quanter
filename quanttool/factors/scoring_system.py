@@ -1,22 +1,23 @@
 """
-股票多维度打分系统（百分制版本 - 增强版）
+股票多维度打分系统（右侧交易版）
 
 基于 MyTT 指标库设计更精准的多因子组合
 
-核心改进：
-1. 分层评分架构：趋势分 × 位置修正系数
+核心设计：
+1. 评分公式：最终评分 = 趋势分 + 趋势确认加成 + 成交量加成
 2. 三大类因子组：
-   - 趋势因子（确认方向）：均线系统、DMI、MACD
+   - 趇势因子（确认方向）：均线系统、DMI、MACD
    - 动能因子（确认强度）：MTM、ROC、KDJ、RSI
    - 资金因子（确认真实性）：OBV、MFI、成交量
-3. 多维度交叉验证，减少假信号
+3. 右侧交易逻辑：高评分 = 趋势确立 + 右侧交易机会好
+4. 首次突破信号：只在评分首次突破阈值时触发买卖
 """
 import numpy as np
 import pandas as pd
 from typing import Dict, Tuple, List, Optional
 from datetime import datetime
 
-from .candlestick_patterns import analyze_candlestick_patterns
+from .talib_patterns import recognize_talib_patterns
 
 
 # ==================== MyTT 核心函数移植 ====================
@@ -162,17 +163,17 @@ def ATR(CLOSE, HIGH, LOW, N=20):
 
 class ScoringSystem:
     """
-    股票多维度打分系统（百分制 - 增强版）
+    股票多维度打分系统（右侧交易版）
 
-    架构：最终评分 = 趋势得分 × 位置修正系数
+    评分公式：最终评分 = 趋势分 + 趋势确认加成 + 成交量加成
 
     三大类因子组：
-    1. 趋势因子（权重40%）：确认方向
+    1. 趋势因子（权重35%）：确认方向
        - 均线系统（MA5/MA10/MA20排列）
        - DMI趋势强度（PDI/MDI/ADX）
        - MACD趋势方向（DIF/DEA方向）
 
-    2. 动能因子（权重35%）：确认强度
+    2. 动能因子（权重40%）：确认强度
        - KDJ超买超卖（K/D/J位置）
        - RSI强度（RSI位置和斜率）
        - MTM动量（价格动量）
@@ -183,11 +184,11 @@ class ScoringSystem:
        - MFI资金流量（成交量RSI）
        - 量价关系（价涨量增/价跌量缩）
 
-    位置修正系数（风险控制）：
-    - 安全区: 1.0
-    - 适中区: 0.85
-    - 警戒区: 0.6
-    - 危险区: 0.35
+    趋势确认加成：
+    - 多头排列 +10分
+    - DMI多头趋势 +5分
+    - MACD金叉在零轴上方 +5分
+    - 放量确认 +3分
     """
 
     # 三大类因子权重配置（优化版：降低趋势追高权重，增加均值回归考量）
@@ -347,7 +348,12 @@ class ScoringSystem:
 
     def calculate_comprehensive_score(self, df: pd.DataFrame) -> Dict:
         """
-        计算综合评分（简化版，用于回测）
+        计算综合评分（右侧交易版）
+
+        设计理念：
+        - 高评分 = 趋势确立 + 右侧交易机会好
+        - 不惩罚位置高，因为右侧交易本就是追涨
+        - 位置风险由策略层面控制（如止损）
 
         Args:
             df: 股票数据DataFrame
@@ -364,16 +370,11 @@ class ScoringSystem:
         factors = self._calculate_trend_factors(df, latest)
         trend_score, factor_scores = self._calculate_trend_score(factors, df)
 
-        # 计算位置修正系数
-        position_modifier, _ = self._calculate_position_modifier(latest, factors)
-
-        # 最终评分
-        final_score = trend_score * position_modifier
-
         # 获取各因子组评分
         momentum_factors = factors.get('momentum_factors', {})
         money_factors = factors.get('money_factors', {})
         aux_factors = factors.get('aux_factors', {})
+        trend_factors = factors.get('trend_factors', {})
 
         momentum_score = sum(
             momentum_factors.get(k, 50) * self.MOMENTUM_FACTOR_WEIGHTS.get(k, 0.25)
@@ -384,35 +385,59 @@ class ScoringSystem:
             for k in self.MONEY_FACTOR_WEIGHTS
         )
 
-        # ========== 均值回归信号增强 ==========
-        # 分析发现：超卖信号（低BIAS + 低RSI）有显著正收益
-        mean_reversion_bonus = 0.0
-        bias20 = aux_factors.get('bias20', 0)
-        rsi = momentum_factors.get('rsi', 50)
+        # ========== 右侧交易评分计算 ==========
+        # 基础分数 = 趋势分（直接使用，不做位置惩罚）
+        base_score = trend_score
 
-        # 超卖反转信号：BIAS20 < -3% 且 RSI < 40
-        if bias20 < -0.03 and rsi < 40:
-            mean_reversion_bonus = 15.0  # 强超卖反转信号
-        elif bias20 < -0.02 and rsi < 50:
-            mean_reversion_bonus = 8.0   # 中等超卖信号
-        elif bias20 < -0.01:
-            mean_reversion_bonus = 3.0   # 轻微超卖
-        # 超买风险警示：BIAS20 > +3% 且 RSI > 60
-        elif bias20 > 0.03 and rsi > 60:
-            mean_reversion_bonus = -10.0  # 强超买，有回调风险
-        elif bias20 > 0.02 and rsi > 55:
-            mean_reversion_bonus = -5.0   # 中等超买
+        # ========== 趋势确认加成 ==========
+        # 右侧交易需要确认趋势已经确立
+        trend_bonus = 0.0
+        ma5 = aux_factors.get('ma5', 0)
+        ma10 = aux_factors.get('ma10', 0)
+        ma20 = aux_factors.get('ma20', 0)
+        close = aux_factors.get('close', 0)
 
-        # 应用均值回归修正
-        final_score = final_score + mean_reversion_bonus
+        # 多头排列加成
+        if ma5 > 0 and ma10 > 0 and ma20 > 0:
+            if ma5 > ma10 > ma20 and close > ma5:
+                trend_bonus = 10.0  # 强多头排列
+            elif ma5 > ma10 and close > ma20:
+                trend_bonus = 5.0   # 弱多头排列
+
+        # DMI趋势强度加成
+        pdi = trend_factors.get('pdi', 0)
+        mdi = trend_factors.get('mdi', 0)
+        adx = trend_factors.get('adx', 0)
+        if pdi > mdi and adx > 25:
+            trend_bonus += 5.0  # DMI确认多头趋势
+
+        # MACD多头加成
+        macd_dif = trend_factors.get('macd_dif', 0)
+        macd_dea = trend_factors.get('macd_dea', 0)
+        if macd_dif > macd_dea and macd_dif > 0:
+            trend_bonus += 5.0  # MACD金叉且在零轴上方
+
+        # ========== 成交量确认 ==========
+        volume_bonus = 0.0
+        volume_ratio = money_factors.get('volume_ratio', 1.0)
+        if volume_ratio > 1.5:  # 放量
+            volume_bonus = 3.0
+        elif volume_ratio > 1.2:
+            volume_bonus = 1.5
+
+        # ========== 最终评分 ==========
+        final_score = base_score + trend_bonus + volume_bonus
+
+        # 限制范围 0-100
+        final_score = max(0, min(100, final_score))
 
         result = {
-            'final_score': round(max(0, min(100, final_score)), 2),
+            'final_score': round(final_score, 2),
             'trend_score': round(trend_score, 2),
             'momentum_score': round(momentum_score, 2),
             'money_score': round(money_score, 2),
-            'position_modifier': round(position_modifier, 2),
-            'mean_reversion_bonus': mean_reversion_bonus,
+            'trend_bonus': trend_bonus,
+            'volume_bonus': volume_bonus,
             'factor_scores': factor_scores,
             'factors_raw': factors
         }
@@ -432,12 +457,12 @@ class ScoringSystem:
                             trade_date_T1: Optional[str] = None,
                             open_T1: Optional[float] = None) -> Dict:
         """
-        计算股票的综合评分（百分制 - 重构版）
+        计算股票的综合评分（右侧交易版）
 
-        架构：最终评分 = 趋势得分 × 位置修正系数
+        评分公式：最终评分 = 趋势分 + 趋势确认加成 + 成交量加成
 
         Args:
-            df: 股票数据DataFrame（需包含至少40日数据）
+            df: 股票数据DataFrame（需包含至少30日数据）
             stock_code: 股票代码
             trade_date_T: T日（信号计算日）日期字符串
             trade_date_T1: T+1日（计划买入日）日期字符串
@@ -446,8 +471,8 @@ class ScoringSystem:
         Returns:
             Dict: 包含评分、因子值、交易计划的字典
         """
-        if df.empty or len(df) < 40:
-            return {"error": "数据不足，至少需要40个交易日数据"}
+        if df.empty or len(df) < 30:
+            return {"error": f"数据不足，至少需要30个交易日数据（当前{len(df)}条）"}
 
         latest = df.iloc[-1]
 
@@ -464,37 +489,76 @@ class ScoringSystem:
         trend_factors = self._calculate_trend_factors(df, latest)
         trend_score, factor_scores = self._calculate_trend_score(trend_factors, df)
 
-        # 3. 计算位置修正系数
-        position_modifier, position_warnings = self._calculate_position_modifier(latest, trend_factors)
+        # 3. 计算趋势确认加成
+        trend_bonus = 0.0
+        aux_factors = trend_factors.get('aux_factors', {})
+        momentum_factors = trend_factors.get('momentum_factors', {})
 
-        # 4. 最终评分 = 趋势得分 × 位置修正系数
-        final_score = trend_score * position_modifier
+        ma5 = aux_factors.get('ma5', 0)
+        ma10 = aux_factors.get('ma10', 0)
+        ma20 = aux_factors.get('ma20', 0)
+        close = aux_factors.get('close', 0)
 
-        # 5. 检测双触发信号
+        # 多头排列加成
+        if ma5 > 0 and ma10 > 0 and ma20 > 0:
+            if ma5 > ma10 > ma20 and close > ma5:
+                trend_bonus = 10.0
+            elif ma5 > ma10 and close > ma20:
+                trend_bonus = 5.0
+
+        # DMI趋势强度加成
+        pdi = trend_factors.get('trend_factors', {}).get('pdi', 0)
+        mdi = trend_factors.get('trend_factors', {}).get('mdi', 0)
+        adx = trend_factors.get('trend_factors', {}).get('adx', 0)
+        if pdi > mdi and adx > 25:
+            trend_bonus += 5.0
+
+        # MACD多头加成
+        macd_dif = trend_factors.get('trend_factors', {}).get('macd_dif', 0)
+        macd_dea = trend_factors.get('trend_factors', {}).get('macd_dea', 0)
+        if macd_dif > macd_dea and macd_dif > 0:
+            trend_bonus += 5.0
+
+        # 4. 成交量加成
+        volume_bonus = 0.0
+        volume_ratio = trend_factors.get('money_factors', {}).get('volume_ratio', 1.0)
+        if volume_ratio > 1.5:
+            volume_bonus = 3.0
+        elif volume_ratio > 1.2:
+            volume_bonus = 1.5
+
+        # 5. 最终评分
+        final_score = trend_score + trend_bonus + volume_bonus
+        final_score = max(0, min(100, final_score))
+
+        # 6. 检测双触发信号
         trigger_type, trigger_detail = self._detect_triggers(df, latest)
 
-        # 5.5 将K线形态详情添加到trend_factors中（用于熔断机制）
-        if 'candlestick_detail' in trend_factors:
-            trend_factors['candlestick_detail'] = trend_factors['candlestick_detail']
-
-        # 6. 计算交易执行信息（传入完整的trend_factors用于熔断判断）
+        # 7. 计算交易执行信息
         execution = self._calculate_execution_info(
             latest, open_T1, final_score, trigger_type, trend_factors
         )
 
-        # 7. 关键修复：熔断机制前置修正评分
-        # 如果熔断触发，大幅降低最终评分以反映真实风险
+        # 8. 熔断机制修正评分
         action_guide = execution.get('action_guide', '')
         if '熔断' in action_guide:
-            # 熔断触发：评分强制降至30分以下
             final_score = min(final_score, 25)
         elif '风险警告' in action_guide:
-            # 风险警告：评分打7折
             final_score = final_score * 0.7
 
-        # 8. 收集警告信息
+        # 9. 收集警告信息
         warnings = self._collect_warnings(trend_factors, latest)
-        warnings.extend(position_warnings)
+
+        # 10. 计算各因子组得分（用于报告展示）
+        momentum_score = sum(
+            momentum_factors.get(k, 50) * self.MOMENTUM_FACTOR_WEIGHTS.get(k, 0.25)
+            for k in self.MOMENTUM_FACTOR_WEIGHTS
+        )
+        money_factors = trend_factors.get('money_factors', {})
+        money_score = sum(
+            money_factors.get(k, 50) * self.MONEY_FACTOR_WEIGHTS.get(k, 0.33)
+            for k in self.MONEY_FACTOR_WEIGHTS
+        )
 
         return {
             "stock_code": stock_code,
@@ -503,8 +567,11 @@ class ScoringSystem:
             "close_T": float(latest.get('close', 0)),
             "score": round(final_score, 2),
             "score_grade": self._get_score_grade(final_score),
-            "trend_score": round(trend_score, 2),  # 新增：趋势得分
-            "position_modifier": round(position_modifier, 2),  # 新增：位置修正系数
+            "trend_score": round(trend_score, 2),
+            "momentum_score": round(momentum_score, 2),
+            "money_score": round(money_score, 2),
+            "trend_bonus": round(trend_bonus, 2),
+            "volume_bonus": round(volume_bonus, 2),
             "trigger_type": trigger_type,
             "trigger_detail": trigger_detail,
             "factors_raw": trend_factors,      # 原始因子值
@@ -817,6 +884,10 @@ class ScoringSystem:
         aux_factors['ma20'] = ma20
         aux_factors['ma50'] = ma50
         aux_factors['close'] = CLOSE[-1]
+
+        # ATR用于波动率修正
+        atr_val = ATR(CLOSE, HIGH, LOW, N=14)[-1]
+        aux_factors['atr_14'] = atr_val
 
         return {
             'trend_factors': trend_factors,
@@ -1144,9 +1215,9 @@ class ScoringSystem:
         )
 
         # 调用形态识别
-        patterns_result = analyze_candlestick_patterns(df, lookback=5)
+        patterns_result = recognize_talib_patterns(df, lookback=5)
 
-        if "error" in patterns_result or not patterns_result.get("patterns"):
+        if not patterns_result or not patterns_result.get("patterns"):
             return 0.0, {"patterns": [], "position_zone": "unknown", "assessment": ""}
 
         # 判断位置区域（区分长期和短期）
@@ -1259,29 +1330,92 @@ class ScoringSystem:
 
         return "; ".join(assessments) if assessments else ""
 
-    def _score_trend_strength(self, bias: float, pdi: float = 0, mdi: float = 0, adx: float = 0) -> float:
+    def _calculate_smooth_bias_score(self, bias: float) -> float:
         """
-        趋势强度评分（修复版：考虑DMI多空状态）
+        平滑乖离率评分（替代分段阈值）
+
+        公式：
+        - bias > 3%: score = 100 - 70 × max(0, (bias - 0.03) / 0.05)^2
+        - bias 0~3%: score = 60 + bias * 1000 (线性)
+        - bias < 0: score = 40 + bias * 400 (线性)
+
+        特点：
+        - 无硬边界，过渡平滑
+        - bias > 8% 时评分约 30 分（与原逻辑一致）
+
+        Args:
+            bias: 乖离率 (close/ma20 - 1)
+
+        Returns:
+            float: 0-100分
+        """
+        if bias > 0.03:
+            # 超买区域：二次函数衰减
+            excess = (bias - 0.03) / 0.05
+            score = 100 - 70 * min(1.0, excess ** 2)
+            # bias > 8% 叠加过热惩罚
+            if bias > 0.08:
+                overheat_penalty = (bias - 0.08) / 0.07  # 8%~15%
+                score *= (1 - min(0.5, overheat_penalty * 0.5))
+        elif bias > 0:
+            # 温和上涨区：线性增长
+            score = 60 + bias * 1000  # 60~90分
+        else:
+            # 下跌区：线性下降
+            score = max(10, 40 + bias * 400)  # 10~40分
+
+        return max(0, min(100, score))
+
+    def _calculate_volatility_modifier(self, atr_percent: float) -> Tuple[float, str]:
+        """
+        波动率修正系数
+
+        公式：volatility_modifier = min(1, (ATR% / 基准波动率%)^0.5)
+
+        基准波动率：3%（中等波动）
 
         逻辑：
+        - ATR% >= 3%: modifier = 1.0（正常）
+        - ATR% < 3%: modifier < 1.0（低波动惩罚）
+        - ATR% < 1.5%: modifier ≈ 0.7（流动性不足）
+
+        Args:
+            atr_percent: ATR占股价的百分比 (ATR/close)
+
+        Returns:
+            Tuple[float, str]: (修正系数, 描述)
+        """
+        BASE_VOLATILITY = 0.03  # 3%
+
+        if atr_percent >= BASE_VOLATILITY:
+            return 1.0, "正常波动"
+
+        volatility_mod = min(1.0, (atr_percent / BASE_VOLATILITY) ** 0.5)
+
+        if volatility_mod < 0.7:
+            desc = "低波动警告"
+        elif volatility_mod < 0.9:
+            desc = "波动偏低"
+        else:
+            desc = "波动正常"
+
+        return volatility_mod, desc
+
+    def _score_trend_strength(self, bias: float, pdi: float = 0, mdi: float = 0, adx: float = 0) -> float:
+        """
+        趋势强度评分（优化版：使用平滑函数替代硬边界分段）
+
+        逻辑：
+        - 使用 _calculate_smooth_bias_score 替代硬边界分段
         - 股价在MA20上方3-8%：高分（趋势确立且不过度偏离）
         - 股价在MA20上方0-3%：中等分（趋势刚形成）
         - 股价在MA20上方>8%：低分（过度偏离，回调风险）
         - 股价在MA20下方：极低分（趋势未确立）
-        - **新增**：DMI空头占优时，上限封顶60分（趋势不可靠）
-        - **新增**：DMI多头占优时，可正常评分
+        - DMI空头占优时，上限封顶60分（趋势不可靠）
+        - DMI多头占优时，可正常评分
         """
-        # 基础分数（基于乖离率）
-        if bias > 0.08:
-            base_score = 30  # 过度偏离
-        elif bias > 0.03:
-            base_score = 90 + (bias - 0.03) * 200  # 90-100分，最佳区域
-        elif bias > 0:
-            base_score = 60 + bias * 1000  # 60-90分，趋势刚形成
-        elif bias > -0.05:
-            base_score = 40 + bias * 400  # 40-60分，弱势
-        else:
-            base_score = max(10, 40 + bias * 200)  # 10-40分，趋势未确立
+        # 使用平滑函数计算基础分数
+        base_score = self._calculate_smooth_bias_score(bias)
 
         # 关键修复：DMI状态修正
         dmi_diff = abs(pdi - mdi)
@@ -1511,20 +1645,32 @@ class ScoringSystem:
 
         return False, ""
 
-    def _calculate_position_modifier(self, latest: pd.Series, factors: Dict) -> Tuple[float, List[str]]:
+    def _calculate_position_modifier(self, latest: pd.Series, factors: Dict) -> Tuple[float, List[str], Dict]:
         """
         计算位置修正系数（风险控制）- 趋势敏感版
 
-        核心改进：位置风险必须结合趋势方向判断
-        - 下跌趋势 + 布林带下轨附近 = 危险区（接飞刀风险）
-        - 下跌趋势 + 布林带上轨附近 = 反弹到阻力位，危险
-        - 上升趋势 + 布林带下轨附近 = 回调机会，相对安全
-        - 上升趋势 + 布林带上轨附近 = 超买，但趋势可能延续
+        核心改进：
+        1. 位置风险必须结合趋势方向判断
+           - 下跌趋势 + 布林带下轨附近 = 危险区（接飞刀风险）
+           - 下跌趋势 + 布林带上轨附近 = 反弹到阻力位，危险
+           - 上升趋势 + 布林带下轨附近 = 回调机会，相对安全
+           - 上升趋势 + 布林带上轨附近 = 超买，但趋势可能延续
+        2. 集成波动率修正系数
+        3. 返回保护信息用于报告展示
 
         用于风险控制，不奖励强势，只惩罚风险
+
+        Returns:
+            Tuple[float, List[str], Dict]: (修正系数, 警告列表, 保护信息字典)
         """
         modifier = 1.0
         warnings = []
+        protection_applied = {
+            "level": None,
+            "original_modifier": 1.0,
+            "final_modifier": 1.0,
+            "contribution": 0.0
+        }
 
         # 从 aux_factors 中获取指标值
         aux_factors = factors.get('aux_factors', {})
@@ -1539,8 +1685,12 @@ class ScoringSystem:
         cci = aux_factors.get('cci', 0)
         position_ratio = aux_factors.get('position_ratio', 0.5)  # 新增：60日分位
 
-        # 获取均线数据用于趋势判断
+        # 获取ATR用于波动率修正
+        atr = aux_factors.get('atr_14', 0)
         close = aux_factors.get('close', 0)
+        atrp = atr / close if close > 0 else 0
+
+        # 获取均线数据用于趋势判断
         ma5 = aux_factors.get('ma5', 0)
         ma10 = aux_factors.get('ma10', 0)
         ma20 = aux_factors.get('ma20', 0)
@@ -1583,12 +1733,25 @@ class ScoringSystem:
         # 在下跌趋势惩罚之前，先检查低位超卖保护
         is_protected, protection_level = self._check_low_oversold_protection(aux_factors, momentum_factors)
 
+        # 记录保护前的 modifier（用于计算保护贡献）
+        original_modifier_before_protection = modifier
+
         if is_protected:
+            protection_applied["level"] = protection_level
             if protection_level == "strong":
                 warnings.append("🟢【强保护】极度低位+极端超卖(60日分位≤10%+RSI≤30)，反弹概率较高")
                 # 强保护：完全禁止下跌趋势惩罚，保持较高评分
                 # 不应用任何下跌趋势惩罚，直接返回
-                return max(0.8, modifier), warnings
+                final_mod = max(0.8, modifier)
+                protection_applied["original_modifier"] = original_modifier_before_protection
+                protection_applied["final_modifier"] = final_mod
+                protection_applied["contribution"] = final_mod - original_modifier_before_protection
+                # 应用波动率修正
+                volatility_mod, vol_desc = self._calculate_volatility_modifier(atrp)
+                final_mod *= volatility_mod
+                if volatility_mod < 0.9:
+                    warnings.append(f"📉 波动率修正：{vol_desc}（ATR%={atrp*100:.2f}%，系数={volatility_mod:.2f}）")
+                return max(0.3, final_mod), warnings, protection_applied
             elif protection_level == "standard":
                 warnings.append("📊【标准保护】低位超卖(60日分位≤20%+RSI≤30或WR≥80)，关注反转信号")
                 # 标准保护：下跌趋势惩罚改为观望而非回避
@@ -1733,7 +1896,19 @@ class ScoringSystem:
             elif bias6 > 0.05:
                 modifier *= 0.85
 
-        return max(0.3, modifier), warnings
+        # ==================== 新增：波动率修正 ====================
+        volatility_mod, vol_desc = self._calculate_volatility_modifier(atrp)
+        modifier *= volatility_mod
+        if volatility_mod < 0.9:
+            warnings.append(f"📉 波动率修正：{vol_desc}（ATR%={atrp*100:.2f}%，系数={volatility_mod:.2f}）")
+
+        # ==================== 记录保护贡献 ====================
+        if is_protected and protection_level:
+            protection_applied["original_modifier"] = original_modifier_before_protection
+            protection_applied["final_modifier"] = modifier
+            protection_applied["contribution"] = modifier - original_modifier_before_protection
+
+        return max(0.3, modifier), warnings, protection_applied
 
     # ==================== 原有方法 ====================
 

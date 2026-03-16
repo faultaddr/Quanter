@@ -5,6 +5,8 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Add project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
@@ -82,6 +84,57 @@ def analyze_single(
     primary_system = system_map[system]
 
     _run_analysis(symbol, days, primary_system, use_context, output)
+
+
+@app.command(name="enhanced")
+def analyze_enhanced(
+    symbol: str = typer.Argument(..., help="股票代码"),
+    days: int = typer.Option(360, "--days", "-d", help="分析天数"),
+    chip: bool = typer.Option(True, "--chip/--no-chip", help="是否包含筹码分布分析"),
+    patterns: bool = typer.Option(True, "--patterns/--no-patterns", help="是否包含K线形态分析"),
+    strategies: bool = typer.Option(True, "--strategies/--no-strategies", help="是否包含策略信号"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="输出文件")
+):
+    """
+    增强版股票分析 - 整合筹码分布、K线形态、策略信号
+
+    整合功能：
+    - 筹码分布分析（集中度、获利盘、支撑阻力位）
+    - K线形态识别（TA-Lib 61种形态）
+    - 经典策略信号（10种策略共振分析）
+
+    示例：
+    - quanttool analysis enhanced 000001
+    - quanttool analysis enhanced 000001 --days 250
+    - quanttool analysis enhanced 000001 --no-chip  # 不包含筹码分析
+    """
+    typer.echo(f"正在执行增强分析：{symbol}")
+    typer.echo(f"分析周期：{days} 天")
+    typer.echo(f"筹码分布：{'是' if chip else '否'}")
+    typer.echo(f"K线形态：{'是' if patterns else '否'}")
+    typer.echo(f"策略信号：{'是' if strategies else '否'}")
+    typer.echo("-" * 50)
+
+    analyzer = StockAnalyzer()
+
+    try:
+        report = analyzer.analyze_stock_enhanced(
+            symbol,
+            days,
+            include_chip=chip,
+            include_talib_patterns=patterns,
+            include_strategies=strategies
+        )
+
+        typer.echo(report)
+
+        if output:
+            with open(output, 'w', encoding='utf-8') as f:
+                f.write(report)
+            typer.echo(f"\n分析报告已保存至：{output}")
+
+    except Exception as e:
+        typer.echo(f"分析出错: {e}")
 
 
 def _run_analysis(
@@ -595,6 +648,11 @@ def analyze_stock_score(
             "factors_score": score_result['factors_score'],
             "execution": score_result['execution'],
             "warnings": score_result['warnings'],
+            # 因子组得分 - 从 score_result 顶层提取
+            "trend_score": score_result.get('trend_score', 50),
+            "momentum_score": score_result.get('momentum_score', 50),
+            "money_score": score_result.get('money_score', 50),
+            "position_modifier": score_result.get('position_modifier', 1.0),
             # BIAS data
             "bias_6": bias_6,
             "bias_12": bias_12,
@@ -737,17 +795,19 @@ def scan(
     typer.echo(f"✅ 缓存预热完成: {cached_count}/{len(stock_list)} 只股票 (耗时 {elapsed:.1f} 秒)")
     typer.echo("-" * 60)
 
-    # Analyze each stock
+    # Analyze stocks in parallel
     results = []
-    skipped_stocks = []  # Track skipped stocks with reasons
+    skipped_stocks = []
     total = len(stock_list)
+    completed_count = 0
+    progress_lock = threading.Lock()
 
-    for i, stock_info in enumerate(stock_list, 1):
+    def analyze_single_stock(stock_info: Dict) -> Tuple[Optional[Dict], Optional[Dict]]:
+        """分析单只股票（用于并行执行）"""
+        nonlocal completed_count
         symbol = stock_info['code'] if isinstance(stock_info, dict) else stock_info
         name = stock_info.get('name', symbol) if isinstance(stock_info, dict) else symbol
-        typer.echo(f"[{i}/{total}] 分析 {symbol} ({name})...", nl=False)
 
-        # 根据评分系统选择调用不同的分析函数，传递统一的时间范围
         if use_momentum_score:
             result, skip_reason = analyze_stock_momentum_score(
                 stock_info, days, analyzer, start_date, end_date
@@ -765,30 +825,55 @@ def scan(
                 stock_info, days, analyzer, bias_min, bias_max, True, start_date, end_date
             )
 
-        if result:
-            results.append(result)
-            if use_momentum_score:
-                # 趋势动量评分显示格式
-                signal_str = "✓信号" if result.get('signal') else "观望"
-                typer.echo(f" 评分: {result['score']:.1f}/100 | 动量: {result['momentum_score']:.0f} | 信号: {signal_str}")
-            elif use_breakout_score:
-                # 低位盘整突破评分显示格式
-                typer.echo(f" 评分: {result['score']:.1f}/100 | 盘整: {result['consolidation_days']}天 | 量比: {result['volume_ratio']:.1f}")
-            elif use_trend_score:
-                # 趋势评分显示格式
-                timing_type = result.get('timing_type', '标准')
-                typer.echo(f" 评分: {result['score']:.1f}/100 | 时机: {timing_type} ({result['timing_coefficient']:.2f})")
+        with progress_lock:
+            completed_count += 1
+            if result:
+                if use_momentum_score:
+                    signal_str = "✓信号" if result.get('signal') else "观望"
+                    typer.echo(f"[{completed_count}/{total}] {symbol} 评分: {result['score']:.1f} | 动量: {result['momentum_score']:.0f} | {signal_str}")
+                elif use_breakout_score:
+                    typer.echo(f"[{completed_count}/{total}] {symbol} 评分: {result['score']:.1f} | 盘整: {result['consolidation_days']}天")
+                elif use_trend_score:
+                    timing_type = result.get('timing_type', '标准')
+                    typer.echo(f"[{completed_count}/{total}] {symbol} 评分: {result['score']:.1f} | 时机: {timing_type}")
+                else:
+                    typer.echo(f"[{completed_count}/{total}] {symbol} 评分: {result['score']:.1f}")
             else:
-                # 经典评分显示格式
-                typer.echo(f" 评分: {result['score']:.1f}/100 | 触发: {result['trigger_type']} | BIAS(20): {result.get('bias_20', 0):.2f}%")
+                typer.echo(f"[{completed_count}/{total}] {symbol} 跳过 ({skip_reason})")
+
+        if result:
+            return result, None
         else:
-            skipped_stocks.append({
+            return None, {
                 'symbol': symbol,
                 'name': name,
                 'reason': skip_reason or "未知原因",
                 'reason_type': _get_reason_type(skip_reason)
-            })
-            typer.echo(f" 跳过 ({skip_reason})")
+            }
+
+    # 并行分析
+    analyze_start = time.time()
+    max_workers = min(10, len(stock_list))
+
+    typer.echo(f"🚀 开始并行分析 ({max_workers} 线程)...")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(analyze_single_stock, stock): stock for stock in stock_list}
+
+        for future in as_completed(futures):
+            try:
+                result, skip_info = future.result()
+                if result:
+                    results.append(result)
+                elif skip_info:
+                    skipped_stocks.append(skip_info)
+            except Exception as e:
+                stock = futures[future]
+                symbol = stock['code'] if isinstance(stock, dict) else stock
+                typer.echo(f"⚠️ {symbol} 分析异常: {e}")
+
+    analyze_elapsed = time.time() - analyze_start
+    typer.echo(f"✅ 分析完成: {len(results)} 只股票成功, {len(skipped_stocks)} 只跳过 (耗时 {analyze_elapsed:.1f} 秒)")
 
     if not results:
         typer.echo("\n没有成功分析任何股票，请检查数据接口配置。")
@@ -956,9 +1041,51 @@ def scan(
         if factors_score:
             typer.echo(f"    因子得分:")
             factors_raw = r.get('factors_raw', {})
+
+            # 解析嵌套结构
+            trend_factors = factors_raw.get('trend_factors', {})
+            momentum_factors = factors_raw.get('momentum_factors', {})
+            money_factors = factors_raw.get('money_factors', {})
+            aux_factors = factors_raw.get('aux_factors', {})
+
+            # 定义因子到嵌套位置的映射
+            factor_location = {
+                'trend_strength': ('aux_factors', 'bias20', 'percent'),  # 趋势强度用 bias20
+                'ma_slope': ('trend_factors', 'ma_alignment', 'score'),
+                'macd_momentum': ('trend_factors', 'macd_momentum', 'float'),
+                'money_flow': ('money_factors', 'obv_flow', 'score'),
+                'volume_ratio': ('money_factors', 'volume_ratio', 'ratio'),
+            }
+
             for factor_name, score_val in factors_score.items():
-                raw_val = factors_raw.get(factor_name, 'N/A')
-                typer.echo(f"      • {factor_name}: {score_val:.2f} (原始值: {raw_val})")
+                if factor_name in factor_location:
+                    group_key, raw_key, fmt = factor_location[factor_name]
+                    if group_key == 'trend_factors':
+                        raw_val = trend_factors.get(raw_key, 'N/A')
+                    elif group_key == 'momentum_factors':
+                        raw_val = momentum_factors.get(raw_key, 'N/A')
+                    elif group_key == 'money_factors':
+                        raw_val = money_factors.get(raw_key, 'N/A')
+                    elif group_key == 'aux_factors':
+                        raw_val = aux_factors.get(raw_key, 'N/A')
+                    else:
+                        raw_val = 'N/A'
+
+                    # 格式化原始值
+                    if raw_val == 'N/A':
+                        raw_str = 'N/A'
+                    elif fmt == 'percent':
+                        raw_str = f"{raw_val*100:.2f}%"
+                    elif fmt == 'score':
+                        raw_str = f"{raw_val:.0f}分"
+                    elif fmt == 'ratio':
+                        raw_str = f"{raw_val:.2f}"
+                    else:
+                        raw_str = f"{raw_val:.4f}"
+                else:
+                    raw_str = 'N/A'
+
+                typer.echo(f"      • {factor_name}: {score_val:.2f} (原始值: {raw_str})")
 
         # 显示交易执行计划
         execution = r.get('execution', {})
@@ -1082,20 +1209,192 @@ def scan(
                     f.write("\n\n")
                 f.write("---\n\n")
 
-                # Write summary table
+                # Write summary table - 增强版：包含因子组得分明细
                 f.write("## 📊 Top {} 股票概览\n\n".format(top_n))
-                f.write("| 排名 | 代码 | 名称 | 收盘价 | 评分 | 等级 | 触发类型 | BIAS(20) |\n")
-                f.write("|------|------|------|--------|------|------|----------|----------|\n")
+
+                # 根据评分系统类型选择不同的表头
+                if use_trend_score:
+                    # 趋势评分系统
+                    f.write("| 排名 | 代码 | 名称 | 收盘价 | 评分 | 等级 | 均线分 | 动能分 | 量能分 | 强度分 | 时机系数 | 时机类型 |\n")
+                    f.write("|------|------|------|--------|------|------|--------|--------|--------|--------|----------|----------|\n")
+
+                    for i, r in enumerate(results[:top_n], 1):
+                        symbol_short = r['symbol'].replace('.SH', '').replace('.SZ', '')
+                        name = r.get('name', symbol_short)
+                        f.write(f"| {i} | {symbol_short} | {name} | ¥{r['close']:.2f} | {r['score']:.1f} | {r['score_grade']} | {r.get('ma_score', 0):.0f} | {r.get('momentum_score', 0):.0f} | {r.get('volume_score', 0):.0f} | {r.get('rs_score', 0):.0f} | {r.get('timing_coefficient', 1.0):.2f} | {r.get('timing_type', '-')} |\n")
+
+                elif use_breakout_score:
+                    # 低位盘整突破评分系统
+                    f.write("| 排名 | 代码 | 名称 | 收盘价 | 评分 | 等级 | 质量分 | 成长分 | 价值分 | 动量分 | 资金分 | 盘整天数 | 量比 |\n")
+                    f.write("|------|------|------|--------|------|------|--------|--------|--------|--------|--------|----------|------|\n")
+
+                    for i, r in enumerate(results[:top_n], 1):
+                        symbol_short = r['symbol'].replace('.SH', '').replace('.SZ', '')
+                        name = r.get('name', symbol_short)
+                        f.write(f"| {i} | {symbol_short} | {name} | ¥{r['close']:.2f} | {r['score']:.1f} | {r['score_grade']} | {r.get('quality_score', 0):.0f} | {r.get('growth_score', 0):.0f} | {r.get('value_score', 0):.0f} | {r.get('momentum_score', 0):.0f} | {r.get('flow_score', 0):.0f} | {r.get('consolidation_days', 0)} | {r.get('volume_ratio', 0):.1f} |\n")
+
+                elif use_momentum_score:
+                    # 趋势动量评分系统
+                    f.write("| 排名 | 代码 | 名称 | 收盘价 | 评分 | 等级 | 动量分 | 均线分 | 量能分 | 位置分 | 突破分 | 信号 |\n")
+                    f.write("|------|------|------|--------|------|------|--------|--------|--------|--------|--------|------|\n")
+
+                    for i, r in enumerate(results[:top_n], 1):
+                        symbol_short = r['symbol'].replace('.SH', '').replace('.SZ', '')
+                        name = r.get('name', symbol_short)
+                        signal_str = "✓买入" if r.get('signal') else "观望"
+                        f.write(f"| {i} | {symbol_short} | {name} | ¥{r['close']:.2f} | {r['score']:.1f} | {r['score_grade']} | {r.get('momentum_score', 0):.0f} | {r.get('ma_score', 0):.0f} | {r.get('volume_score', 0):.0f} | {r.get('position_score', 0):.0f} | {r.get('breakout_score', 0):.0f} | {signal_str} |\n")
+
+                else:
+                    # 经典评分系统 - 包含因子组得分明细和技术指标
+                    f.write("| 排名 | 代码 | 名称 | 收盘价 | 评分 | 等级 | 趋势分 | 动能分 | 资金分 | 位置系数 | BIAS(20) | RSI | MACD |\n")
+                    f.write("|------|------|------|--------|------|------|--------|--------|--------|----------|----------|-----|------|\n")
+
+                    for i, r in enumerate(results[:top_n], 1):
+                        symbol_short = r['symbol'].replace('.SH', '').replace('.SZ', '')
+                        name = r.get('name', symbol_short)
+                        bias_str = f"{r.get('bias_20', 0):+.2f}%"
+
+                        # 提取技术指标原始值
+                        factors_raw = r.get('factors_raw', {})
+                        momentum_factors = factors_raw.get('momentum_factors', {})
+                        trend_factors = factors_raw.get('trend_factors', {})
+
+                        rsi_val = momentum_factors.get('rsi', 50)
+                        macd_hist = trend_factors.get('macd_hist', 0)
+                        macd_str = f"{'+' if macd_hist > 0 else ''}{macd_hist:.2f}"
+
+                        # 因子组得分 - 注意：trend_score/momentum_score/money_score 在顶层返回，不在 factors_score 中
+                        trend_score = r.get('trend_score', 50)
+                        momentum_score = r.get('momentum_score', 50)
+                        money_score = r.get('money_score', 50)
+                        position_mod = r.get('position_modifier', 1.0)
+
+                        f.write(f"| {i} | {symbol_short} | {name} | ¥{r['close']:.2f} | {r['score']:.1f} | {r['score_grade']} | {trend_score:.0f} | {momentum_score:.0f} | {money_score:.0f} | {position_mod:.2f} | {bias_str} | {rsi_val:.0f} | {macd_str} |\n")
+
+                f.write("\n---\n\n")
+
+                # 新增：技术指标原始数值表
+                f.write("## 📈 技术指标原始数值\n\n")
+                f.write("| 代码 | 名称 | MA5 | MA10 | MA20 | K | D | J | RSI | MACD-DIF | MACD-DEA | 量比 |\n")
+                f.write("|------|------|-----|------|------|---|---|---|-----|----------|----------|------|\n")
 
                 for i, r in enumerate(results[:top_n], 1):
                     symbol_short = r['symbol'].replace('.SH', '').replace('.SZ', '')
                     name = r.get('name', symbol_short)
-                    bias_str = f"{r.get('bias_20', 0):+.2f}%"
-                    f.write(f"| {i} | {symbol_short} | {name} | ¥{r['close']:.2f} | {r['score']:.1f} | {r['score_grade']} | {r['trigger_type']} | {bias_str} |\n")
+
+                    factors_raw = r.get('factors_raw', {})
+                    trend_factors = factors_raw.get('trend_factors', {})
+                    momentum_factors = factors_raw.get('momentum_factors', {})
+                    money_factors = factors_raw.get('money_factors', {})
+                    aux_factors = factors_raw.get('aux_factors', {})
+
+                    # 均线值（在 aux_factors 中）
+                    ma5 = aux_factors.get('ma5', 0)
+                    ma10 = aux_factors.get('ma10', 0)
+                    ma20 = aux_factors.get('ma20', 0)
+
+                    # KDJ
+                    k_val = momentum_factors.get('k', 50)
+                    d_val = momentum_factors.get('d', 50)
+                    j_val = momentum_factors.get('j', 50)
+
+                    # RSI
+                    rsi_val = momentum_factors.get('rsi', 50)
+
+                    # MACD
+                    macd_dif = trend_factors.get('macd_dif', 0)
+                    macd_dea = trend_factors.get('macd_dea', 0)
+
+                    # 量比
+                    vol_ratio = money_factors.get('volume_ratio', 1.0)
+
+                    f.write(f"| {symbol_short} | {name} | {ma5:.2f} | {ma10:.2f} | {ma20:.2f} | {k_val:.1f} | {d_val:.1f} | {j_val:.1f} | {rsi_val:.0f} | {macd_dif:.3f} | {macd_dea:.3f} | {vol_ratio:.2f} |\n")
 
                 f.write("\n---\n\n")
 
-                # Generate detailed report for each top stock
+                # 新增：评分逻辑解释
+                f.write("## 💡 评分逻辑说明\n\n")
+                f.write("### 三大类因子组权重\n\n")
+                f.write("| 因子组 | 权重 | 说明 |\n")
+                f.write("|--------|------|------|\n")
+                f.write("| 趋势因子 | 35% | 确认趋势方向：均线排列、DMI强度、MACD方向 |\n")
+                f.write("| 动能因子 | 40% | 确认动能强度：KDJ位置、RSI强度、MTM动量、ROC变化率 |\n")
+                f.write("| 资金因子 | 25% | 确认资金真实性：OBV资金流、MFI强度、量价关系 |\n")
+                f.write("\n")
+
+                f.write("### 位置修正系数\n\n")
+                f.write("| 区域 | BIAS(20) | 修正系数 | 风险等级 |\n")
+                f.write("|------|----------|----------|----------|\n")
+                f.write("| 安全区 | -8% ~ +2% | 1.0 | 低风险，可积极建仓 |\n")
+                f.write("| 适中区 | +2% ~ +5% | 0.85 | 中等风险，适度参与 |\n")
+                f.write("| 警戒区 | +5% ~ +8% | 0.6 | 较高风险，谨慎参与 |\n")
+                f.write("| 危险区 | > +8% | 0.35 | 高风险，建议观望 |\n")
+                f.write("\n")
+
+                f.write("### 触发类型说明\n\n")
+                f.write("| 类型 | 含义 | 建议 |\n")
+                f.write("|------|------|------|\n")
+                f.write("| breakout | 突破信号，价格放量突破平台 | 积极买入 |\n")
+                f.write("| pullback | 回踩信号，价格回踩均线企稳 | 逢低买入 |\n")
+                f.write("| none | 普通信号，无特殊触发 | 按评分决定 |\n")
+                f.write("\n---\n\n")
+
+                # 新增：Top 3 个股评分解析
+                f.write("## 🔍 Top 3 个股评分解析\n\n")
+
+                for i, r in enumerate(results[:3], 1):
+                    symbol_short = r['symbol'].replace('.SH', '').replace('.SZ', '')
+                    name = r.get('name', symbol_short)
+                    score = r['score']
+                    score_grade = r['score_grade']
+
+                    f.write(f"### #{i} {symbol_short} {name} ({score:.1f}分 - {score_grade})\n\n")
+
+                    # 因子得分分析
+                    factors_score = r.get('factors_score', {})
+                    factors_raw = r.get('factors_raw', {})
+
+                    trend_factors = factors_raw.get('trend_factors', {})
+                    momentum_factors = factors_raw.get('momentum_factors', {})
+                    money_factors = factors_raw.get('money_factors', {})
+
+                    f.write("**趋势分析：**\n")
+                    ma_alignment = trend_factors.get('ma_alignment', 50)
+                    dmi_strength = trend_factors.get('dmi_strength', 50)
+                    macd_direction = trend_factors.get('macd_direction', 50)
+                    adx = trend_factors.get('adx', 0)
+                    f.write(f"- 均线排列得分: {ma_alignment:.0f}分\n")
+                    f.write(f"- DMI趋势强度: {dmi_strength:.0f}分 (ADX={adx:.1f})\n")
+                    f.write(f"- MACD方向得分: {macd_direction:.0f}分\n\n")
+
+                    f.write("**动能分析：**\n")
+                    kdj_pos = momentum_factors.get('kdj_position', 50)
+                    rsi_strength = momentum_factors.get('rsi_strength', 50)
+                    k_val = momentum_factors.get('k', 50)
+                    rsi_val = momentum_factors.get('rsi', 50)
+                    f.write(f"- KDJ位置得分: {kdj_pos:.0f}分 (K={k_val:.1f})\n")
+                    f.write(f"- RSI强度得分: {rsi_strength:.0f}分 (RSI={rsi_val:.1f})\n\n")
+
+                    f.write("**资金分析：**\n")
+                    obv_flow = money_factors.get('obv_flow', 50)
+                    mfi_strength = money_factors.get('mfi_strength', 50)
+                    vol_ratio = money_factors.get('volume_ratio', 1.0)
+                    f.write(f"- OBV资金流得分: {obv_flow:.0f}分\n")
+                    f.write(f"- MFI强度得分: {mfi_strength:.0f}分\n")
+                    f.write(f"- 量比: {vol_ratio:.2f}\n\n")
+
+                    # 综合评价
+                    f.write("**综合评价：**\n")
+                    if score >= 80:
+                        f.write(f"✅ 强势股票，多项指标共振向上，趋势明确，可重点关注。\n\n")
+                    elif score >= 65:
+                        f.write(f"⚠️ 中等强度，部分指标表现良好，建议结合其他因素判断。\n\n")
+                    else:
+                        f.write(f"ℹ️ 表现一般，建议观望或等待更好的入场时机。\n\n")
+
+                    f.write("---\n\n")
+
+                # Generate detailed report for each top stock (with three-system scoring)
                 for i, r in enumerate(results[:top_n], 1):
                     symbol = r['symbol']
                     name = r.get('name', symbol)
@@ -1103,8 +1402,8 @@ def scan(
                     typer.echo(f"  [{i}/{top_n}] 生成 {symbol} ({name}) 的详细报告...")
 
                     try:
-                        # Get full analysis report
-                        report = analyzer.analyze_stock(symbol, days)
+                        # Use analyze_stock_with_context for three-system scoring
+                        context, report = analyzer.analyze_stock_with_context(symbol, days)
 
                         # Write to file
                         f.write(f"## #{i} {symbol} - {name}\n\n")

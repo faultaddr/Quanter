@@ -1,0 +1,1769 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantTool - 量化分析平台</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --danger-color: #ef4444;
+            --bg-dark: #1e293b;
+            --bg-card: #ffffff;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+        }
+
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }
+
+        .navbar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 2px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .navbar-brand {
+            font-weight: 700;
+            font-size: 1.5rem;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .main-container {
+            padding: 2rem 0;
+        }
+
+        .card {
+            border: none;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+        }
+
+        .card-header {
+            background: transparent;
+            border-bottom: 1px solid #e5e7eb;
+            padding: 1.25rem 1.5rem;
+            font-weight: 600;
+        }
+
+        .nav-tabs {
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .nav-tabs .nav-link {
+            border: none;
+            color: var(--text-secondary);
+            font-weight: 500;
+            padding: 1rem 1.5rem;
+            transition: all 0.2s;
+        }
+
+        .nav-tabs .nav-link:hover {
+            color: var(--primary-color);
+            border: none;
+        }
+
+        .nav-tabs .nav-link.active {
+            color: var(--primary-color);
+            border: none;
+            border-bottom: 3px solid var(--primary-color);
+            background: transparent;
+        }
+
+        .form-control, .form-select {
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            border: 2px solid #e5e7eb;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .form-control:focus, .form-select:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border: none;
+            border-radius: 10px;
+            padding: 0.75rem 2rem;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            background: linear-gradient(135deg, #5a6fd6, #6a4190);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .report-container {
+            background: #f8fafc;
+            border-radius: 12px;
+            padding: 1.5rem;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        .report-container h1 { font-size: 1.75rem; color: var(--text-primary); border-bottom: 2px solid #e5e7eb; padding-bottom: 0.75rem; margin-bottom: 1rem; }
+        .report-container h2 { font-size: 1.35rem; color: var(--text-primary); margin-top: 1.5rem; margin-bottom: 0.75rem; }
+        .report-container h3 { font-size: 1.15rem; color: var(--text-primary); margin-top: 1rem; margin-bottom: 0.5rem; }
+        .report-container table { width: 100%; margin: 1rem 0; border-collapse: collapse; }
+        .report-container th, .report-container td { padding: 0.75rem; border: 1px solid #e5e7eb; text-align: left; }
+        .report-container th { background: #f1f5f9; font-weight: 600; }
+        .report-container pre { background: #1e293b; color: #e2e8f0; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+        .report-container code { background: #f1f5f9; padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
+
+        .loading-spinner { display: none; text-align: center; padding: 3rem; }
+        .loading-spinner.show { display: block; }
+
+        .toast-container { position: fixed; top: 1rem; right: 1rem; z-index: 1050; }
+
+        .history-item { cursor: pointer; transition: background 0.2s; }
+        .history-item:hover { background: #f1f5f9; }
+
+        /* 实时价格卡片 */
+        .quote-card {
+            background: linear-gradient(135deg, #1e293b, #334155);
+            border-radius: 16px;
+            padding: 1.5rem;
+            color: white;
+            margin-bottom: 1rem;
+        }
+
+        .quote-price {
+            font-size: 2.5rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .quote-change { font-size: 1.25rem; font-weight: 600; }
+        .quote-change.up { color: #ef5350; }
+        .quote-change.down { color: #26a69a; }
+
+        .quote-info {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+        }
+
+        .quote-info-item {
+            text-align: center;
+            padding: 0.5rem;
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+        }
+
+        .quote-info-label { color: #94a3b8; font-size: 0.75rem; }
+        .quote-info-value { font-weight: 600; font-size: 1rem; }
+
+        /* K线图容器 */
+        #klineChart {
+            width: 100%;
+            height: 400px;
+            background: #ffffff;
+            border-radius: 8px;
+        }
+
+        .chart-container {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        /* 筹码分布图 */
+        .chip-chart-container {
+            background: white;
+            border-radius: 12px;
+            padding: 0.75rem;
+            position: relative;
+        }
+
+        #chipChart {
+            width: 100%;
+            height: 200px;
+        }
+
+        .chip-metrics {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.4rem;
+            margin-top: 0.5rem;
+            font-size: 0.75rem;
+        }
+
+        .chip-metric {
+            text-align: center;
+            padding: 0.4rem;
+            background: #f8fafc;
+            border-radius: 4px;
+        }
+
+        .chip-metric-value { font-weight: 700; font-size: 0.9rem; color: var(--primary-color); }
+        .chip-metric-label { color: var(--text-secondary); font-size: 0.65rem; }
+
+        /* 图表布局 */
+        .charts-row {
+            display: grid;
+            grid-template-columns: 1fr 280px;
+            gap: 1rem;
+        }
+
+        /* 技术指标异动 */
+        .signals-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+        .signals-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .signals-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 0.75rem;
+        }
+        .signal-item {
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 0.75rem;
+            border-left: 3px solid;
+        }
+        .signal-item.bullish { border-left-color: #10b981; }
+        .signal-item.bearish { border-left-color: #ef4444; }
+        .signal-item.neutral { border-left-color: #f59e0b; }
+        .signal-title {
+            font-weight: 600;
+            font-size: 0.85rem;
+            margin-bottom: 0.25rem;
+        }
+        .signal-item.bullish .signal-title { color: #059669; }
+        .signal-item.bearish .signal-title { color: #dc2626; }
+        .signal-item.neutral .signal-title { color: #d97706; }
+        .signal-desc {
+            font-size: 0.75rem;
+            color: #64748b;
+        }
+        .signal-value {
+            font-size: 0.7rem;
+            color: #94a3b8;
+            margin-top: 0.25rem;
+        }
+        .signal-mini-chart {
+            height: 60px;
+            margin-top: 0.5rem;
+            background: #fff;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .signal-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            margin: 0.15rem;
+        }
+        .signal-bullish { background: #dcfce7; color: #166534; }
+        .signal-bearish { background: #fee2e2; color: #991b1b; }
+        .signal-neutral { background: #fef3c7; color: #92400e; }
+
+        .signals-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.25rem;
+            margin-top: 0.5rem;
+        }
+
+        /* 筹码图例 */
+        .chip-legend {
+            display: flex;
+            gap: 0.75rem;
+            font-size: 0.7rem;
+            margin-top: 0.5rem;
+            justify-content: center;
+        }
+        .chip-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+        .chip-legend-line {
+            width: 16px;
+            height: 2px;
+        }
+
+        @media (max-width: 992px) {
+            .charts-row {
+                grid-template-columns: 1fr;
+            }
+            .quote-info {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .main-container { padding: 1rem 0; }
+            .card-body { padding: 1rem; }
+            #klineChart { height: 300px; }
+            .quote-price { font-size: 2rem; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg sticky-top">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="bi bi-graph-up-arrow me-2"></i>QuantTool
+            </a>
+            <div class="d-flex align-items-center">
+                <span class="badge bg-success me-2">API Online</span>
+                <a href="/docs" target="_blank" class="btn btn-outline-primary btn-sm">
+                    <i class="bi bi-code-slash me-1"></i>API Docs
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container main-container">
+        <div class="row">
+            <!-- Left Panel - Controls -->
+            <div class="col-lg-3 mb-4">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="bi bi-sliders me-2"></i>控制面板
+                    </div>
+                    <div class="card-body">
+                        <!-- Tabs -->
+                        <ul class="nav nav-tabs mb-4" id="mainTabs" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="analyze-tab" data-bs-toggle="tab" data-bs-target="#analyze" type="button">
+                                    <i class="bi bi-search me-1"></i>分析
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="backtest-tab" data-bs-toggle="tab" data-bs-target="#backtest" type="button">
+                                    <i class="bi bi-arrow-repeat me-1"></i>回测
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="scan-tab" data-bs-toggle="tab" data-bs-target="#scan" type="button">
+                                    <i class="bi bi-radar me-1"></i>扫描
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="qlib-tab" data-bs-toggle="tab" data-bs-target="#qlib" type="button">
+                                    <i class="bi bi-cpu me-1"></i>ML模型
+                                </button>
+                            </li>
+                        </ul>
+
+                        <div class="tab-content">
+                            <!-- Analyze Tab -->
+                            <div class="tab-pane fade show active" id="analyze" role="tabpanel">
+                                <form id="analyzeForm">
+                                    <div class="mb-3">
+                                        <label class="form-label">股票代码</label>
+                                        <input type="text" class="form-control" id="symbol" placeholder="000001.SZ" value="000001.SZ">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">分析周期</label>
+                                        <select class="form-select" id="analyzeDays">
+                                            <option value="60">60 天</option>
+                                            <option value="120">120 天</option>
+                                            <option value="180">180 天</option>
+                                            <option value="360" selected>360 天</option>
+                                            <option value="540">540 天</option>
+                                            <option value="720">720 天</option>
+                                            <option value="custom">自定义...</option>
+                                        </select>
+                                        <input type="number" class="form-control mt-1" id="analyzeDaysCustom" placeholder="输入天数" style="display:none;" min="30" max="1000">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">分析模式</label>
+                                        <select class="form-select" id="analyzeMode">
+                                            <option value="enhanced" selected>增强分析</option>
+                                            <option value="basic">基础分析</option>
+                                        </select>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary w-100" id="analyzeBtn">
+                                        <i class="bi bi-play-fill me-1"></i>开始分析
+                                    </button>
+                                </form>
+                            </div>
+
+                            <!-- Backtest Tab -->
+                            <div class="tab-pane fade" id="backtest" role="tabpanel">
+                                <form id="backtestForm">
+                                    <div class="mb-3">
+                                        <label class="form-label">股票代码</label>
+                                        <input type="text" class="form-control" id="backtestSymbols" value="000001.SZ">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">策略</label>
+                                        <select class="form-select" id="backtestStrategy">
+                                            <option value="score">评分策略</option>
+                                            <option value="enhanced_score">增强评分策略</option>
+                                            <option value="ma_cross">均线交叉</option>
+                                            <option value="dual_ma">双均线策略</option>
+                                            <option value="breakout">突破策略</option>
+                                            <option value="macd">MACD策略</option>
+                                            <option value="rsi">RSI策略</option>
+                                            <option value="kdj">KDJ策略</option>
+                                            <option value="bollinger">布林带策略</option>
+                                            <option value="turtle">海龟交易策略</option>
+                                        </select>
+                                    </div>
+                                    <div class="row mb-3">
+                                        <div class="col-6">
+                                            <label class="form-label">开始</label>
+                                            <input type="date" class="form-control" id="backtestStartDate" value="2024-01-01">
+                                        </div>
+                                        <div class="col-6">
+                                            <label class="form-label">结束</label>
+                                            <input type="date" class="form-control" id="backtestEndDate" value="2024-12-31">
+                                        </div>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary w-100" id="backtestBtn">
+                                        <i class="bi bi-play-fill me-1"></i>运行回测
+                                    </button>
+                                </form>
+                            </div>
+
+                            <!-- Scan Tab -->
+                            <div class="tab-pane fade" id="scan" role="tabpanel">
+                                <form id="scanForm">
+                                    <div class="mb-3">
+                                        <label class="form-label">市场</label>
+                                        <select class="form-select" id="scanMarket">
+                                            <option value="csi300">沪深300</option>
+                                            <option value="csi1000">中证1000</option>
+                                        </select>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">周期</label>
+                                        <select class="form-select" id="scanDays">
+                                            <option value="60">60 天</option>
+                                            <option value="120">120 天</option>
+                                            <option value="180">180 天</option>
+                                            <option value="360" selected>360 天</option>
+                                            <option value="540">540 天</option>
+                                            <option value="720">720 天</option>
+                                            <option value="custom">自定义...</option>
+                                        </select>
+                                        <input type="number" class="form-control mt-1" id="scanDaysCustom" placeholder="输入天数" style="display:none;" min="30" max="1000">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Top N</label>
+                                        <select class="form-select" id="scanTopN">
+                                            <option value="10" selected>10</option>
+                                            <option value="20">20</option>
+                                        </select>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary w-100" id="scanBtn">
+                                        <i class="bi bi-search me-1"></i>开始扫描
+                                    </button>
+                                </form>
+                            </div>
+
+                            <!-- Qlib ML Models Tab -->
+                            <div class="tab-pane fade" id="qlib" role="tabpanel">
+                                <form id="qlibForm">
+                                    <div class="mb-3">
+                                        <label class="form-label">模型类型</label>
+                                        <select class="form-select" id="qlibModelType">
+                                            <optgroup label="GBDT 系列 (推荐入门)">
+                                                <option value="lgb" selected>LightGBM</option>
+                                                <option value="xgboost">XGBoost</option>
+                                                <option value="catboost">CatBoost</option>
+                                            </optgroup>
+                                            <optgroup label="PyTorch 序列模型">
+                                                <option value="lstm">LSTM</option>
+                                                <option value="gru">GRU</option>
+                                                <option value="alstm">ALSTM</option>
+                                                <option value="transformer">Transformer</option>
+                                                <option value="tcn">TCN</option>
+                                            </optgroup>
+                                            <optgroup label="PyTorch 高级模型">
+                                                <option value="gats">GATs</option>
+                                                <option value="tabnet">TabNet</option>
+                                                <option value="hist">HIST</option>
+                                            </optgroup>
+                                        </select>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">训练股票 (逗号分隔)</label>
+                                        <input type="text" class="form-control" id="qlibSymbols" value="000001.SZ,600000.SH,600519.SH" placeholder="股票代码">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">训练参数</label>
+                                        <div class="row g-2">
+                                            <div class="col-6">
+                                                <input type="number" class="form-control form-control-sm" id="qlibNestimators" value="200" placeholder="树数量/epochs">
+                                            </div>
+                                            <div class="col-6">
+                                                <input type="number" class="form-control form-control-sm" id="qlibMaxDepth" value="6" placeholder="深度/层数">
+                                            </div>
+                                            <div class="col-6">
+                                                <input type="number" class="form-control form-control-sm" id="qlibLearningRate" value="0.01" step="0.001" placeholder="学习率">
+                                            </div>
+                                            <div class="col-6">
+                                                <input type="number" class="form-control form-control-sm" id="qlibBatchSize" value="256" placeholder="批大小">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="row mb-3">
+                                        <div class="col-6">
+                                            <label class="form-label small">开始日期</label>
+                                            <input type="date" class="form-control form-control-sm" id="qlibStartDate" value="2023-01-01">
+                                        </div>
+                                        <div class="col-6">
+                                            <label class="form-label small">结束日期</label>
+                                            <input type="date" class="form-control form-control-sm" id="qlibEndDate" value="2024-12-31">
+                                        </div>
+                                    </div>
+                                    <button type="submit" class="btn btn-success w-100 mb-2" id="qlibTrainBtn">
+                                        <i class="bi bi-cpu me-1"></i>训练模型
+                                    </button>
+                                    <button type="button" class="btn btn-outline-primary w-100" id="qlibPredictBtn">
+                                        <i class="bi bi-graph-up me-1"></i>预测信号
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <!-- History -->
+                        <div class="mt-4">
+                            <h6 class="text-muted mb-2"><i class="bi bi-clock-history me-1"></i>历史</h6>
+                            <div id="historyList" class="list-group" style="max-height: 200px; overflow-y: auto;">
+                                <div class="text-muted text-center py-2 small">暂无记录</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel - Results -->
+            <div class="col-lg-9">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-file-earmark-text me-2"></i>分析结果</span>
+                        <div>
+                            <button class="btn btn-outline-secondary btn-sm me-2" id="copyBtn" style="display:none;">
+                                <i class="bi bi-clipboard"></i>
+                            </button>
+                            <button class="btn btn-outline-secondary btn-sm" id="downloadBtn" style="display:none;">
+                                <i class="bi bi-download"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <!-- Loading Spinner -->
+                        <div class="loading-spinner" id="loadingSpinner">
+                            <div class="spinner-border text-primary" role="status"></div>
+                            <p class="mt-3 text-muted">正在分析，请稍候...</p>
+                        </div>
+
+                        <!-- Quote & Charts Section -->
+                        <div id="quoteChartSection" style="display:none;">
+                            <!-- 实时价格卡片 -->
+                            <div class="quote-card" id="quoteCard">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <div class="d-flex align-items-center mb-2">
+                                            <span id="quoteSymbol" class="badge bg-primary me-2"></span>
+                                            <span id="quoteName" class="text-white-50"></span>
+                                        </div>
+                                        <div class="quote-price" id="quotePrice">--</div>
+                                        <div class="quote-change" id="quoteChange">--</div>
+                                    </div>
+                                    <div class="text-end">
+                                        <div class="text-white-50 small" id="quoteDate">--</div>
+                                    </div>
+                                </div>
+                                <div class="quote-info">
+                                    <div class="quote-info-item">
+                                        <div class="quote-info-label">今开</div>
+                                        <div class="quote-info-value" id="quoteOpen">--</div>
+                                    </div>
+                                    <div class="quote-info-item">
+                                        <div class="quote-info-label">最高</div>
+                                        <div class="quote-info-value" id="quoteHigh">--</div>
+                                    </div>
+                                    <div class="quote-info-item">
+                                        <div class="quote-info-label">最低</div>
+                                        <div class="quote-info-value" id="quoteLow">--</div>
+                                    </div>
+                                    <div class="quote-info-item">
+                                        <div class="quote-info-label">成交量</div>
+                                        <div class="quote-info-value" id="quoteVolume">--</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- K线图 + 筹码分布 -->
+                            <div class="charts-row">
+                                <div class="chart-container">
+                                    <div class="chart-header">
+                                        <h6 class="mb-0"><i class="bi bi-graph-up me-2"></i>K线图</h6>
+                                        <span id="chartDaysLabel" class="badge bg-secondary"></span>
+                                    </div>
+                                    <div id="klineChart"></div>
+                                </div>
+                                <div class="chip-chart-container">
+                                    <div class="chart-header">
+                                        <h6 class="mb-0"><i class="bi bi-bar-chart-fill me-2"></i>筹码分布</h6>
+                                    </div>
+                                    <canvas id="chipChart"></canvas>
+                                    <!-- 图例 -->
+                                    <div class="chip-legend">
+                                        <div class="chip-legend-item">
+                                            <div class="chip-legend-line" style="background:#ef4444"></div>
+                                            <span>最新价</span>
+                                        </div>
+                                        <div class="chip-legend-item">
+                                            <div class="chip-legend-line" style="background:#f59e0b"></div>
+                                            <span>平均成本</span>
+                                        </div>
+                                        <div class="chip-legend-item">
+                                            <div class="chip-legend-line" style="background:#10b981"></div>
+                                            <span>90%成本</span>
+                                        </div>
+                                    </div>
+                                    <div class="chip-metrics">
+                                        <div class="chip-metric">
+                                            <div class="chip-metric-value" id="chipProfit">--</div>
+                                            <div class="chip-metric-label">获利盘%</div>
+                                        </div>
+                                        <div class="chip-metric">
+                                            <div class="chip-metric-value" id="chipAvgCost">--</div>
+                                            <div class="chip-metric-label">平均成本</div>
+                                        </div>
+                                        <div class="chip-metric">
+                                            <div class="chip-metric-value" id="chipConcentration">--</div>
+                                            <div class="chip-metric-label">集中度%</div>
+                                        </div>
+                                        <div class="chip-metric">
+                                            <div class="chip-metric-value" id="chipScore">--</div>
+                                            <div class="chip-metric-label">评分</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 技术指标异动信号 -->
+                            <div id="signalsSection" class="signals-card" style="display:none;">
+                                <div class="signals-header">
+                                    <h6 class="mb-0"><i class="bi bi-lightning-fill me-2"></i>技术指标信号</h6>
+                                    <span id="signalSummary" class="badge bg-secondary"></span>
+                                </div>
+                                <div class="signals-grid" id="signalsGrid"></div>
+                            </div>
+                        </div>
+
+                        <!-- Report Container -->
+                        <div id="reportContainer" class="report-container">
+                            <div class="text-center py-5 text-muted">
+                                <i class="bi bi-graph-up" style="font-size: 3rem;"></i>
+                                <p class="mt-3">输入股票代码，点击分析按钮开始</p>
+                            </div>
+                        </div>
+
+                        <!-- Backtest Results -->
+                        <div id="backtestResults" style="display:none;">
+                            <div class="backtest-results">
+                                <h5 class="mb-3"><i class="bi bi-bar-chart me-2"></i>回测结果</h5>
+                                <div id="backtestMetrics" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 1rem;"></div>
+                            </div>
+                        </div>
+
+                        <!-- Scan Results -->
+                        <div id="scanResults" style="display:none;">
+                            <div class="table-responsive">
+                                <table class="table table-hover">
+                                    <thead><tr><th>排名</th><th>代码</th><th>评分</th><th>触发</th><th>操作</th></tr></thead>
+                                    <tbody id="scanResultsBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Qlib ML Results -->
+                        <div id="qlibResults" style="display:none;">
+                            <div class="mb-4">
+                                <h5 class="mb-3"><i class="bi bi-cpu me-2"></i>ML 模型训练结果</h5>
+
+                                <!-- 训练数据日期 -->
+                                <div class="alert alert-info py-2 mb-3">
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <strong>训练数据周期:</strong>
+                                            <span id="qlibTrainDataPeriod">-</span>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <strong>请求周期:</strong>
+                                            <span id="qlibTrainRequestPeriod">-</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="row g-3 mb-3">
+                                    <div class="col-md-3">
+                                        <div class="card bg-light">
+                                            <div class="card-body text-center py-2">
+                                                <div class="text-muted small">模型类型</div>
+                                                <div class="fw-bold" id="qlibResultModelType">-</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="card bg-light">
+                                            <div class="card-body text-center py-2">
+                                                <div class="text-muted small">训练样本</div>
+                                                <div class="fw-bold" id="qlibResultSamples">-</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="card bg-light">
+                                            <div class="card-body text-center py-2">
+                                                <div class="text-muted small">IC</div>
+                                                <div class="fw-bold" id="qlibResultIC">-</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="card bg-light">
+                                            <div class="card-body text-center py-2">
+                                                <div class="text-muted small">MSE</div>
+                                                <div class="fw-bold" id="qlibResultMSE">-</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 回测参数 -->
+                                <div class="card mb-3">
+                                    <div class="card-header py-2"><i class="bi bi-gear me-1"></i>回测参数</div>
+                                    <div class="card-body py-2">
+                                        <div class="row small">
+                                            <div class="col-md-3"><strong>初始资金:</strong> <span id="qlibParamInitialCash">-</span></div>
+                                            <div class="col-md-3"><strong>手续费率:</strong> <span id="qlibParamCommission">-</span></div>
+                                            <div class="col-md-3"><strong>滑点率:</strong> <span id="qlibParamSlippage">-</span></div>
+                                            <div class="col-md-3"><strong>T+1:</strong> <span class="badge bg-success" id="qlibParamT1">是</span></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <h6 class="text-muted mb-2">模型路径</h6>
+                                    <code id="qlibResultModelPath" class="d-block p-2 bg-light rounded">-</code>
+                                </div>
+                                <div id="qlibFeatureImportance" style="display:none;">
+                                    <h6 class="text-muted mb-2">特征重要性</h6>
+                                    <div id="qlibFeatureImportanceChart" style="height: 200px;"></div>
+                                </div>
+                            </div>
+
+                            <!-- 预测结果 -->
+                            <div id="qlibPredictions" style="display:none;">
+                                <h5 class="mb-3"><i class="bi bi-graph-up me-2"></i>模型预测与回测结果</h5>
+
+                                <!-- 预测周期和参数 -->
+                                <div class="alert alert-secondary py-2 mb-3">
+                                    <div class="row">
+                                        <div class="col-md-4">
+                                            <strong>预测周期:</strong> <span id="qlibPredictPeriod">-</span>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <strong>初始资金:</strong> <span id="qlibPredictInitialCash">-</span>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <strong>手续费+滑点:</strong> <span id="qlibPredictCost">-</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 股票预测卡片 -->
+                                <div id="qlibPredictionsCards" class="row g-3 mb-3"></div>
+
+                                <!-- 详细交易记录 -->
+                                <div id="qlibTradeHistory" style="display:none;">
+                                    <h6 class="text-muted mb-2 mt-4"><i class="bi bi-list-ul me-1"></i>交易记录</h6>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-hover">
+                                            <thead>
+                                                <tr>
+                                                    <th>日期</th>
+                                                    <th>类型</th>
+                                                    <th>价格</th>
+                                                    <th>数量</th>
+                                                    <th>手续费</th>
+                                                    <th>盈亏</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="qlibTradeHistoryBody"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+        const API_BASE = window.location.origin + '/api';
+        let history = JSON.parse(localStorage.getItem('quanttool_history') || '[]');
+        let chartInstance = null;
+        let lastTrainedModelPath = null;  // 保存最近训练的模型路径
+
+        document.addEventListener('DOMContentLoaded', function() {
+            renderHistory();
+            setupEventListeners();
+        });
+
+        function setupEventListeners() {
+            document.getElementById('analyzeForm').addEventListener('submit', async e => { e.preventDefault(); await runAnalysis(); });
+            document.getElementById('backtestForm').addEventListener('submit', async e => { e.preventDefault(); await runBacktest(); });
+            document.getElementById('scanForm').addEventListener('submit', async e => { e.preventDefault(); await runScan(); });
+            document.getElementById('copyBtn').addEventListener('click', () => {
+                navigator.clipboard.writeText(document.getElementById('reportContainer').innerText);
+                showToast('已复制', 'success');
+            });
+
+            // 自定义天数选择
+            document.getElementById('analyzeDays').addEventListener('change', function() {
+                const customInput = document.getElementById('analyzeDaysCustom');
+                customInput.style.display = this.value === 'custom' ? 'block' : 'none';
+            });
+            document.getElementById('scanDays').addEventListener('change', function() {
+                const customInput = document.getElementById('scanDaysCustom');
+                customInput.style.display = this.value === 'custom' ? 'block' : 'none';
+            });
+
+            // Qlib ML 模型事件
+            document.getElementById('qlibForm').addEventListener('submit', async e => { e.preventDefault(); await trainQlibModel(); });
+            document.getElementById('qlibPredictBtn').addEventListener('click', async () => { await predictQlibModel(); });
+        }
+
+        function getDaysValue(selectId, customId) {
+            const select = document.getElementById(selectId);
+            if (select.value === 'custom') {
+                const custom = parseInt(document.getElementById(customId).value);
+                return isNaN(custom) || custom < 30 ? 360 : Math.min(custom, 1000);
+            }
+            return parseInt(select.value);
+        }
+
+        async function runAnalysis() {
+            const symbol = document.getElementById('symbol').value.trim();
+            const days = getDaysValue('analyzeDays', 'analyzeDaysCustom');
+            const mode = document.getElementById('analyzeMode').value;
+            if (!symbol) { showToast('请输入股票代码', 'warning'); return; }
+
+            showLoading(true);
+            try {
+                // 加载 K 线图（使用用户选择的天数）
+                const klineData = await loadKlineChart(symbol, days);
+                // 加载筹码分布
+                await loadChipDistribution(symbol);
+                // 加载技术指标信号并在K线图上标记
+                await loadSignals(symbol, klineData);
+                // 运行分析
+                const endpoint = mode === 'enhanced' ? `${API_BASE}/analyze/enhanced` : `${API_BASE}/analyze`;
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol, days, include_chip: true, include_patterns: true, include_strategies: true })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    renderReport(data.report);
+                    addToHistory('analyze', symbol, data);
+                    document.getElementById('copyBtn').style.display = 'inline-block';
+                } else throw new Error(data.detail || '分析失败');
+            } catch (error) { showError(error.message); }
+            finally { showLoading(false); }
+        }
+
+        async function loadKlineChart(symbol, days) {
+            try {
+                const response = await fetch(`${API_BASE}/stock/${symbol}/kline?days=${days}`);
+                if (!response.ok) { document.getElementById('quoteChartSection').style.display = 'none'; return null; }
+                const data = await response.json();
+                if (!data.kline || data.kline.length === 0) { document.getElementById('quoteChartSection').style.display = 'none'; return null; }
+
+                // 显示报价区域
+                document.getElementById('quoteChartSection').style.display = 'block';
+                document.getElementById('chartDaysLabel').textContent = `${data.count}天`;
+
+                // 更新报价信息
+                if (data.quote) {
+                    const q = data.quote;
+                    document.getElementById('quoteSymbol').textContent = symbol;
+                    document.getElementById('quotePrice').textContent = `¥${q.price.toFixed(2)}`;
+
+                    const changeEl = document.getElementById('quoteChange');
+                    const changeText = `${q.change >= 0 ? '+' : ''}${q.change.toFixed(2)} (${q.change >= 0 ? '+' : ''}${q.change_pct.toFixed(2)}%)`;
+                    changeEl.textContent = changeText;
+                    changeEl.className = `quote-change ${q.change >= 0 ? 'up' : 'down'}`;
+
+                    document.getElementById('quoteOpen').textContent = q.open.toFixed(2);
+                    document.getElementById('quoteHigh').textContent = q.high.toFixed(2);
+                    document.getElementById('quoteLow').textContent = q.low.toFixed(2);
+                    document.getElementById('quoteVolume').textContent = formatVolume(q.volume);
+                    document.getElementById('quoteDate').textContent = new Date().toLocaleDateString('zh-CN');
+                }
+
+                // 创建 K 线图
+                const chartContainer = document.getElementById('klineChart');
+                chartContainer.innerHTML = '';
+
+                if (typeof LightweightCharts === 'undefined') {
+                    console.error('LightweightCharts not loaded');
+                    return null;
+                }
+
+                chartInstance = LightweightCharts.createChart(chartContainer, {
+                    width: chartContainer.clientWidth,
+                    height: 450,
+                    layout: { background: { type: 'solid', color: '#ffffff' }, textColor: '#333' },
+                    grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
+                    timeScale: { borderColor: '#ccc', timeVisible: true },
+                    rightPriceScale: { borderColor: '#ccc' }
+                });
+
+                // K线系列
+                const candlestickSeries = chartInstance.addCandlestickSeries({
+                    upColor: '#ef5350', downColor: '#26a69a',
+                    borderUpColor: '#ef5350', borderDownColor: '#26a69a',
+                    wickUpColor: '#ef5350', wickDownColor: '#26a69a'
+                });
+                candlestickSeries.setData(data.kline);
+
+                // 添加均线
+                const colors = { ma5: '#2196F3', ma10: '#FF9800', ma20: '#9C27B0', ma60: '#4CAF50' };
+                for (const [key, color] of Object.entries(colors)) {
+                    if (data.ma[key] && data.ma[key].length > 0) {
+                        const maSeries = chartInstance.addLineSeries({ color, lineWidth: 1 });
+                        maSeries.setData(data.ma[key]);
+                    }
+                }
+
+                // 添加成交量柱状图
+                if (data.kline && data.kline.length > 0) {
+                    const volumeData = data.kline.map(d => ({
+                        time: d.time,
+                        value: d.volume || 0,
+                        color: d.close >= d.open ? 'rgba(239, 83, 80, 0.5)' : 'rgba(38, 166, 154, 0.5)'
+                    }));
+                    const volumeSeries = chartInstance.addHistogramSeries({
+                        color: '#26a69a',
+                        priceFormat: { type: 'volume' },
+                        priceScaleId: 'volume',
+                    });
+                    volumeSeries.priceScale().applyOptions({
+                        scaleMargins: { top: 0.8, bottom: 0 },
+                    });
+                    volumeSeries.setData(volumeData);
+                }
+
+                chartInstance.timeScale().fitContent();
+
+                // 返回图表实例用于添加markers
+                return { chart: chartInstance, candlestickSeries, klineData: data.kline };
+            } catch (error) {
+                console.error('K线加载失败:', error);
+                return null;
+            }
+        }
+
+        async function loadChipDistribution(symbol) {
+            try {
+                const response = await fetch(`${API_BASE}/stock/${symbol}/chip?days=210`);
+                if (!response.ok) return;
+                const data = await response.json();
+
+                // 更新筹码指标
+                if (data.metrics) {
+                    document.getElementById('chipProfit').textContent = data.metrics.profit_ratio + '%';
+                    document.getElementById('chipAvgCost').textContent = '¥' + data.avg_cost.toFixed(2);
+                    document.getElementById('chipConcentration').textContent = data.metrics.concentration_ratio + '%';
+                    document.getElementById('chipScore').textContent = data.metrics.score;
+                }
+
+                // 绘制筹码分布图
+                drawChipChart(data);
+            } catch (error) {
+                console.error('筹码分布加载失败:', error);
+            }
+        }
+
+        async function loadSignals(symbol, chartData) {
+            try {
+                const response = await fetch(`${API_BASE}/stock/${symbol}/signals?days=60`);
+                if (!response.ok) return;
+                const data = await response.json();
+
+                const section = document.getElementById('signalsSection');
+                const grid = document.getElementById('signalsGrid');
+                const summary = document.getElementById('signalSummary');
+
+                if (data.signals && data.signals.length > 0) {
+                    section.style.display = 'block';
+                    summary.textContent = `看多${data.bullish_count} / 看空${data.bearish_count}`;
+
+                    // 渲染信号卡片
+                    grid.innerHTML = data.signals.map((s, idx) => {
+                        const typeClass = s.type || 'neutral';
+                        const icon = s.type === 'bullish' ? '↑' : (s.type === 'bearish' ? '↓' : '•');
+                        return `
+                            <div class="signal-item ${typeClass}">
+                                <div class="signal-title">${icon} ${s.name}</div>
+                                <div class="signal-desc">${s.description}</div>
+                                ${s.value ? `<div class="signal-value">${s.value}</div>` : ''}
+                                <div class="signal-mini-chart" id="miniChart${idx}"></div>
+                            </div>
+                        `;
+                    }).join('');
+
+                    // 在K线图上添加信号标记
+                    if (chartData && chartData.candlestickSeries && data.markers && data.markers.length > 0) {
+                        chartData.candlestickSeries.setMarkers(data.markers);
+                    }
+
+                    // 绘制迷你K线图
+                    if (chartData && chartData.klineData) {
+                        setTimeout(() => {
+                            data.signals.forEach((s, idx) => {
+                                drawMiniChart(`miniChart${idx}`, chartData.klineData, s.time);
+                            });
+                        }, 100);
+                    }
+                } else {
+                    section.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('信号加载失败:', error);
+            }
+        }
+
+        function drawMiniChart(containerId, klineData, signalTime) {
+            const container = document.getElementById(containerId);
+            if (!container || !klineData || klineData.length === 0) return;
+
+            // 找到信号时间点附近的K线（前后各5根）
+            const signalIdx = klineData.findIndex(d => d.time === signalTime);
+            if (signalIdx === -1) return;
+
+            const startIdx = Math.max(0, signalIdx - 8);
+            const endIdx = Math.min(klineData.length, signalIdx + 3);
+            const miniData = klineData.slice(startIdx, endIdx);
+
+            // 使用Canvas绘制迷你K线
+            container.innerHTML = '';
+            const canvas = document.createElement('canvas');
+            canvas.width = container.clientWidth || 180;
+            canvas.height = 60;
+            container.appendChild(canvas);
+
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+            const padding = 5;
+            const barWidth = (width - padding * 2) / miniData.length;
+
+            // 计算价格范围
+            const prices = miniData.flatMap(d => [d.high, d.low]);
+            const minPrice = Math.min(...prices);
+            const maxPrice = Math.max(...prices);
+            const priceRange = maxPrice - minPrice || 1;
+
+            // 绘制K线
+            miniData.forEach((d, i) => {
+                const x = padding + i * barWidth + barWidth / 2;
+                const openY = height - padding - ((d.open - minPrice) / priceRange) * (height - padding * 2);
+                const closeY = height - padding - ((d.close - minPrice) / priceRange) * (height - padding * 2);
+                const highY = height - padding - ((d.high - minPrice) / priceRange) * (height - padding * 2);
+                const lowY = height - padding - ((d.low - minPrice) / priceRange) * (height - padding * 2);
+
+                const isUp = d.close >= d.open;
+                ctx.strokeStyle = isUp ? '#ef5350' : '#26a69a';
+                ctx.fillStyle = isUp ? '#ef5350' : '#26a69a';
+
+                // 绘制影线
+                ctx.beginPath();
+                ctx.moveTo(x, highY);
+                ctx.lineTo(x, lowY);
+                ctx.stroke();
+
+                // 绘制实体
+                const bodyHeight = Math.abs(closeY - openY) || 1;
+                ctx.fillRect(x - barWidth / 3, Math.min(openY, closeY), barWidth * 2 / 3, bodyHeight);
+
+                // 标记信号点
+                if (d.time === signalTime) {
+                    ctx.strokeStyle = '#3b82f6';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(x, height - 8, 3, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.lineWidth = 1;
+                }
+            });
+        }
+
+        function drawChipChart(data) {
+            const canvas = document.getElementById('chipChart');
+            const ctx = canvas.getContext('2d');
+            const rect = canvas.parentElement.getBoundingClientRect();
+
+            // 高清渲染：使用 devicePixelRatio
+            const dpr = window.devicePixelRatio || 1;
+            const displayWidth = rect.width - 16;
+            const displayHeight = 200;
+            canvas.width = displayWidth * dpr;
+            canvas.height = displayHeight * dpr;
+            canvas.style.width = displayWidth + 'px';
+            canvas.style.height = displayHeight + 'px';
+            ctx.scale(dpr, dpr);
+
+            const { chip_data, current_price, avg_cost, cost_90_low, cost_90_high } = data;
+            if (!chip_data || chip_data.length === 0) return;
+
+            const width = displayWidth;
+            const height = displayHeight;
+            const padding = { top: 20, right: 10, bottom: 30, left: 10 };
+            const chartWidth = width - padding.left - padding.right;
+            const chartHeight = height - padding.top - padding.bottom;
+
+            ctx.clearRect(0, 0, width, height);
+
+            const prices = chip_data.map(d => d.price);
+            const minPrice = Math.min(...prices) * 0.97;
+            const maxPrice = Math.max(...prices) * 1.03;
+            const maxChip = Math.max(...chip_data.map(d => d.chip));
+
+            // 价格转 Y 坐标
+            const priceToY = (price) => padding.top + chartHeight - ((price - minPrice) / (maxPrice - minPrice)) * chartHeight;
+
+            // 绘制背景网格
+            ctx.strokeStyle = '#f0f0f0';
+            ctx.lineWidth = 0.5;
+            for (let i = 0; i <= 4; i++) {
+                const y = padding.top + (chartHeight / 4) * i;
+                ctx.beginPath();
+                ctx.moveTo(padding.left, y);
+                ctx.lineTo(width - padding.right, y);
+                ctx.stroke();
+            }
+
+            // 绘制筹码分布（渐变色水平条形图）
+            chip_data.forEach((d, idx) => {
+                const y = priceToY(d.price);
+                const barWidth = (d.chip / maxChip) * chartWidth * 0.9;
+
+                // 创建渐变
+                const gradient = ctx.createLinearGradient(width - padding.right - barWidth, 0, width - padding.right, 0);
+                gradient.addColorStop(0, 'rgba(59, 130, 246, 0.1)');
+                gradient.addColorStop(1, 'rgba(59, 130, 246, 0.8)');
+
+                ctx.fillStyle = gradient;
+                ctx.fillRect(width - padding.right - barWidth, y - 2, barWidth, 4);
+            });
+
+            // 绘制筹码分布曲线轮廓
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)';
+            ctx.lineWidth = 1.5;
+            chip_data.forEach((d, i) => {
+                const y = priceToY(d.price);
+                const barWidth = (d.chip / maxChip) * chartWidth * 0.9;
+                const x = width - padding.right - barWidth;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            // 绘制90%成本区间（绿色半透明区域）
+            if (cost_90_low && cost_90_high) {
+                const yLow = priceToY(cost_90_low);
+                const yHigh = priceToY(cost_90_high);
+
+                // 填充区域
+                ctx.fillStyle = 'rgba(16, 185, 129, 0.1)';
+                ctx.fillRect(padding.left, yHigh, chartWidth, yLow - yHigh);
+
+                // 上边界线
+                ctx.strokeStyle = '#10b981';
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([5, 3]);
+                ctx.beginPath();
+                ctx.moveTo(padding.left, yHigh);
+                ctx.lineTo(width - padding.right, yHigh);
+                ctx.stroke();
+
+                // 下边界线
+                ctx.beginPath();
+                ctx.moveTo(padding.left, yLow);
+                ctx.lineTo(width - padding.right, yLow);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // 标注
+                ctx.fillStyle = '#10b981';
+                ctx.font = 'bold 11px sans-serif';
+                ctx.fillText(`90%成本 ¥${cost_90_low.toFixed(2)} - ¥${cost_90_high.toFixed(2)}`, padding.left + 5, yHigh - 5);
+            }
+
+            // 绘制平均成本线（橙色）
+            if (avg_cost) {
+                const yAvg = priceToY(avg_cost);
+                ctx.strokeStyle = '#f59e0b';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([6, 4]);
+                ctx.beginPath();
+                ctx.moveTo(padding.left, yAvg);
+                ctx.lineTo(width - padding.right, yAvg);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // 标签背景
+                ctx.fillStyle = '#fffbeb';
+                ctx.fillRect(padding.left + 3, yAvg - 14, 75, 16);
+                ctx.fillStyle = '#f59e0b';
+                ctx.font = 'bold 11px sans-serif';
+                ctx.fillText(`成本 ¥${avg_cost.toFixed(2)}`, padding.left + 5, yAvg - 3);
+            }
+
+            // 绘制当前价格线（红色）
+            const yCurrent = priceToY(current_price);
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(padding.left, yCurrent);
+            ctx.lineTo(width - padding.right, yCurrent);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // 当前价格标签
+            ctx.fillStyle = '#fef2f2';
+            ctx.fillRect(padding.left + 3, yCurrent + 2, 70, 16);
+            ctx.fillStyle = '#ef4444';
+            ctx.font = 'bold 11px sans-serif';
+            ctx.fillText(`现价 ¥${current_price.toFixed(2)}`, padding.left + 5, yCurrent + 14);
+
+            // 价格刻度（右侧）
+            ctx.fillStyle = '#64748b';
+            ctx.font = '10px sans-serif';
+            ctx.textAlign = 'right';
+            ctx.fillText(`¥${maxPrice.toFixed(2)}`, width - 5, padding.top + 10);
+            ctx.fillText(`¥${minPrice.toFixed(2)}`, width - 5, height - padding.bottom);
+            ctx.textAlign = 'left';
+        }
+
+        function formatVolume(vol) {
+            if (vol >= 100000000) return (vol / 100000000).toFixed(2) + '亿';
+            if (vol >= 10000) return (vol / 10000).toFixed(2) + '万';
+            return vol.toString();
+        }
+
+        function renderReport(markdown) {
+            document.getElementById('reportContainer').style.display = 'block';
+            document.getElementById('reportContainer').innerHTML = marked.parse(markdown);
+            document.getElementById('backtestResults').style.display = 'none';
+            document.getElementById('scanResults').style.display = 'none';
+        }
+
+        async function runBacktest() {
+            const symbols = document.getElementById('backtestSymbols').value.split(',').map(s => s.trim()).filter(s => s);
+            const strategy = document.getElementById('backtestStrategy').value;
+            const startDate = document.getElementById('backtestStartDate').value;
+            const endDate = document.getElementById('backtestEndDate').value;
+            showLoading(true);
+            try {
+                const response = await fetch(`${API_BASE}/backtest/run`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ strategy_name: strategy, symbols, start_date: startDate, end_date: endDate, initial_cash: 100000, commission_rate: 0.0003 })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    renderBacktestResults(data);
+                    addToHistory('backtest', symbols.join(','), data);
+                } else throw new Error(data.detail);
+            } catch (error) { showError(error.message); }
+            finally { showLoading(false); }
+        }
+
+        function renderBacktestResults(data) {
+            document.getElementById('quoteChartSection').style.display = 'none';
+            document.getElementById('reportContainer').style.display = 'none';
+            document.getElementById('backtestResults').style.display = 'block';
+            document.getElementById('scanResults').style.display = 'none';
+
+            const r = data.total_return || 0;
+            const cls = r >= 0 ? 'color: #10b981' : 'color: #ef4444';
+            document.getElementById('backtestMetrics').innerHTML = `
+                <div class="text-center p-2 bg-light rounded"><div style="${cls}; font-size: 1.5rem; font-weight: 700">${(r*100).toFixed(2)}%</div><div class="small text-muted">总收益</div></div>
+                <div class="text-center p-2 bg-light rounded"><div style="${cls}; font-weight: 700">${((data.annual_return||0)*100).toFixed(2)}%</div><div class="small text-muted">年化</div></div>
+                <div class="text-center p-2 bg-light rounded"><div style="font-weight: 700">${((data.max_drawdown||0)*100).toFixed(2)}%</div><div class="small text-muted">回撤</div></div>
+                <div class="text-center p-2 bg-light rounded"><div style="font-weight: 700">${data.sharpe_ratio?.toFixed(2)||'-'}</div><div class="small text-muted">夏普</div></div>
+                <div class="text-center p-2 bg-light rounded"><div style="font-weight: 700">${data.total_trades}</div><div class="small text-muted">交易次数</div></div>
+                <div class="text-center p-2 bg-light rounded"><div style="font-weight: 700">${((data.win_rate||0)*100).toFixed(1)}%</div><div class="small text-muted">胜率</div></div>
+            `;
+        }
+
+        async function runScan() {
+            const market = document.getElementById('scanMarket').value;
+            const days = getDaysValue('scanDays', 'scanDaysCustom');
+            const topN = parseInt(document.getElementById('scanTopN').value);
+            showLoading(true);
+            try {
+                const response = await fetch(`${API_BASE}/scan`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ market, days, top_n: topN, use_trend_score: true })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    renderScanResults(data);
+                    addToHistory('scan', market, data);
+                } else throw new Error(data.detail);
+            } catch (error) { showError(error.message); }
+            finally { showLoading(false); }
+        }
+
+        function renderScanResults(data) {
+            document.getElementById('quoteChartSection').style.display = 'none';
+            document.getElementById('reportContainer').style.display = 'none';
+            document.getElementById('backtestResults').style.display = 'none';
+            document.getElementById('scanResults').style.display = 'block';
+
+            const tbody = document.getElementById('scanResultsBody');
+            tbody.innerHTML = data.results.map((item, i) => `
+                <tr>
+                    <td><strong>${i+1}</strong></td>
+                    <td>${item.symbol}</td>
+                    <td><span class="badge ${item.score >= 50 ? 'bg-success' : 'bg-warning'}">${item.score.toFixed(1)}</span></td>
+                    <td>${item.trigger_type || '-'}</td>
+                    <td><button class="btn btn-sm btn-outline-primary" onclick="analyzeStock('${item.symbol}')">详情</button></td>
+                </tr>
+            `).join('');
+        }
+
+        function analyzeStock(symbol) {
+            document.getElementById('symbol').value = symbol;
+            document.getElementById('analyze-tab').click();
+            setTimeout(() => runAnalysis(), 100);
+        }
+
+        function showLoading(show) {
+            document.getElementById('loadingSpinner').classList.toggle('show', show);
+            document.getElementById('analyzeBtn').disabled = show;
+            document.getElementById('backtestBtn').disabled = show;
+            document.getElementById('scanBtn').disabled = show;
+        }
+
+        function showError(msg) {
+            document.getElementById('quoteChartSection').style.display = 'none';
+            document.getElementById('reportContainer').style.display = 'block';
+            document.getElementById('reportContainer').innerHTML = `<div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-2"></i>${msg}</div>`;
+        }
+
+        function showToast(msg, type = 'info') {
+            const container = document.querySelector('.toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast show align-items-center text-white bg-${type === 'success' ? 'success' : 'primary'}`;
+            toast.innerHTML = `<div class="d-flex"><div class="toast-body">${msg}</div></div>`;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        function addToHistory(type, query, data) {
+            let score = '--';
+            if (data.results && data.results[0]) {
+                score = data.results[0].score?.toFixed(0);
+            } else if (data.total_return !== undefined) {
+                score = (data.total_return * 100).toFixed(1) + '%';
+            }
+            const item = { type, query, time: new Date().toLocaleString(), score };
+            history.unshift(item);
+            if (history.length > 10) history.pop();
+            localStorage.setItem('quanttool_history', JSON.stringify(history));
+            renderHistory();
+        }
+
+        function renderHistory() {
+            const container = document.getElementById('historyList');
+            if (history.length === 0) { container.innerHTML = '<div class="text-muted text-center py-2 small">暂无记录</div>'; return; }
+            container.innerHTML = history.map((item, i) => `
+                <div class="list-group-item list-group-item-action history-item py-2" onclick="loadHistory(${i})">
+                    <div class="d-flex justify-content-between">
+                        <span><i class="bi bi-${item.type === 'scan' ? 'radar' : item.type === 'backtest' ? 'arrow-repeat' : item.type === 'qlib' ? 'cpu' : 'search'} me-1"></i>${item.query}</span>
+                        <small class="text-muted">${item.score || ''}</small>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function loadHistory(i) {
+            const item = history[i];
+            if (item.type === 'scan') { document.getElementById('scan-tab').click(); document.getElementById('scanMarket').value = item.query; }
+            else if (item.type === 'backtest') { document.getElementById('backtest-tab').click(); document.getElementById('backtestSymbols').value = item.query; }
+            else if (item.type === 'qlib') { document.getElementById('qlib-tab').click(); document.getElementById('qlibSymbols').value = item.query; }
+            else { document.getElementById('analyze-tab').click(); document.getElementById('symbol').value = item.query; }
+        }
+
+        // ==================== Qlib ML 模型函数 ====================
+
+        async function trainQlibModel() {
+            const modelType = document.getElementById('qlibModelType').value;
+            const symbols = document.getElementById('qlibSymbols').value.split(',').map(s => s.trim()).filter(s => s);
+            const startDate = document.getElementById('qlibStartDate').value;
+            const endDate = document.getElementById('qlibEndDate').value;
+            const nEstimators = parseInt(document.getElementById('qlibNestimators').value) || 200;
+            const maxDepth = parseInt(document.getElementById('qlibMaxDepth').value) || 6;
+            const learningRate = parseFloat(document.getElementById('qlibLearningRate').value) || 0.01;
+            const batchSize = parseInt(document.getElementById('qlibBatchSize').value) || 256;
+
+            if (symbols.length === 0) {
+                showToast('请输入至少一个股票代码', 'warning');
+                return;
+            }
+
+            showLoading(true);
+            try {
+                const response = await fetch(`${API_BASE}/qlib/train`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model_type: modelType,
+                        symbols: symbols,
+                        start_date: startDate,
+                        end_date: endDate,
+                        n_estimators: nEstimators,
+                        max_depth: maxDepth,
+                        learning_rate: learningRate,
+                        batch_size: batchSize,
+                        epochs: nEstimators  // 对于 PyTorch 模型，使用同样的参数
+                    })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    renderQlibResults(data);
+                    addToHistory('qlib', symbols.join(','), data);
+                    showToast('模型训练完成', 'success');
+                } else {
+                    throw new Error(data.detail || '训练失败');
+                }
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function predictQlibModel() {
+            const modelType = document.getElementById('qlibModelType').value;
+            const symbols = document.getElementById('qlibSymbols').value.split(',').map(s => s.trim()).filter(s => s);
+            const startDate = document.getElementById('qlibStartDate').value;
+            const endDate = document.getElementById('qlibEndDate').value;
+
+            if (symbols.length === 0) {
+                showToast('请输入股票代码', 'warning');
+                return;
+            }
+
+            // 检查是否有训练好的模型
+            if (!lastTrainedModelPath) {
+                showToast('请先训练模型', 'warning');
+                showError('请先点击"训练模型"按钮训练一个模型，然后再进行预测。');
+                return;
+            }
+
+            showLoading(true);
+            try {
+                const response = await fetch(`${API_BASE}/qlib/predict`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model_type: modelType,
+                        model_path: lastTrainedModelPath,
+                        symbols: symbols,
+                        predict_start_date: startDate,
+                        predict_end_date: endDate,
+                        initial_cash: 100000,
+                        commission_rate: 0.0003,
+                        slippage_rate: 0.0001
+                    })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    renderQlibPredictions(data);
+                    showToast('预测完成', 'success');
+                } else {
+                    throw new Error(data.detail || '预测失败');
+                }
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function renderQlibResults(data) {
+            // 隐藏其他结果区域
+            document.getElementById('quoteChartSection').style.display = 'none';
+            document.getElementById('reportContainer').style.display = 'none';
+            document.getElementById('backtestResults').style.display = 'none';
+            document.getElementById('scanResults').style.display = 'none';
+            document.getElementById('qlibResults').style.display = 'block';
+            document.getElementById('qlibPredictions').style.display = 'none';
+
+            // 保存模型路径供预测使用
+            if (data.model_path) {
+                lastTrainedModelPath = data.model_path;
+            }
+
+            // 填充训练数据日期
+            if (data.data_period) {
+                document.getElementById('qlibTrainDataPeriod').textContent =
+                    `${data.data_period.start_date || '-'} ~ ${data.data_period.end_date || '-'}`;
+                document.getElementById('qlibTrainRequestPeriod').textContent =
+                    `${data.data_period.requested_start || '-'} ~ ${data.data_period.requested_end || '-'}`;
+            }
+
+            // 填充训练结果
+            document.getElementById('qlibResultModelType').textContent = data.model_type.toUpperCase();
+            document.getElementById('qlibResultSamples').textContent = data.train_samples?.toLocaleString() || '-';
+            document.getElementById('qlibResultIC').textContent = data.metrics?.ic?.toFixed(4) || '-';
+            document.getElementById('qlibResultMSE').textContent = data.metrics?.mse?.toFixed(6) || '-';
+            document.getElementById('qlibResultModelPath').textContent = data.model_path || '-';
+
+            // 填充回测参数
+            if (data.backtest_params) {
+                document.getElementById('qlibParamInitialCash').textContent =
+                    `¥${(data.backtest_params.initial_cash || 100000).toLocaleString()}`;
+                document.getElementById('qlibParamCommission').textContent =
+                    `${((data.backtest_params.commission_rate || 0.0003) * 100).toFixed(3)}%`;
+                document.getElementById('qlibParamSlippage').textContent =
+                    `${((data.backtest_params.slippage_rate || 0.0001) * 100).toFixed(3)}%`;
+            }
+
+            // 显示特征重要性（如果有）
+            if (data.feature_importance && data.feature_importance.length > 0) {
+                document.getElementById('qlibFeatureImportance').style.display = 'block';
+                renderFeatureImportance(data.feature_importance);
+            } else {
+                document.getElementById('qlibFeatureImportance').style.display = 'none';
+            }
+        }
+
+        function renderFeatureImportance(importance) {
+            const container = document.getElementById('qlibFeatureImportanceChart');
+            if (!importance || importance.length === 0) {
+                container.innerHTML = '<div class="text-muted text-center py-3">无特征重要性数据</div>';
+                return;
+            }
+
+            // 创建简单的条形图
+            const maxImportance = Math.max(...importance.map(f => f.importance || 0));
+            container.innerHTML = importance.slice(0, 10).map(f => `
+                <div class="d-flex align-items-center mb-1">
+                    <div style="width: 80px; font-size: 0.75rem;" class="text-muted">${f.feature}</div>
+                    <div class="flex-grow-1 bg-light rounded" style="height: 16px;">
+                        <div class="bg-primary rounded" style="width: ${((f.importance || 0) / maxImportance * 100)}%; height: 100%;"></div>
+                    </div>
+                    <div style="width: 50px; font-size: 0.7rem;" class="text-end">${(f.importance || 0).toFixed(3)}</div>
+                </div>
+            `).join('');
+        }
+
+        function renderQlibPredictions(data) {
+            document.getElementById('qlibPredictions').style.display = 'block';
+
+            const predictions = data.predictions || {};
+
+            // 填充预测周期和参数
+            if (data.predict_period) {
+                document.getElementById('qlibPredictPeriod').textContent =
+                    `${data.predict_period.start_date} ~ ${data.predict_period.end_date}`;
+            }
+            if (data.backtest_params) {
+                document.getElementById('qlibPredictInitialCash').textContent =
+                    `¥${(data.backtest_params.initial_cash || 100000).toLocaleString()}`;
+                const totalCost = (data.backtest_params.commission_rate + data.backtest_params.slippage_rate) * 100;
+                document.getElementById('qlibPredictCost').textContent =
+                    `${totalCost.toFixed(4)}%`;
+            }
+
+            // 渲染股票预测卡片
+            const cardsContainer = document.getElementById('qlibPredictionsCards');
+            cardsContainer.innerHTML = Object.entries(predictions).map(([symbol, pred]) => {
+                const backtest = pred.backtest || {};
+                const totalReturn = backtest.total_return || 0;
+                const annualReturn = backtest.annual_return || 0;
+                const winRate = backtest.win_rate || 0;
+
+                // 确定收益颜色
+                const returnColor = totalReturn >= 0 ? '#10b981' : '#ef4444';
+                const signalBadge = pred.signal === 'buy' ? 'bg-success' :
+                                   (pred.signal === 'sell' ? 'bg-danger' : 'bg-secondary');
+                const signalText = pred.signal === 'buy' ? '↑ 买入' :
+                                  (pred.signal === 'sell' ? '↓ 卖出' : '• 持有');
+
+                return `
+                    <div class="col-md-6 col-lg-4">
+                        <div class="card h-100">
+                            <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                                <strong>${symbol}</strong>
+                                <span class="badge ${signalBadge}">${signalText}</span>
+                            </div>
+                            <div class="card-body py-2">
+                                <!-- 数据周期 -->
+                                <div class="small text-muted mb-2">
+                                    <i class="bi bi-calendar me-1"></i>
+                                    数据: ${pred.data_period?.start_date || '-'} ~ ${pred.data_period?.end_date || '-'}
+                                </div>
+
+                                <!-- 回测结果 -->
+                                <div class="row g-2 mb-2">
+                                    <div class="col-4 text-center">
+                                        <div class="small text-muted">总收益</div>
+                                        <div class="fw-bold" style="color: ${returnColor}">
+                                            ${totalReturn >= 0 ? '+' : ''}${totalReturn.toFixed(2)}%
+                                        </div>
+                                    </div>
+                                    <div class="col-4 text-center">
+                                        <div class="small text-muted">年化</div>
+                                        <div class="fw-bold" style="color: ${returnColor}">
+                                            ${annualReturn >= 0 ? '+' : ''}${annualReturn.toFixed(2)}%
+                                        </div>
+                                    </div>
+                                    <div class="col-4 text-center">
+                                        <div class="small text-muted">交易次数</div>
+                                        <div class="fw-bold">${backtest.total_trades || 0}</div>
+                                    </div>
+                                </div>
+
+                                <!-- 其他指标 -->
+                                <div class="row g-2 small">
+                                    <div class="col-6">
+                                        <span class="text-muted">最终市值:</span>
+                                        <span class="fw-bold">¥${(backtest.final_capital || 0).toLocaleString()}</span>
+                                    </div>
+                                    <div class="col-6">
+                                        <span class="text-muted">胜率:</span>
+                                        <span class="fw-bold ${winRate >= 50 ? 'text-success' : 'text-danger'}">${winRate}%</span>
+                                    </div>
+                                    <div class="col-6">
+                                        <span class="text-muted">手续费:</span>
+                                        <span>¥${backtest.total_commission || 0}</span>
+                                    </div>
+                                    <div class="col-6">
+                                        <span class="text-muted">滑点:</span>
+                                        <span>¥${backtest.total_slippage || 0}</span>
+                                    </div>
+                                </div>
+
+                                <div class="mt-2 pt-2 border-top small">
+                                    <span class="text-muted">预测值:</span>
+                                    <span>${(pred.prediction || 0).toFixed(4)}</span>
+                                    <span class="text-muted ms-2">最新价:</span>
+                                    <span>¥${pred.latest_price || '-'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            if (Object.keys(predictions).length === 0) {
+                cardsContainer.innerHTML = '<div class="col-12 text-center text-muted py-4">无预测结果</div>';
+            }
+
+            // 显示第一只股票的交易记录
+            const firstSymbol = Object.keys(predictions)[0];
+            if (firstSymbol && predictions[firstSymbol].backtest?.trades?.length > 0) {
+                document.getElementById('qlibTradeHistory').style.display = 'block';
+                const tradesBody = document.getElementById('qlibTradeHistoryBody');
+                const trades = predictions[firstSymbol].backtest.trades;
+
+                tradesBody.innerHTML = trades.map(t => {
+                    const typeClass = t.type === 'buy' ? 'text-success' : 'text-danger';
+                    const typeText = t.type === 'buy' ? '买入' : '卖出';
+                    const profitClass = (t.profit || 0) >= 0 ? 'text-success' : 'text-danger';
+                    const profitText = t.profit ? (t.profit >= 0 ? '+' : '') + t.profit.toFixed(2) : '-';
+
+                    return `
+                        <tr>
+                            <td>${t.date}</td>
+                            <td class="${typeClass}">${typeText}</td>
+                            <td>¥${t.price}</td>
+                            <td>${t.shares}</td>
+                            <td>¥${t.commission || 0}</td>
+                            <td class="${profitClass}">${profitText}</td>
+                        </tr>
+                    `;
+                }).join('');
+            } else {
+                document.getElementById('qlibTradeHistory').style.display = 'none';
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            if (chartInstance) chartInstance.applyOptions({ width: document.getElementById('klineChart').clientWidth });
+        });
+    </script>
+</body>
+</html>
