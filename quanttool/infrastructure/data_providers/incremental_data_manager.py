@@ -276,6 +276,7 @@ class IncrementalDataManager:
         start_str = start_date.strftime("%Y-%m-%d")
         end_str = end_date.strftime("%Y-%m-%d")
 
+        # 第一阶段：检查缓存（需要锁）
         with self._lock:
             # 1. 获取缓存信息
             cached_range = self._get_data_range(symbol, data_type)
@@ -290,61 +291,65 @@ class IncrementalDataManager:
                 symbol, start_date, end_date, cached_range
             )
 
-            # 3. 拉取缺失数据
-            all_new_data = []
-            for fetch_start, fetch_end in fetch_ranges:
-                logger.debug(f"[{symbol}][{data_type}] 拉取数据: {fetch_start} ~ {fetch_end}")
-                try:
-                    new_data = fetcher.get_bars(
-                        [symbol], fetch_start, fetch_end, "1d"
-                    )
-                    if symbol in new_data and not new_data[symbol].empty:
-                        all_new_data.append(new_data[symbol])
-                except Exception as e:
-                    logger.error(f"[{symbol}][{data_type}] 拉取失败: {e}")
-
-            # 4. 合并数据
+            # 3. 读取缓存数据（在锁内完成）
+            cached_data = None
             if cached_range and not force_refresh:
-                # 读取缓存数据
                 cached_data = self._load_data(symbol, data_type)
-                if cached_data is not None and not cached_data.empty:
-                    all_new_data.insert(0, cached_data)
 
-            # 5. 合并并去重
-            if all_new_data:
-                final_data = pd.concat(all_new_data, ignore_index=True)
+        # 第二阶段：网络请求（不需要锁，可以并行执行）
+        all_new_data = []
+        for fetch_start, fetch_end in fetch_ranges:
+            logger.debug(f"[{symbol}][{data_type}] 拉取数据: {fetch_start} ~ {fetch_end}")
+            try:
+                new_data = fetcher.get_bars(
+                    [symbol], fetch_start, fetch_end, "1d"
+                )
+                if symbol in new_data and not new_data[symbol].empty:
+                    all_new_data.append(new_data[symbol])
+            except Exception as e:
+                logger.error(f"[{symbol}][{data_type}] 拉取失败: {e}")
 
-                # 确保有 timestamp 或 trade_date 列
-                date_col = None
-                for col in ['timestamp', 'trade_date', 'date']:
-                    if col in final_data.columns:
-                        date_col = col
-                        break
+        # 第三阶段：合并和保存（需要锁）
+        # 合并缓存数据
+        if cached_data is not None and not cached_data.empty:
+            all_new_data.insert(0, cached_data)
 
-                if date_col:
-                    # 转换为 datetime
-                    final_data[date_col] = pd.to_datetime(final_data[date_col])
-                    # 去重（保留最新的）
-                    final_data = final_data.drop_duplicates(
-                        subset=[date_col], keep='last'
-                    )
-                    # 排序
-                    final_data = final_data.sort_values(date_col).reset_index(drop=True)
+        # 4. 合并并去重
+        if all_new_data:
+            final_data = pd.concat(all_new_data, ignore_index=True)
 
-                # 6. 保存到缓存
+            # 确保有 timestamp 或 trade_date 列
+            date_col = None
+            for col in ['timestamp', 'trade_date', 'date']:
+                if col in final_data.columns:
+                    date_col = col
+                    break
+
+            if date_col:
+                # 转换为 datetime
+                final_data[date_col] = pd.to_datetime(final_data[date_col])
+                # 去重（保留最新的）
+                final_data = final_data.drop_duplicates(
+                    subset=[date_col], keep='last'
+                )
+                # 排序
+                final_data = final_data.sort_values(date_col).reset_index(drop=True)
+
+            # 5. 保存到缓存（需要锁）
+            with self._lock:
                 if not final_data.empty:
                     self._save_data(symbol, final_data, data_type)
 
-                # 7. 过滤到请求的范围
-                if date_col:
-                    final_data = final_data[
-                        (final_data[date_col] >= start_date) &
-                        (final_data[date_col] <= end_date)
-                    ]
+            # 6. 过滤到请求的范围
+            if date_col:
+                final_data = final_data[
+                    (final_data[date_col] >= start_date) &
+                    (final_data[date_col] <= end_date)
+                ]
 
-                return final_data
+            return final_data
 
-            return pd.DataFrame()
+        return pd.DataFrame()
 
     def _calculate_fetch_ranges(
         self,
