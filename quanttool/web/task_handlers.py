@@ -393,6 +393,7 @@ def qlib_predict_handler(ctx: TaskContext, **params) -> Dict[str, Any]:
     """
     import joblib
     from quanttool.factors.stock_analyzer import StockAnalyzer
+    from quanttool.strategies.adaptive_threshold import IndexMarketDetector
     from pathlib import Path
 
     ctx.update_progress(0, 100, "初始化预测环境...", "init")
@@ -661,6 +662,48 @@ def qlib_predict_handler(ctx: TaskContext, **params) -> Dict[str, Any]:
             if t.get("type") == "sell"
         )
 
+        # 计算策略总收益
+        strategy_return = round((total_final_capital - initial_cash * len(predictions)) / (initial_cash * len(predictions)) * 100, 2) if predictions else 0
+
+        # 计算沪深300基准收益
+        benchmark_return = 0.0
+        try:
+            detector = IndexMarketDetector()
+            index_df = detector.get_index_data('000300.SH', days=500)
+
+            if not index_df.empty:
+                # 确定日期列
+                date_col = None
+                for col in ['trade_date', 'timestamp']:
+                    if col in index_df.columns:
+                        date_col = col
+                        break
+
+                if date_col:
+                    index_df['_date'] = pd.to_datetime(index_df[date_col])
+
+                    # 筛选预测日期范围内的指数数据
+                    mask = (index_df['_date'] >= predict_start) & (index_df['_date'] <= predict_end)
+                    period_data = index_df[mask]
+
+                    if len(period_data) >= 2:
+                        # 按日期排序
+                        period_data = period_data.sort_values('_date')
+                        start_price = float(period_data['close'].iloc[0])
+                        end_price = float(period_data['close'].iloc[-1])
+                        benchmark_return = round((end_price - start_price) / start_price * 100, 2)
+                        ctx.log(f"沪深300基准收益: {benchmark_return}% (起:{start_price:.2f}, 终:{end_price:.2f})")
+        except Exception as e:
+            ctx.log(f"计算基准收益失败: {e}")
+
+        # 计算相对收益（超额收益）
+        relative_return = round(strategy_return - benchmark_return, 2)
+
+        # 计算总交易成本
+        total_commission = sum(p["backtest"].get("total_commission", 0) for p in predictions.values())
+        total_slippage = sum(p["backtest"].get("total_slippage", 0) for p in predictions.values())
+        total_cost = round(total_commission + total_slippage, 2)
+
         return {
             "model_path": model_path,
             "model_type": model_type,
@@ -668,15 +711,25 @@ def qlib_predict_handler(ctx: TaskContext, **params) -> Dict[str, Any]:
             "predictions": predictions,
             "total_stocks": total_symbols,
             "predicted_stocks": len(predictions),
+            "predict_period": {
+                "start_date": predict_start_date,
+                "end_date": predict_end_date,
+            },
             "backtest_params": {
                 "initial_cash": initial_cash,
                 "commission_rate": commission_rate,
                 "slippage_rate": slippage_rate,
             },
+            "benchmark_return": benchmark_return,
             "summary": {
-                "total_return_pct": round((total_final_capital - initial_cash * len(predictions)) / (initial_cash * len(predictions)) * 100, 2) if predictions else 0,
+                "total_return_pct": strategy_return,
+                "benchmark_return_pct": benchmark_return,
+                "relative_return_pct": relative_return,
                 "total_trades": sum(p["backtest"]["total_trades"] for p in predictions.values()),
                 "win_rate": round(total_win_trades / total_sell_trades * 100, 1) if total_sell_trades > 0 else 0,
+                "total_cost": total_cost,
+                "total_commission": round(total_commission, 2),
+                "total_slippage": round(total_slippage, 2),
             }
         }
 

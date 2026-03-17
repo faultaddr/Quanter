@@ -920,17 +920,36 @@
                             <div id="qlibPredictions" style="display:none;">
                                 <h5 class="mb-3"><i class="bi bi-graph-up me-2"></i>模型预测与回测结果</h5>
 
-                                <!-- 预测周期和参数 -->
+                                <!-- 收益对比头部 Bar -->
                                 <div class="alert alert-secondary py-2 mb-3">
                                     <div class="row">
-                                        <div class="col-md-4">
+                                        <div class="col-md-3">
                                             <strong>预测周期:</strong> <span id="qlibPredictPeriod">-</span>
                                         </div>
-                                        <div class="col-md-4">
+                                        <div class="col-md-3">
+                                            <strong>策略收益:</strong> <span id="qlibStrategyReturn" class="fw-bold">-</span>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <strong>基准收益:</strong> <span id="qlibBenchmarkReturn">-</span>
+                                            <small class="text-muted">(沪深300)</small>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <strong>交易成本:</strong> <span id="qlibTotalCost">-</span>
+                                            <small class="text-muted">(手续费+滑点)</small>
+                                        </div>
+                                    </div>
+                                    <div class="row mt-2 pt-2 border-top">
+                                        <div class="col-md-3">
+                                            <strong>超额收益:</strong> <span id="qlibRelativeReturn" class="fw-bold">-</span>
+                                        </div>
+                                        <div class="col-md-3">
                                             <strong>初始资金:</strong> <span id="qlibPredictInitialCash">-</span>
                                         </div>
-                                        <div class="col-md-4">
-                                            <strong>手续费+滑点:</strong> <span id="qlibPredictCost">-</span>
+                                        <div class="col-md-3">
+                                            <strong>交易次数:</strong> <span id="qlibTotalTrades">-</span>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <strong>胜率:</strong> <span id="qlibWinRate">-</span>
                                         </div>
                                     </div>
                                 </div>
@@ -1508,7 +1527,12 @@
             const market = document.getElementById('scanMarket').value;
             const days = getDaysValue('scanDays', 'scanDaysCustom');
             const topN = parseInt(document.getElementById('scanTopN').value);
+            const scanBtn = document.getElementById('scanBtn');
+
+            scanBtn.disabled = true;
+            scanBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>扫描中...';
             showLoading(true);
+
             try {
                 const response = await fetch(`${API_BASE}/scan`, {
                     method: 'POST',
@@ -1519,15 +1543,18 @@
                 if (response.ok) {
                     renderScanResults(data);
                     addToHistory('scan', market, data);
+                    // 更新按钮状态
+                    scanBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>重新扫描';
                 } else throw new Error(data.detail);
             } catch (error) { showError(error.message); }
-            finally { showLoading(false); }
+            finally {
+                showLoading(false);
+                scanBtn.disabled = false;
+            }
         }
 
         function renderScanResults(data) {
-            document.getElementById('quoteChartSection').style.display = 'none';
-            document.getElementById('reportContainer').style.display = 'none';
-            document.getElementById('backtestResults').style.display = 'none';
+            // 不再隐藏其他区域，保持结果可见
             document.getElementById('scanResults').style.display = 'block';
 
             const tbody = document.getElementById('scanResultsBody');
@@ -1739,6 +1766,8 @@
                 if (result) {
                     renderQlibResults(result);
                     addToHistory('qlib', `CSI300训练/${modelType}`, result);
+                    // 更新按钮状态为"重新训练"
+                    trainBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>重新训练';
                 }
 
             } catch (error) {
@@ -1754,6 +1783,7 @@
         async function predictQlibModel() {
             const modelType = document.getElementById('qlibModelType').value;
             const symbols = document.getElementById('qlibSymbols').value.split(',').map(s => s.trim()).filter(s => s);
+            const predictBtn = document.getElementById('qlibPredictBtn');
 
             if (symbols.length === 0) {
                 showToast('请输入预测股票代码', 'warning');
@@ -1767,7 +1797,10 @@
                 return;
             }
 
+            predictBtn.disabled = true;
+            predictBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>预测中...';
             showLoading(true);
+
             try {
                 // 计算预测日期范围：默认最近一年
                 const today = new Date();
@@ -1795,6 +1828,8 @@
                 if (response.ok) {
                     renderQlibPredictions(data);
                     showToast('预测完成', 'success');
+                    // 更新按钮状态为"重新预测"
+                    predictBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>重新预测';
                 } else {
                     throw new Error(data.detail || '预测失败');
                 }
@@ -1802,6 +1837,7 @@
                 showError(error.message);
             } finally {
                 showLoading(false);
+                predictBtn.disabled = false;
             }
         }
 
@@ -1941,19 +1977,50 @@
             document.getElementById('qlibPredictions').style.display = 'block';
 
             const predictions = data.predictions || {};
+            const summary = data.summary || {};
 
-            // 填充预测周期和参数
+            // 填充预测周期
             if (data.predict_period) {
                 document.getElementById('qlibPredictPeriod').textContent =
                     `${data.predict_period.start_date} ~ ${data.predict_period.end_date}`;
             }
+
+            // 填充收益数据
+            const strategyReturn = summary.total_return_pct || 0;
+            const benchmarkReturn = data.benchmark_return || 0;
+            const relativeReturn = summary.relative_return_pct || 0;
+
+            // 策略收益
+            const strategyEl = document.getElementById('qlibStrategyReturn');
+            strategyEl.textContent = `${strategyReturn >= 0 ? '+' : ''}${strategyReturn.toFixed(2)}%`;
+            strategyEl.style.color = strategyReturn >= 0 ? '#10b981' : '#ef4444';
+
+            // 基准收益
+            const benchmarkEl = document.getElementById('qlibBenchmarkReturn');
+            benchmarkEl.textContent = `${benchmarkReturn >= 0 ? '+' : ''}${benchmarkReturn.toFixed(2)}%`;
+            benchmarkEl.style.color = benchmarkReturn >= 0 ? '#10b981' : '#ef4444';
+
+            // 超额收益
+            const relativeEl = document.getElementById('qlibRelativeReturn');
+            relativeEl.textContent = `${relativeReturn >= 0 ? '+' : ''}${relativeReturn.toFixed(2)}%`;
+            relativeEl.style.color = relativeReturn >= 0 ? '#10b981' : '#ef4444';
+
+            // 交易成本
+            const totalCost = summary.total_cost || 0;
+            document.getElementById('qlibTotalCost').textContent = `¥${totalCost.toLocaleString()}`;
+
+            // 其他参数
             if (data.backtest_params) {
                 document.getElementById('qlibPredictInitialCash').textContent =
                     `¥${(data.backtest_params.initial_cash || 100000).toLocaleString()}`;
-                const totalCost = (data.backtest_params.commission_rate + data.backtest_params.slippage_rate) * 100;
-                document.getElementById('qlibPredictCost').textContent =
-                    `${totalCost.toFixed(4)}%`;
             }
+
+            // 交易统计
+            document.getElementById('qlibTotalTrades').textContent = summary.total_trades || 0;
+            const winRateEl = document.getElementById('qlibWinRate');
+            const winRate = summary.win_rate || 0;
+            winRateEl.textContent = `${winRate}%`;
+            winRateEl.style.color = winRate >= 50 ? '#10b981' : '#ef4444';
 
             // 渲染股票预测卡片
             const cardsContainer = document.getElementById('qlibPredictionsCards');
