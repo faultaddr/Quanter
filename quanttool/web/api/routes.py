@@ -2295,11 +2295,12 @@ async def predict_with_qlib_model(request: QlibPredictRequest) -> Dict[str, Any]
                 else:
                     pred_value = float(pred)
 
-                # 生成信号 (阈值可调整)
+                # 生成信号 (回归模型预测收益率，阈值需要适配)
+                # 回归值范围通常在 -0.1 到 0.1 之间
                 signal = "hold"
-                if pred_value > 0.55:
+                if pred_value > 0.005:  # 预测上涨 > 0.5%
                     signal = "buy"
-                elif pred_value < 0.45:
+                elif pred_value < -0.005:  # 预测下跌 > 0.5%
                     signal = "sell"
 
                 # 获取价格

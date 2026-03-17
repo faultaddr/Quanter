@@ -20,6 +20,7 @@ tests/test_core.py
 tests/test_csi300_top20_backtest.py
 tests/test_data_providers.py
 tests/test_data_service.py
+tests/test_deep_optimization.py
 tests/test_enhanced_data_fetcher.py
 tests/test_enhanced_features.py
 tests/test_enhanced_trend_strategy.py
@@ -27,6 +28,7 @@ tests/test_factor_service.py
 tests/test_factors.py
 tests/test_gbdt_models_backtest.py
 tests/test_hs300_backtest.py
+tests/test_hs300_qlib_backtest.py
 tests/test_lightgbm_extended.py
 tests/test_local_cache.py
 tests/test_low_frequency_strategy.py

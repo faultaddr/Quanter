@@ -74,3 +74,4 @@ htmlcov/
 # Build artifacts
 *.egg
 quanttool.log
+qlib_data/

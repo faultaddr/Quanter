@@ -39,8 +39,8 @@ def create_qlib_dataset_from_dataframe(
     从 DataFrame 创建 Qlib 原生 DatasetH
 
     Args:
-        features: 特征 DataFrame (索引为 datetime)
-        labels: 标签 Series (索引为 datetime)
+        features: 特征 DataFrame (索引为 datetime 或 MultiIndex(datetime, instrument))
+        labels: 标签 Series (索引为 datetime 或 MultiIndex(datetime, instrument))
         instrument: 股票代码
         train_ratio: 训练集比例
         valid_ratio: 验证集比例
@@ -51,17 +51,27 @@ def create_qlib_dataset_from_dataframe(
     if not QLIB_AVAILABLE:
         raise ImportError("pyqlib 未安装，无法创建 Qlib DatasetH")
 
-    # 确保索引是 DatetimeIndex
-    if not isinstance(features.index, pd.DatetimeIndex):
-        features.index = pd.to_datetime(features.index)
-    if not isinstance(labels.index, pd.DatetimeIndex):
-        labels.index = pd.to_datetime(labels.index)
+    # 检查是否已经是 MultiIndex
+    is_multiindex = isinstance(features.index, pd.MultiIndex)
 
-    # 创建 MultiIndex (datetime, instrument)
-    index = pd.MultiIndex.from_arrays(
-        [features.index, [instrument] * len(features)],
-        names=['datetime', 'instrument']
-    )
+    if is_multiindex:
+        # 已经是 MultiIndex，直接使用
+        index = features.index
+        # 提取日期用于计算 segments
+        dates = features.index.get_level_values('datetime')
+    else:
+        # 确保索引是 DatetimeIndex
+        if not isinstance(features.index, pd.DatetimeIndex):
+            features.index = pd.to_datetime(features.index)
+        if not isinstance(labels.index, pd.DatetimeIndex):
+            labels.index = pd.to_datetime(labels.index)
+
+        # 创建 MultiIndex (datetime, instrument)
+        index = pd.MultiIndex.from_arrays(
+            [features.index, [instrument] * len(features)],
+            names=['datetime', 'instrument']
+        )
+        dates = features.index
 
     # 创建 Qlib 格式的 DataFrame
     # 特征列: MultiIndex(('feature', col_name), ...)
@@ -86,7 +96,6 @@ def create_qlib_dataset_from_dataframe(
     train_end = int(total_len * train_ratio)
     valid_end = int(total_len * (train_ratio + valid_ratio))
 
-    dates = features.index
     segments = {
         'train': (dates[0].strftime('%Y-%m-%d'), dates[train_end - 1].strftime('%Y-%m-%d')),
         'valid': (dates[train_end].strftime('%Y-%m-%d'), dates[valid_end - 1].strftime('%Y-%m-%d')),
@@ -201,11 +210,18 @@ class SimpleDatasetH:
         self.segments = segments
         self.instrument = instrument
 
-        # 确保索引是日期时间
-        if not isinstance(self.features.index, pd.DatetimeIndex):
-            self.features.index = pd.to_datetime(self.features.index)
-        if not isinstance(self.labels.index, pd.DatetimeIndex):
-            self.labels.index = pd.to_datetime(self.labels.index)
+        # 检查索引类型并提取日期
+        self._is_multiindex = isinstance(self.features.index, pd.MultiIndex)
+        if self._is_multiindex:
+            # MultiIndex 格式：(datetime, instrument)
+            self._datetime_index = self.features.index.get_level_values('datetime')
+        else:
+            # 普通索引，尝试转换为日期时间
+            if not isinstance(self.features.index, pd.DatetimeIndex):
+                self.features.index = pd.to_datetime(self.features.index)
+            if not isinstance(self.labels.index, pd.DatetimeIndex):
+                self.labels.index = pd.to_datetime(self.labels.index)
+            self._datetime_index = self.features.index
 
         # 存储原始数据（用于回退模型训练）
         self._raw_feature_data = self.features.values
@@ -217,7 +233,7 @@ class SimpleDatasetH:
         for key, (start, end) in self.segments.items():
             start_dt = pd.to_datetime(start)
             end_dt = pd.to_datetime(end)
-            mask = (self.features.index >= start_dt) & (self.features.index <= end_dt)
+            mask = (self._datetime_index >= start_dt) & (self._datetime_index <= end_dt)
             self._segment_indices[key] = mask
 
     def prepare(
@@ -322,6 +338,15 @@ def create_qlib_compatible_dataset(
     dates = features.index
 
     # 检查索引是否为有效的日期索引
+    # 首先检查是否是 MultiIndex，如果是则提取 datetime 层级
+    if isinstance(dates, pd.MultiIndex):
+        # 尝试找到 datetime 层级
+        if 'datetime' in dates.names:
+            dates = dates.get_level_values('datetime')
+        elif dates.nlevels >= 1:
+            # 使用第一层作为日期
+            dates = dates.get_level_values(0)
+
     has_valid_dates = isinstance(dates, pd.DatetimeIndex)
     if not has_valid_dates:
         # 尝试转换，但检查结果是否合理

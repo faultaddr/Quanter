@@ -535,11 +535,11 @@ def qlib_predict_handler(ctx: TaskContext, **params) -> Dict[str, Any]:
 
                     pred_value = float(pred)
 
-                    # 生成信号
+                    # 生成信号 (回归模型预测收益率，阈值需要适配)
                     signal = "hold"
-                    if pred_value > 0.55:
+                    if pred_value > 0.005:  # 预测上涨 > 0.5%
                         signal = "buy"
-                    elif pred_value < 0.45:
+                    elif pred_value < -0.005:  # 预测下跌 > 0.5%
                         signal = "sell"
 
                     close_price = float(row['close'])
@@ -620,7 +620,7 @@ def qlib_predict_handler(ctx: TaskContext, **params) -> Dict[str, Any]:
 
                 predictions[symbol] = {
                     "prediction": round(float(pred_latest), 4),
-                    "signal": "buy" if float(pred_latest) > 0.55 else ("sell" if float(pred_latest) < 0.45 else "hold"),
+                    "signal": "buy" if float(pred_latest) > 0.005 else ("sell" if float(pred_latest) < -0.005 else "hold"),
                     "latest_price": round(float(df['close'].iloc[-1]), 2),
                     "data_period": {
                         "start_date": data_start,

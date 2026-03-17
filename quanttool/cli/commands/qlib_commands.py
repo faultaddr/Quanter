@@ -5,6 +5,10 @@ Qlib 模型回测命令
 - GBDT: lgb, xgboost, catboost, double_ensemble
 - PyTorch 序列: lstm, gru, alstm, transformer, tcn, localformer
 - PyTorch 高级: gats, sfm, tabnet, adarnn, add, hist, igmtf, krnn, tra, tcts, sandwich
+
+新增功能：
+- 官方训练流程支持（Alpha158/Alpha360 特征）
+- 数据格式转换（转换为 qlib 二进制格式）
 """
 
 import typer
@@ -26,6 +30,9 @@ GBDT_MODELS = ['lgb', 'lightgbm', 'xgboost', 'xgb', 'catboost', 'double_ensemble
 PYTORCH_SEQUENCE_MODELS = ['lstm', 'gru', 'alstm', 'transformer', 'tcn', 'localformer']
 PYTORCH_ADVANCED_MODELS = ['gats', 'sfm', 'tabnet', 'adarnn', 'add', 'hist', 'igmtf', 'krnn', 'tra', 'tcts', 'sandwich']
 ALL_MODELS = GBDT_MODELS + PYTORCH_SEQUENCE_MODELS + PYTORCH_ADVANCED_MODELS
+
+# 支持的特征类型
+FEATURE_TYPES = ['alpha158', 'alpha360']
 
 
 @app.command("list")
@@ -488,6 +495,318 @@ def _display_comparison(all_results: dict, models: List[str]):
 
     if best_model:
         console.print(f"\n[bold green]最佳模型: {best_model} ({best_return*100:.2f}%)[/bold green]")
+
+
+# ==================== 官方训练流程命令 ====================
+
+@app.command("dump-data")
+def dump_qlib_data(
+    output_dir: str = typer.Option("qlib_data/cn_data", "--output", "-o", help="输出目录"),
+    cache_dir: str = typer.Option(".cache/incremental_data", "--cache", "-c", help="缓存目录"),
+    feature_type: str = typer.Option("alpha158", "--feature", "-f", help="特征类型 (alpha158/alpha360)"),
+    start_date: str = typer.Option(None, "--start", "-sd", help="开始日期 (YYYY-MM-DD)"),
+    end_date: str = typer.Option(None, "--end", "-ed", help="结束日期 (YYYY-MM-DD)"),
+):
+    """
+    将缓存数据转换为 qlib 官方二进制格式
+
+    完全遵循 qlib 官方数据结构:
+    - calendars/day.txt      # 交易日历
+    - instruments/all.txt    # 股票列表
+    - features/{symbol}/     # 每只股票的数据
+
+    示例:
+        qlib dump-data --feature alpha158
+        qlib dump-data --output my_qlib_data --start 2022-01-01
+    """
+    from quanttool.infrastructure.data_providers.qlib_data_converter import (
+        QlibDataConverter, QlibDataConfig
+    )
+
+    config = QlibDataConfig(
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+        feature_type=feature_type,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    converter = QlibDataConverter(config)
+
+    # 获取可用股票
+    symbols = converter.get_available_symbols()
+    console.print(f"[cyan]缓存中共有 {len(symbols)} 只股票[/cyan]")
+
+    if not symbols:
+        console.print("[red]错误：没有可用的缓存数据[/red]")
+        console.print("请先运行数据获取命令:")
+        console.print("  python -m quanttool.cli.main data fetch-stock 000001 365")
+        raise typer.Exit(1)
+
+    # 转换数据
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("正在转换为 qlib 格式...", total=None)
+
+        result = converter.dump_data(
+            symbols=symbols,
+            start_date=start_date,
+            end_date=end_date,
+            feature_type=feature_type,
+        )
+
+        progress.remove_task(task)
+
+    # 显示结果
+    console.print(Panel.fit(
+        f"[bold green]转换完成[/bold green]\n"
+        f"股票数量: {result['symbol_count']}\n"
+        f"交易日数: {result['date_count']}\n"
+        f"特征数量: {result['feature_count']}\n"
+        f"输出目录: {result['output_dir']}",
+        title="Qlib 数据转换"
+    ))
+
+    # 显示下一步
+    console.print(f"\n[cyan]下一步：使用 qlib 初始化数据[/cyan]")
+    console.print(f"  import qlib")
+    console.print(f"  qlib.init(provider_uri='{output_dir}')")
+
+
+@app.command("train")
+def train_qlib_model(
+    model: str = typer.Option("lgb", "--model", "-m", help="模型类型"),
+    feature_type: str = typer.Option("alpha158", "--feature", "-f", help="特征类型 (alpha158/alpha360)"),
+    output_dir: str = typer.Option("qlib_data/cn_data", "--output", "-o", help="输出目录"),
+    cache_dir: str = typer.Option(".cache/incremental_data", "--cache", "-c", help="缓存目录"),
+    start_date: str = typer.Option(None, "--start", "-sd", help="开始日期"),
+    end_date: str = typer.Option(None, "--end", "-ed", help="结束日期"),
+    symbols: str = typer.Option(None, "--symbols", "-s", help="股票代码 (逗号分隔)"),
+    # GBDT 参数
+    n_estimators: int = typer.Option(200, "--n-estimators", help="树的数量 (GBDT)"),
+    max_depth: int = typer.Option(6, "--max-depth", help="最大深度 (GBDT)"),
+    learning_rate: float = typer.Option(0.01, "--lr", help="学习率"),
+    # PyTorch 参数
+    epochs: int = typer.Option(50, "--epochs", help="训练轮数 (PyTorch)"),
+    hidden_size: int = typer.Option(64, "--hidden", help="隐藏层大小 (PyTorch)"),
+    num_layers: int = typer.Option(2, "--layers", help="层数 (PyTorch)"),
+):
+    """
+    使用 qlib 官方流程训练模型
+
+    完全采用 qlib 官方训练流程:
+    1. 从缓存加载数据
+    2. 生成 Alpha158/Alpha360 特征
+    3. 创建 qlib DatasetH
+    4. 训练 qlib 原生模型
+
+    示例:
+        qlib train --model lgb --feature alpha158
+        qlib train --model transformer --epochs 100 --hidden 128
+    """
+    from quanttool.infrastructure.data_providers.qlib_data_converter import (
+        QlibDataConverter, QlibDataConfig, QlibTrainingPipeline
+    )
+
+    model = model.lower()
+    if model not in ALL_MODELS:
+        console.print(f"[red]错误: 不支持的模型 '{model}'[/red]")
+        console.print(f"支持的模型: {ALL_MODELS}")
+        raise typer.Exit(1)
+
+    config = QlibDataConfig(
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+        feature_type=feature_type,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    converter = QlibDataConverter(config)
+    pipeline = QlibTrainingPipeline(converter)
+
+    # 获取股票列表
+    all_symbols = converter.get_available_symbols()
+    if symbols:
+        symbol_list = [s.strip() for s in symbols.split(',')]
+        all_symbols = [s for s in all_symbols if s in symbol_list]
+
+    console.print(Panel.fit(
+        f"[bold cyan]Qlib 官方训练流程[/bold cyan]\n"
+        f"模型: [green]{model}[/green]\n"
+        f"特征: [yellow]{feature_type}[/yellow]\n"
+        f"股票数: {len(all_symbols)}\n"
+        f"输出: {output_dir}",
+        title="训练配置"
+    ))
+
+    # 训练模型
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("正在训练模型...", total=None)
+
+        try:
+            if model in GBDT_MODELS:
+                result = pipeline.train_gbdt_model(
+                    symbols=all_symbols,
+                    model_type=model,
+                    feature_type=feature_type,
+                    start_date=start_date,
+                    end_date=end_date,
+                    n_estimators=n_estimators,
+                    max_depth=max_depth,
+                    learning_rate=learning_rate,
+                )
+            else:
+                result = pipeline.train_pytorch_model(
+                    symbols=all_symbols,
+                    model_type=model,
+                    feature_type=feature_type,
+                    start_date=start_date,
+                    end_date=end_date,
+                    epochs=epochs,
+                    hidden_size=hidden_size,
+                    num_layers=num_layers,
+                )
+
+            progress.remove_task(task)
+
+            # 保存模型
+            model_path = f"{output_dir}/model_{model}.pkl"
+            result['model'].save(model_path)
+
+            console.print(f"\n[green]训练完成[/green]")
+            console.print(f"  特征数量: {result['feature_count']}")
+            console.print(f"  样本数量: {result['sample_count']}")
+            console.print(f"  模型保存: {model_path}")
+
+        except Exception as e:
+            progress.remove_task(task)
+            console.print(f"[red]训练失败: {e}[/red]")
+            raise typer.Exit(1)
+
+
+@app.command("full-pipeline")
+def run_full_pipeline(
+    model: str = typer.Option("lgb", "--model", "-m", help="模型类型"),
+    feature_type: str = typer.Option("alpha158", "--feature", "-f", help="特征类型"),
+    output_dir: str = typer.Option("qlib_data/cn_data", "--output", "-o", help="输出目录"),
+    cache_dir: str = typer.Option(".cache/incremental_data", "--cache", "-c", help="缓存目录"),
+    days: int = typer.Option(365, "--days", "-d", help="数据天数"),
+    capital: float = typer.Option(100000.0, "--capital", help="初始资金"),
+):
+    """
+    运行完整的 qlib 官方训练流程
+
+    包含：数据转换 -> 模型训练 -> 回测评估
+
+    示例:
+        qlib full-pipeline --model lgb --feature alpha158
+        qlib full-pipeline --model transformer --days 730 --capital 500000
+    """
+    console.print(Panel.fit(
+        f"[bold cyan]Qlib 官方训练流程 - 完整运行[/bold cyan]\n"
+        f"模型: [green]{model}[/green]\n"
+        f"特征: [yellow]{feature_type}[/yellow]\n"
+        f"数据天数: {days}\n"
+        f"初始资金: {capital:,.0f}",
+        title="完整流程"
+    ))
+
+    # 设置日期
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+
+    # 步骤1：转换数据
+    console.print("\n[bold][1/3] 转换数据...[/bold]")
+    from quanttool.infrastructure.data_providers.qlib_data_converter import (
+        QlibDataConverter, QlibDataConfig
+    )
+
+    config = QlibDataConfig(
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+        feature_type=feature_type,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    converter = QlibDataConverter(config)
+    symbols = converter.get_available_symbols()
+
+    if not symbols:
+        console.print("[red]错误：没有可用的缓存数据[/red]")
+        raise typer.Exit(1)
+
+    result = converter.dump_data(
+        symbols=symbols,
+        start_date=start_date,
+        end_date=end_date,
+        feature_type=feature_type,
+    )
+    console.print(f"  [green]✓[/green] 转换完成: {result['symbol_count']} 只股票")
+
+    # 步骤2：训练模型
+    console.print("\n[bold][2/3] 训练模型...[/bold]")
+    from quanttool.infrastructure.data_providers.qlib_data_converter import QlibTrainingPipeline
+
+    pipeline = QlibTrainingPipeline(converter)
+
+    if model in GBDT_MODELS:
+        train_result = pipeline.train_gbdt_model(
+            symbols=symbols,
+            model_type=model,
+            feature_type=feature_type,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    else:
+        train_result = pipeline.train_pytorch_model(
+            symbols=symbols,
+            model_type=model,
+            feature_type=feature_type,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    console.print(f"  [green]✓[/green] 训练完成: {train_result['sample_count']} 样本")
+
+    # 保存模型
+    model_path = f"{output_dir}/model_{model}.pkl"
+    train_result['model'].save(model_path)
+
+    # 步骤3：简单回测
+    console.print("\n[bold][3/3] 回测评估...[/bold]")
+
+    # 获取第一只股票进行测试
+    test_symbol = symbols[0]
+    df = converter.load_stock_data(test_symbol)
+
+    if not df.empty:
+        from quanttool.infrastructure.data_providers.qlib_data_converter import Alpha158Features, Alpha360Features
+
+        features = Alpha158Features.generate(df) if feature_type == 'alpha158' else Alpha360Features.generate(df)
+        predictions = train_result['model'].predict(features)
+
+        # 简单统计
+        pred_positive = (predictions > 0.5).sum()
+        pred_negative = (predictions < 0.5).sum()
+
+        console.print(f"  [green]✓[/green] 回测完成")
+        console.print(f"      预测上涨: {pred_positive} 天")
+        console.print(f"      预测下跌: {pred_negative} 天")
+
+    # 显示总结
+    console.print(Panel.fit(
+        f"[bold green]完整流程执行完成[/bold green]\n"
+        f"数据转换: {result['symbol_count']} 只股票, {result['date_count']} 交易日\n"
+        f"模型训练: {train_result['feature_count']} 特征, {train_result['sample_count']} 样本\n"
+        f"模型保存: {model_path}",
+        title="执行结果"
+    ))
 
 
 if __name__ == "__main__":
