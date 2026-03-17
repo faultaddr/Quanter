@@ -2733,3 +2733,321 @@ async def list_factors() -> List[str]:
 
     factors = registry.list_available(ComponentType.FACTOR)
     return factors
+
+
+# ==================== 实时数据 API ====================
+
+# 监控服务管理器（全局状态）
+_monitor_services: Dict[str, Any] = {}
+
+
+def get_minute_provider():
+    """获取 AkShare 分钟数据提供者（延迟初始化）"""
+    from ...infrastructure.data_providers.akshare_minute_provider import AkShareMinuteProvider
+    if not hasattr(get_minute_provider, "_instance"):
+        get_minute_provider._instance = AkShareMinuteProvider()
+        get_minute_provider._instance.initialize()
+    return get_minute_provider._instance
+
+
+class RealtimeQuoteResponse(BaseModel):
+    """实时行情响应"""
+    symbol: str
+    name: str = ""
+    price: float = 0
+    open: float = 0
+    high: float = 0
+    low: float = 0
+    volume: float = 0
+    amount: float = 0
+    pct_change: float = 0
+    change: float = 0
+    turnover: float = 0
+    timestamp: str = ""
+
+
+class MonitorStartRequest(BaseModel):
+    """启动监控请求"""
+    symbols: List[str]
+    strategy: str = "breakout"
+    interval_minutes: int = 5
+    buy_threshold: int = 50
+    sell_threshold: int = 40
+    history_days: int = 120
+
+
+class MonitorStatusResponse(BaseModel):
+    """监控状态响应"""
+    running: bool
+    symbols: List[str] = []
+    strategy: str = ""
+    interval_minutes: int = 5
+    check_count: int = 0
+    signal_count: int = 0
+    last_check: Optional[str] = None
+
+
+@router.get("/realtime/quote/{symbol}")
+async def get_realtime_quote(symbol: str) -> RealtimeQuoteResponse:
+    """获取实时行情"""
+    try:
+        provider = get_minute_provider()
+        quote = provider.get_realtime_quote(symbol)
+
+        if not quote:
+            raise HTTPException(status_code=404, detail=f"无法获取 {symbol} 的实时行情")
+
+        return RealtimeQuoteResponse(
+            symbol=quote.get("symbol", symbol),
+            name=quote.get("name", ""),
+            price=quote.get("price", 0),
+            open=quote.get("open", 0),
+            high=quote.get("high", 0),
+            low=quote.get("low", 0),
+            volume=quote.get("volume", 0),
+            amount=quote.get("amount", 0),
+            pct_change=quote.get("pct_change", 0),
+            change=quote.get("change", 0),
+            turnover=quote.get("turnover", 0),
+            timestamp=quote.get("timestamp", datetime.now()).strftime("%Y-%m-%d %H:%M:%S") if quote.get("timestamp") else ""
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get realtime quote for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail=f"获取实时行情失败: {str(e)}")
+
+
+@router.get("/realtime/kline/{symbol}")
+async def get_realtime_kline(
+    symbol: str,
+    timeframe: str = "5m",
+    count: int = 60
+) -> Dict[str, Any]:
+    """获取分钟K线数据"""
+    try:
+        provider = get_minute_provider()
+        df = provider.get_latest_bars(symbol, count, timeframe)
+
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"无法获取 {symbol} 的K线数据")
+
+        # 转换为前端友好的格式
+        kline_data = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "bars": []
+        }
+
+        for _, row in df.iterrows():
+            bar = {
+                "timestamp": row["timestamp"].strftime("%Y-%m-%d %H:%M:%S") if pd.notna(row.get("timestamp")) else "",
+                "open": float(row.get("open", 0)),
+                "high": float(row.get("high", 0)),
+                "low": float(row.get("low", 0)),
+                "close": float(row.get("close", 0)),
+                "volume": float(row.get("volume", 0)),
+                "amount": float(row.get("amount", 0))
+            }
+            kline_data["bars"].append(bar)
+
+        return kline_data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get kline for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail=f"获取K线数据失败: {str(e)}")
+
+
+@router.get("/realtime/search")
+async def search_stocks(query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
+    """搜索股票"""
+    if not query:
+        return []
+
+    try:
+        provider = get_minute_provider()
+        results = provider.search_symbols(query)
+
+        # 格式化结果
+        formatted = []
+        for item in results[:limit]:
+            formatted.append({
+                "symbol": item.get("symbol", ""),
+                "name": item.get("name", ""),
+                "price": float(item.get("price", 0))
+            })
+
+        return formatted
+    except Exception as e:
+        logger.error(f"Failed to search stocks: {e}")
+        raise HTTPException(status_code=500, detail=f"搜索股票失败: {str(e)}")
+
+
+@router.post("/monitor/start")
+async def start_monitor(request: MonitorStartRequest) -> Dict[str, Any]:
+    """启动监控服务"""
+    import uuid
+    from ...application.realtime_monitor_service import RealtimeMonitorService, MonitorConfig
+
+    monitor_id = str(uuid.uuid4())[:8]
+
+    try:
+        # 创建监控配置
+        config = MonitorConfig(
+            symbols=request.symbols,
+            strategy=request.strategy,
+            interval_minutes=request.interval_minutes,
+            buy_threshold=request.buy_threshold,
+            sell_threshold=request.sell_threshold,
+            history_days=request.history_days
+        )
+
+        # 创建监控服务
+        provider = get_minute_provider()
+        service = RealtimeMonitorService(
+            config=config,
+            data_provider=provider
+        )
+
+        # 保存到全局状态
+        _monitor_services[monitor_id] = {
+            "service": service,
+            "config": config,
+            "task": None
+        }
+
+        # 在后台启动监控
+        import asyncio
+
+        async def run_monitor():
+            try:
+                await service.start()
+            except Exception as e:
+                logger.error(f"Monitor {monitor_id} error: {e}")
+
+        task = asyncio.create_task(run_monitor())
+        _monitor_services[monitor_id]["task"] = task
+
+        logger.info(f"Started monitor {monitor_id} for {request.symbols}")
+
+        return {
+            "monitor_id": monitor_id,
+            "status": "started",
+            "symbols": request.symbols,
+            "strategy": request.strategy
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to start monitor: {e}")
+        raise HTTPException(status_code=500, detail=f"启动监控失败: {str(e)}")
+
+
+@router.post("/monitor/stop/{monitor_id}")
+async def stop_monitor(monitor_id: str) -> Dict[str, Any]:
+    """停止监控服务"""
+    if monitor_id not in _monitor_services:
+        raise HTTPException(status_code=404, detail=f"监控 {monitor_id} 不存在")
+
+    try:
+        monitor = _monitor_services[monitor_id]
+        service = monitor["service"]
+
+        await service.stop()
+
+        # 取消任务
+        if monitor["task"]:
+            monitor["task"].cancel()
+
+        del _monitor_services[monitor_id]
+
+        logger.info(f"Stopped monitor {monitor_id}")
+
+        return {"monitor_id": monitor_id, "status": "stopped"}
+
+    except Exception as e:
+        logger.error(f"Failed to stop monitor {monitor_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"停止监控失败: {str(e)}")
+
+
+@router.get("/monitor/status/{monitor_id}")
+async def get_monitor_status(monitor_id: str) -> MonitorStatusResponse:
+    """获取监控状态"""
+    if monitor_id not in _monitor_services:
+        raise HTTPException(status_code=404, detail=f"监控 {monitor_id} 不存在")
+
+    try:
+        monitor = _monitor_services[monitor_id]
+        service = monitor["service"]
+        status = service.get_status()
+
+        return MonitorStatusResponse(
+            running=status.get("running", False),
+            symbols=status.get("symbols", []),
+            strategy=status.get("strategy", ""),
+            interval_minutes=status.get("interval_minutes", 5),
+            check_count=status.get("check_count", 0),
+            signal_count=status.get("signal_count", 0),
+            last_check=status.get("last_check")
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to get monitor status: {e}")
+        raise HTTPException(status_code=500, detail=f"获取监控状态失败: {str(e)}")
+
+
+@router.get("/monitor/list")
+async def list_monitors() -> List[Dict[str, Any]]:
+    """列出所有监控"""
+    result = []
+    for monitor_id, monitor in _monitor_services.items():
+        service = monitor["service"]
+        status = service.get_status()
+        result.append({
+            "monitor_id": monitor_id,
+            "symbols": status.get("symbols", []),
+            "strategy": status.get("strategy", ""),
+            "running": status.get("running", False),
+            "check_count": status.get("check_count", 0),
+            "signal_count": status.get("signal_count", 0)
+        })
+    return result
+
+
+@router.get("/monitor/{monitor_id}/signals")
+async def get_monitor_signals(monitor_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+    """获取监控信号"""
+    if monitor_id not in _monitor_services:
+        raise HTTPException(status_code=404, detail=f"监控 {monitor_id} 不存在")
+
+    try:
+        monitor = _monitor_services[monitor_id]
+        service = monitor["service"]
+        signals = service.get_recent_signals(limit)
+
+        result = []
+        for s in signals:
+            signal_data = {
+                "score": s.score,
+                "passed_filter": s.passed_filter,
+                "filter_reason": s.filter_reason,
+                "signal": None
+            }
+
+            if s.signal:
+                signal_data["signal"] = {
+                    "symbol": s.signal.symbol,
+                    "direction": "buy" if s.signal.direction.value == "buy" else "sell",
+                    "timestamp": s.signal.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    "strength": s.signal.strength,
+                    "reason": s.signal.reason,
+                    "confidence": s.signal.confidence
+                }
+
+            result.append(signal_data)
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to get monitor signals: {e}")
+        raise HTTPException(status_code=500, detail=f"获取信号失败: {str(e)}")
