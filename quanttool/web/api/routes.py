@@ -59,15 +59,30 @@ class EnhancedAnalyzeRequest(BaseModel):
 
 
 class BacktestRequest(BaseModel):
-    """回测请求"""
+    """回测请求
+
+    默认回测时间为最近一年（从今天往前推一年）
+    """
     strategy_name: str = "ma_cross"
     symbols: List[str] = []
-    start_date: str = "2024-01-01"
-    end_date: str = "2024-12-31"
+    start_date: Optional[str] = None  # 默认一年前
+    end_date: Optional[str] = None    # 默认今天
     initial_cash: float = 100000.0
     commission_rate: float = 0.0003
     strategy_params: Dict[str, Any] = {}
     data_provider: str = "incremental_data_fetcher"  # 增量数据提供者（优先使用缓存）
+
+    def get_start_date(self) -> str:
+        """获取开始日期，默认为一年前"""
+        if self.start_date:
+            return self.start_date
+        return (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+
+    def get_end_date(self) -> str:
+        """获取结束日期，默认为今天"""
+        if self.end_date:
+            return self.end_date
+        return datetime.now().strftime('%Y-%m-%d')
 
 
 # ==================== 任务管理 API ====================
@@ -1340,19 +1355,34 @@ class QlibTrainRequest(BaseModel):
 
 
 class QlibPredictRequest(BaseModel):
-    """Qlib 模型预测请求"""
+    """Qlib 模型预测请求
+
+    预测日期默认为最近一年
+    """
     model_type: str = "lgb"
     model_path: str = ""  # 已训练模型的路径，为空则自动使用最新模型
     symbols: List[str] = []  # 预测的股票代码
     features: List[str] = []  # 空列表表示使用与训练相同的丰富特征
     use_rich_features: bool = True  # 是否使用 Alpha158 特征工程
     feature_set: str = "Alpha158"  # Alpha158 或 Alpha360
-    # 预测/回测参数
-    predict_start_date: str = "2025-01-01"
-    predict_end_date: str = "2026-03-17"  # 当前日期，由前端动态更新
+    # 预测/回测参数（默认最近一年）
+    predict_start_date: Optional[str] = None  # 默认一年前
+    predict_end_date: Optional[str] = None    # 默认今天
     initial_cash: float = 100000.0
     commission_rate: float = 0.0003
     slippage_rate: float = 0.0001
+
+    def get_predict_start_date(self) -> str:
+        """获取预测开始日期，默认为一年前"""
+        if self.predict_start_date:
+            return self.predict_start_date
+        return (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+
+    def get_predict_end_date(self) -> str:
+        """获取预测结束日期，默认为今天"""
+        if self.predict_end_date:
+            return self.predict_end_date
+        return datetime.now().strftime('%Y-%m-%d')
 
 
 @router.post("/qlib/train")
@@ -2143,9 +2173,9 @@ async def predict_with_qlib_model(request: QlibPredictRequest) -> Dict[str, Any]
         analyzer = StockAnalyzer()
         predictions = {}
 
-        # 解析回测日期
-        predict_start = datetime.fromisoformat(request.predict_start_date)
-        predict_end = datetime.fromisoformat(request.predict_end_date)
+        # 解析回测日期（使用动态默认值：最近一年）
+        predict_start = datetime.fromisoformat(request.get_predict_start_date())
+        predict_end = datetime.fromisoformat(request.get_predict_end_date())
 
         # 回测参数
         initial_cash = request.initial_cash
@@ -2524,9 +2554,9 @@ async def run_backtest(request: BacktestRequest) -> Dict[str, Any]:
     try:
         from quanttool.application.backtest_service import BacktestService
 
-        # 解析日期
-        start_date = datetime.fromisoformat(request.start_date)
-        end_date = datetime.fromisoformat(request.end_date)
+        # 解析日期（使用动态默认值：最近一年）
+        start_date = datetime.fromisoformat(request.get_start_date())
+        end_date = datetime.fromisoformat(request.get_end_date())
 
         # 初始化回测服务
         backtest_service = BacktestService()

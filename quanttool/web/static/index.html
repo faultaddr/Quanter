@@ -459,11 +459,11 @@
                                     <div class="row mb-3">
                                         <div class="col-6">
                                             <label class="form-label">开始</label>
-                                            <input type="date" class="form-control" id="backtestStartDate" value="2024-01-01">
+                                            <input type="date" class="form-control" id="backtestStartDate" placeholder="默认一年前">
                                         </div>
                                         <div class="col-6">
                                             <label class="form-label">结束</label>
-                                            <input type="date" class="form-control" id="backtestEndDate" value="2024-12-31">
+                                            <input type="date" class="form-control" id="backtestEndDate" placeholder="默认今天">
                                         </div>
                                     </div>
                                     <button type="submit" class="btn btn-primary w-100" id="backtestBtn">
@@ -882,7 +882,18 @@
         document.addEventListener('DOMContentLoaded', function() {
             renderHistory();
             setupEventListeners();
+            initDefaultDates();
         });
+
+        function initDefaultDates() {
+            // 设置回测日期默认值为最近一年
+            const today = new Date();
+            const oneYearAgo = new Date(today);
+            oneYearAgo.setFullYear(today.getFullYear() - 1);
+
+            document.getElementById('backtestStartDate').value = oneYearAgo.toISOString().split('T')[0];
+            document.getElementById('backtestEndDate').value = today.toISOString().split('T')[0];
+        }
 
         function setupEventListeners() {
             document.getElementById('analyzeForm').addEventListener('submit', async e => { e.preventDefault(); await runAnalysis(); });
@@ -1343,12 +1354,23 @@
             const strategy = document.getElementById('backtestStrategy').value;
             const startDate = document.getElementById('backtestStartDate').value;
             const endDate = document.getElementById('backtestEndDate').value;
+
+            // 构建请求体，日期为空时后端使用默认值（最近一年）
+            const requestBody = {
+                strategy_name: strategy,
+                symbols,
+                initial_cash: 100000,
+                commission_rate: 0.0003
+            };
+            if (startDate) requestBody.start_date = startDate;
+            if (endDate) requestBody.end_date = endDate;
+
             showLoading(true);
             try {
                 const response = await fetch(`${API_BASE}/backtest/run`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ strategy_name: strategy, symbols, start_date: startDate, end_date: endDate, initial_cash: 100000, commission_rate: 0.0003 })
+                    body: JSON.stringify(requestBody)
                 });
                 const data = await response.json();
                 if (response.ok) {
@@ -1642,10 +1664,12 @@
 
             showLoading(true);
             try {
-                // 计算合理的预测日期范围（过去6个月到今天）
+                // 计算预测日期范围：默认最近一年
                 const today = new Date();
                 const endDate = today.toISOString().split('T')[0];
-                const startDate = new Date(today.setMonth(today.getMonth() - 6)).toISOString().split('T')[0];
+                const oneYearAgo = new Date(today);
+                oneYearAgo.setFullYear(today.getFullYear() - 1);
+                const startDate = oneYearAgo.toISOString().split('T')[0];
 
                 const response = await fetch(`${API_BASE}/qlib/predict`, {
                     method: 'POST',
@@ -1654,7 +1678,7 @@
                         model_type: modelType,
                         model_path: lastTrainedModelPath,
                         symbols: symbols,
-                        // 使用最近6个月数据进行预测和回测
+                        // 使用最近一年数据进行预测和回测
                         predict_start_date: startDate,
                         predict_end_date: endDate,
                         initial_cash: 100000,
