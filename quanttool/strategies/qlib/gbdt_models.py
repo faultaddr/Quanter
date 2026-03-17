@@ -69,8 +69,8 @@ class CatBoostModelWrapper(QlibModelBase):
     def _init_sklearn_fallback(self):
         """初始化 sklearn 接口作为后备"""
         try:
-            from catboost import CatBoostClassifier
-            self.model = CatBoostClassifier(
+            from catboost import CatBoostRegressor
+            self.model = CatBoostRegressor(
                 iterations=self.config.n_estimators,
                 depth=self.config.max_depth,
                 learning_rate=self.config.learning_rate,
@@ -78,7 +78,7 @@ class CatBoostModelWrapper(QlibModelBase):
                 verbose=self.config.verbose,
             )
             self._use_qlib = False
-            logger.info("使用 catboost 库 CatBoostClassifier")
+            logger.info("使用 catboost 库 CatBoostRegressor")
         except ImportError:
             raise ImportError("请安装 catboost: pip install catboost")
 
@@ -140,17 +140,15 @@ class CatBoostModelWrapper(QlibModelBase):
         return self.model.predict(X)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        """预测上涨概率（基于收益率预测值）"""
         if not self.is_fitted:
             raise RuntimeError("模型未训练")
 
-        if self._use_qlib and hasattr(self._qlib_model, 'model') and self._qlib_model.model is not None:
-            pred = self._qlib_model.model.predict(X.values)
-            return pred.ravel() if len(pred.shape) > 1 else pred
-
-        try:
-            return self.model.predict_proba(X)[:, 1]
-        except (IndexError, AttributeError):
-            return self.model.predict(X).flatten()
+        # 回归器预测收益率，转为上涨概率
+        pred = self.predict(X)
+        # 使用 sigmoid 将收益率映射到概率
+        prob = 1 / (1 + np.exp(-10 * pred))
+        return np.clip(prob, 0, 1)
 
 
 class LGBModelWrapper(QlibModelBase):
@@ -191,7 +189,7 @@ class LGBModelWrapper(QlibModelBase):
     def _init_sklearn_fallback(self):
         try:
             import lightgbm as lgb
-            self.model = lgb.LGBMClassifier(
+            self.model = lgb.LGBMRegressor(
                 n_estimators=self.config.n_estimators,
                 max_depth=self.config.max_depth,
                 learning_rate=self.config.learning_rate,
@@ -204,7 +202,7 @@ class LGBModelWrapper(QlibModelBase):
                 verbose=self.config.verbose,
             )
             self._use_qlib = False
-            logger.info("使用 lightgbm 库 LGBMClassifier")
+            logger.info("使用 lightgbm 库 LGBMRegressor")
         except ImportError:
             raise ImportError("请安装 lightgbm: pip install lightgbm")
 
@@ -251,19 +249,21 @@ class LGBModelWrapper(QlibModelBase):
 
         if self._use_qlib and hasattr(self._qlib_model, 'model') and self._qlib_model.model is not None:
             pred = self._qlib_model.model.predict(X.values)
-            return (pred > 0.5).astype(int)
+            return pred.ravel() if len(pred.shape) > 1 else pred
 
         return self.model.predict(X)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        """预测上涨概率（基于收益率预测值）"""
         if not self.is_fitted:
             raise RuntimeError("模型未训练")
 
-        if self._use_qlib and hasattr(self._qlib_model, 'model') and self._qlib_model.model is not None:
-            pred = self._qlib_model.model.predict(X.values)
-            return pred.ravel() if len(pred.shape) > 1 else pred
-
-        return self.model.predict_proba(X)[:, 1]
+        # 回归器预测收益率，转为上涨概率
+        pred = self.predict(X)
+        # 使用 sigmoid 将收益率映射到概率
+        # 假设收益率在 [-0.2, 0.2] 范围内，使用 scaled sigmoid
+        prob = 1 / (1 + np.exp(-10 * pred))  # 10x scale for better sensitivity
+        return np.clip(prob, 0, 1)
 
 
 class XGBModelWrapper(QlibModelBase):
@@ -301,7 +301,7 @@ class XGBModelWrapper(QlibModelBase):
     def _init_sklearn_fallback(self):
         try:
             import xgboost as xgb
-            self.model = xgb.XGBClassifier(
+            self.model = xgb.XGBRegressor(
                 n_estimators=self.config.n_estimators,
                 max_depth=self.config.max_depth,
                 learning_rate=self.config.learning_rate,
@@ -310,11 +310,9 @@ class XGBModelWrapper(QlibModelBase):
                 random_state=self.config.random_state,
                 n_jobs=self.config.n_jobs,
                 verbosity=self.config.verbose,
-                use_label_encoder=False,
-                eval_metric='logloss',
             )
             self._use_qlib = False
-            logger.info("使用 xgboost 库 XGBClassifier")
+            logger.info("使用 xgboost 库 XGBRegressor")
         except ImportError:
             raise ImportError("请安装 xgboost: pip install xgboost")
 
@@ -382,7 +380,7 @@ class XGBModelWrapper(QlibModelBase):
             try:
                 pred_dataset = self._create_predict_dataset(X)
                 predictions = self._qlib_model.predict(pred_dataset, 'test')
-                return (predictions.values > 0.5).astype(int)
+                return predictions.values.ravel()
             except Exception as e:
                 logger.warning(f"Qlib 原生预测失败: {e}，尝试直接预测")
                 # 回退：直接使用内部模型
@@ -390,28 +388,20 @@ class XGBModelWrapper(QlibModelBase):
                     import xgboost as xgb
                     dmatrix = xgb.DMatrix(X.values)
                     pred = self._qlib_model.model.predict(dmatrix)
-                    return (pred > 0.5).astype(int)
+                    return pred.ravel()
 
         return self.model.predict(X)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        """预测上涨概率（基于收益率预测值）"""
         if not self.is_fitted:
             raise RuntimeError("模型未训练")
 
-        if self._use_qlib:
-            # 使用 Qlib 原生预测
-            try:
-                pred_dataset = self._create_predict_dataset(X)
-                predictions = self._qlib_model.predict(pred_dataset, 'test')
-                return predictions.values
-            except Exception as e:
-                logger.warning(f"Qlib 原生预测失败: {e}，尝试直接预测")
-                if hasattr(self._qlib_model, 'model') and self._qlib_model.model is not None:
-                    import xgboost as xgb
-                    dmatrix = xgb.DMatrix(X.values)
-                    return self._qlib_model.model.predict(dmatrix)
-
-        return self.model.predict_proba(X)[:, 1]
+        # 回归器预测收益率，转为上涨概率
+        pred = self.predict(X)
+        # 使用 sigmoid 将收益率映射到概率
+        prob = 1 / (1 + np.exp(-10 * pred))
+        return np.clip(prob, 0, 1)
 
 
 class DoubleEnsembleModelWrapper(QlibModelBase):
@@ -448,7 +438,7 @@ class DoubleEnsembleModelWrapper(QlibModelBase):
     def _init_sklearn_fallback(self):
         try:
             import lightgbm as lgb
-            self.model = lgb.LGBMClassifier(
+            self.model = lgb.LGBMRegressor(
                 n_estimators=self.config.n_estimators,
                 max_depth=self.config.max_depth,
                 learning_rate=self.config.learning_rate,
@@ -456,7 +446,7 @@ class DoubleEnsembleModelWrapper(QlibModelBase):
                 n_jobs=self.config.n_jobs,
             )
             self._use_qlib = False
-            logger.info("使用 lightgbm 库 LGBMClassifier (DoubleEnsemble 后端)")
+            logger.info("使用 lightgbm 库 LGBMRegressor (DoubleEnsemble 后端)")
         except ImportError:
             raise ImportError("请安装 lightgbm: pip install lightgbm")
 
@@ -519,7 +509,7 @@ class DoubleEnsembleModelWrapper(QlibModelBase):
             try:
                 pred_dataset = self._create_predict_dataset(X)
                 predictions = self._qlib_model.predict(pred_dataset, 'test')
-                return (predictions.values > 0.5).astype(int)
+                return predictions.values.ravel()
             except Exception as e:
                 logger.warning(f"Qlib 原生预测失败: {e}，使用内部模型预测")
                 # 回退：直接使用内部集成模型
@@ -530,34 +520,20 @@ class DoubleEnsembleModelWrapper(QlibModelBase):
                         sub_pred = submodel.predict(X[feat_sub].values)
                         pred += sub_pred * self._qlib_model.sub_weights[i_sub]
                     pred = pred / np.sum(self._qlib_model.sub_weights)
-                    return (pred > 0.5).astype(int)
+                    return pred.ravel()
 
         return self.model.predict(X)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        """预测上涨概率（基于收益率预测值）"""
         if not self.is_fitted:
             raise RuntimeError("模型未训练")
 
-        if self._use_qlib:
-            try:
-                pred_dataset = self._create_predict_dataset(X)
-                predictions = self._qlib_model.predict(pred_dataset, 'test')
-                return predictions.values
-            except Exception as e:
-                logger.warning(f"Qlib 原生预测失败: {e}，使用内部模型预测")
-                if hasattr(self._qlib_model, 'ensemble') and self._qlib_model.ensemble is not None:
-                    pred = np.zeros(len(X))
-                    for i_sub, submodel in enumerate(self._qlib_model.ensemble):
-                        feat_sub = self._qlib_model.sub_features[i_sub]
-                        sub_pred = submodel.predict(X[feat_sub].values)
-                        pred += sub_pred * self._qlib_model.sub_weights[i_sub]
-                    pred = pred / np.sum(self._qlib_model.sub_weights)
-                    return pred
-
-        try:
-            return self.model.predict_proba(X)[:, 1]
-        except (IndexError, AttributeError):
-            return self.model.predict(X)
+        # 回归器预测收益率，转为上涨概率
+        pred = self.predict(X)
+        # 使用 sigmoid 将收益率映射到概率
+        prob = 1 / (1 + np.exp(-10 * pred))
+        return np.clip(prob, 0, 1)
 
 
 def create_gbdt_model(config: QlibModelConfig) -> QlibModelBase:
