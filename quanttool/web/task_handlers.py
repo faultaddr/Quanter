@@ -509,6 +509,7 @@ def qlib_predict_handler(ctx: TaskContext, **params) -> Dict[str, Any]:
                 buy_date = None
                 buy_price = 0.0
                 win_trades = 0
+                total_sell_trades = 0  # 记录总卖出次数（用于计算胜率）
 
                 inner_model = model.model if hasattr(model, 'model') else model
 
@@ -593,6 +594,7 @@ def qlib_predict_handler(ctx: TaskContext, **params) -> Dict[str, Any]:
                             "profit": round(profit, 2)
                         })
 
+                        total_sell_trades += 1
                         if profit > 0:
                             win_trades += 1
 
@@ -635,7 +637,7 @@ def qlib_predict_handler(ctx: TaskContext, **params) -> Dict[str, Any]:
                         "max_drawdown": 0.0,  # 简化计算
                         "sharpe_ratio": round((annual_return - 0.02) / 0.20, 2) if annual_return != 0 else 0,
                         "total_trades": len(trades),
-                        "win_rate": round(win_trades / len([t for t in trades if t['type'] == 'sell']) * 100, 1) if any(t['type'] == 'sell' for t in trades) else 0,
+                        "win_rate": round(win_trades / total_sell_trades * 100, 1) if total_sell_trades > 0 else 0,
                         "total_commission": round(total_commission, 2),
                         "total_slippage": round(total_slippage, 2),
                         "trades": trades[-10:],
@@ -651,16 +653,16 @@ def qlib_predict_handler(ctx: TaskContext, **params) -> Dict[str, Any]:
 
         # 计算汇总
         total_final_capital = sum(p["backtest"]["final_capital"] for p in predictions.values())
-        total_win_trades = sum(
-            1 for p in predictions.values()
-            for t in p["backtest"].get("trades", [])
-            if t.get("type") == "sell" and t.get("profit", 0) > 0
-        )
-        total_sell_trades = sum(
-            1 for p in predictions.values()
-            for t in p["backtest"].get("trades", [])
-            if t.get("type") == "sell"
-        )
+
+        # 注意：每只股票的 trades 列表只保留最后10条，所以这里从各股票的 win_rate 反推
+        # 更好的方式是在返回时保存完整统计，但这里用加权平均计算
+        total_trades_count = sum(p["backtest"]["total_trades"] for p in predictions.values())
+
+        # 计算所有股票的平均胜率（简单平均）
+        avg_win_rate = round(
+            sum(p["backtest"]["win_rate"] for p in predictions.values()) / len(predictions),
+            1
+        ) if predictions else 0
 
         # 计算策略总收益
         strategy_return = round((total_final_capital - initial_cash * len(predictions)) / (initial_cash * len(predictions)) * 100, 2) if predictions else 0
@@ -725,8 +727,8 @@ def qlib_predict_handler(ctx: TaskContext, **params) -> Dict[str, Any]:
                 "total_return_pct": strategy_return,
                 "benchmark_return_pct": benchmark_return,
                 "relative_return_pct": relative_return,
-                "total_trades": sum(p["backtest"]["total_trades"] for p in predictions.values()),
-                "win_rate": round(total_win_trades / total_sell_trades * 100, 1) if total_sell_trades > 0 else 0,
+                "total_trades": total_trades_count,
+                "win_rate": avg_win_rate,
                 "total_cost": total_cost,
                 "total_commission": round(total_commission, 2),
                 "total_slippage": round(total_slippage, 2),
