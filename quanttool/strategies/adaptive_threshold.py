@@ -656,10 +656,6 @@ class IndexMarketDetector:
         '000300.SH': '沪深300',
     }
 
-    # 缓存大盘数据（避免重复获取）
-    _index_cache: Dict[str, Tuple[datetime, pd.DataFrame]] = {}
-    _cache_ttl = 3600  # 缓存有效期（秒）
-
     def __init__(
         self,
         default_index: str = 'hs300',
@@ -675,6 +671,7 @@ class IndexMarketDetector:
         self.default_index = default_index
         self.lookback_period = lookback_period
         self._data_fetcher = None
+        self._incremental_manager = None
 
     def _get_data_fetcher(self):
         """懒加载数据获取器"""
@@ -684,9 +681,18 @@ class IndexMarketDetector:
             self._data_fetcher.initialize()
         return self._data_fetcher
 
+    def _get_incremental_manager(self):
+        """懒加载增量数据管理器"""
+        if self._incremental_manager is None:
+            from quanttool.infrastructure.data_providers.incremental_data_manager import (
+                get_incremental_manager, DataType
+            )
+            self._incremental_manager = get_incremental_manager()
+        return self._incremental_manager
+
     def get_index_data(self, index_code: str, days: int = 120) -> pd.DataFrame:
         """
-        获取大盘指数数据
+        获取大盘指数数据（使用增量管理器）
 
         Args:
             index_code: 指数代码
@@ -695,31 +701,25 @@ class IndexMarketDetector:
         Returns:
             pd.DataFrame: 指数数据
         """
-        # 检查缓存
-        now = datetime.now()
-        if index_code in self._index_cache:
-            cache_time, cached_df = self._index_cache[index_code]
-            if (now - cache_time).total_seconds() < self._cache_ttl:
-                return cached_df
-
-        # 获取数据
         try:
+            # 优先使用增量管理器
+            manager = self._get_incremental_manager()
             fetcher = self._get_data_fetcher()
-            from datetime import timedelta
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-
-            result = fetcher.get_bars([index_code], start_date, end_date)
-            df = result.get(index_code, pd.DataFrame())
-
-            # 更新缓存
-            if not df.empty:
-                self._index_cache[index_code] = (now, df)
-
+            df = manager.get_index_data(index_code, days=days, fetcher=fetcher)
             return df
         except Exception as e:
-            print(f"获取大盘指数数据失败: {e}")
-            return pd.DataFrame()
+            # 降级到直接获取
+            print(f"增量管理器获取失败，降级直接获取: {e}")
+            try:
+                fetcher = self._get_data_fetcher()
+                from datetime import timedelta
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=days)
+                result = fetcher.get_bars([index_code], start_date, end_date)
+                return result.get(index_code, pd.DataFrame())
+            except Exception as e2:
+                print(f"获取大盘指数数据失败: {e2}")
+                return pd.DataFrame()
 
     def detect_index_regime(
         self,

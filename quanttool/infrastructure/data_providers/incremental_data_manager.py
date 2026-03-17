@@ -519,12 +519,87 @@ class IncrementalDataManager:
             logger.error(f"[{symbol}][{data_type}] 未找到日期列")
             return False
 
+        # 复制数据以避免修改原始数据
+        save_data = data.copy()
+
         # 确保日期格式正确
-        data[date_col] = pd.to_datetime(data[date_col])
+        save_data[date_col] = pd.to_datetime(save_data[date_col])
+
+        # ==================== 增强的数据清理 ====================
+        # 问题：数据源可能返回混合类型，如 amount 列中混入分红信息字典
+        # 策略：
+        # 1. 移除包含 dict/list 的行
+        # 2. 移除无法序列化的列
+        # 3. 强制转换数值列
+
+        # 步骤1：移除任何列中包含 dict/list 的行
+        rows_to_drop = set()
+        for col in save_data.columns:
+            if col == date_col:
+                continue
+            # 检查该列的所有值
+            for idx, val in save_data[col].items():
+                if isinstance(val, (dict, list)):
+                    rows_to_drop.add(idx)
+                    logger.debug(f"[{symbol}][{data_type}] 行 {idx} 列 {col} 包含非标量值: {type(val).__name__}")
+
+        if rows_to_drop:
+            save_data = save_data.drop(index=list(rows_to_drop))
+            logger.info(f"[{symbol}][{data_type}] 移除了 {len(rows_to_drop)} 行包含 dict/list 的数据")
+            if save_data.empty:
+                logger.warning(f"[{symbol}][{data_type}] 清理后数据为空")
+                return False
+
+        # 步骤2：清理 object 类型列
+        cols_to_drop = []
+        for col in save_data.columns:
+            if save_data[col].dtype == 'object' and col != date_col:
+                # 检查该列是否有非标量值
+                has_non_scalar = False
+                non_null_values = save_data[col].dropna()
+
+                # 检查所有非空值（限制数量以提高效率）
+                for i, val in enumerate(non_null_values.items()):
+                    if i >= 100:  # 最多检查100个值
+                        break
+                    _, v = val
+                    if isinstance(v, (dict, list)):
+                        has_non_scalar = True
+                        break
+
+                if has_non_scalar:
+                    cols_to_drop.append(col)
+                    logger.debug(f"[{symbol}][{data_type}] 检测到非标量列: {col}")
+
+        if cols_to_drop:
+            save_data = save_data.drop(columns=cols_to_drop)
+            logger.info(f"[{symbol}][{data_type}] 已移除 {len(cols_to_drop)} 个非标量列: {cols_to_drop}")
+
+        # 步骤3：强制转换数值列（处理字符串形式的数值）
+        numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'amount',
+                        'turn', 'pctChg', 'change', 'amplitude', 'turnover_rate']
+        for col in numeric_cols:
+            if col in save_data.columns:
+                try:
+                    save_data[col] = pd.to_numeric(save_data[col], errors='coerce')
+                except Exception as e:
+                    logger.debug(f"[{symbol}][{data_type}] 列 {col} 转换失败: {e}")
+
+        # 步骤4：删除全为 NaN 的行（保留必要的列）
+        essential_cols = [c for c in ['close', 'volume'] if c in save_data.columns]
+        if essential_cols:
+            before_len = len(save_data)
+            save_data = save_data.dropna(subset=essential_cols, how='all')
+            if len(save_data) < before_len:
+                logger.info(f"[{symbol}][{data_type}] 移除了 {before_len - len(save_data)} 行无效数据")
+
+        if save_data.empty:
+            logger.warning(f"[{symbol}][{data_type}] 清理后数据为空")
+            return False
 
         # 计算数据范围
-        earliest = data[date_col].min()
-        latest = data[date_col].max()
+        earliest = save_data[date_col].min()
+        latest = save_data[date_col].max()
 
         # 保存文件（包含数据类型以区分不同数据）
         safe_symbol = symbol.replace('.', '_')
@@ -532,9 +607,68 @@ class IncrementalDataManager:
         full_path = self.cache_dir / file_path
 
         try:
-            data.to_parquet(full_path, compression='snappy', index=False)
-            size_bytes = full_path.stat().st_size
+            # 尝试保存
+            save_data.to_parquet(full_path, compression='snappy', index=False)
+        except Exception as save_err:
+            # 如果保存仍然失败，检查具体问题
+            logger.warning(f"[{symbol}][{data_type}] 首次保存失败: {save_err}，尝试更激进的数据清理...")
 
+            # 策略1：移除所有 object 类型列
+            object_cols = [col for col in save_data.columns if save_data[col].dtype == 'object' and col != date_col]
+            if object_cols:
+                save_data_clean = save_data.drop(columns=object_cols)
+                logger.info(f"[{symbol}][{data_type}] 移除所有 object 类型列: {object_cols}")
+                try:
+                    save_data_clean.to_parquet(full_path, compression='snappy', index=False)
+                    save_data = save_data_clean
+                except Exception as e:
+                    logger.warning(f"[{symbol}][{data_type}] 移除 object 列后仍失败: {e}")
+                    # 策略2：只保留核心数值列
+                    core_cols = [date_col, 'open', 'high', 'low', 'close', 'volume', 'amount']
+                    available_core = [c for c in core_cols if c in save_data.columns]
+                    if len(available_core) > 1:  # 至少要有日期列和一个数值列
+                        save_data_minimal = save_data[available_core].copy()
+                        # 再次强制转换数值列
+                        for col in available_core:
+                            if col != date_col:
+                                save_data_minimal[col] = pd.to_numeric(save_data_minimal[col], errors='coerce')
+                        save_data_minimal = save_data_minimal.dropna(subset=['close'] if 'close' in available_core else available_core[1:])
+                        if not save_data_minimal.empty:
+                            try:
+                                save_data_minimal.to_parquet(full_path, compression='snappy', index=False)
+                                save_data = save_data_minimal
+                                logger.info(f"[{symbol}][{data_type}] 使用最小列集保存成功")
+                            except Exception as e2:
+                                logger.error(f"[{symbol}][{data_type}] 最小列集保存也失败: {e2}")
+                                return False
+                        else:
+                            logger.error(f"[{symbol}][{data_type}] 最小列集清理后为空")
+                            return False
+                    else:
+                        logger.error(f"[{symbol}][{data_type}] 无可用的核心列")
+                        return False
+            else:
+                # 没有 object 列，检查是否是数值列中的问题
+                logger.warning(f"[{symbol}][{data_type}] 无 object 列，检查数值类型问题...")
+                # 尝试将所有非日期列转换为数值
+                for col in save_data.columns:
+                    if col != date_col:
+                        save_data[col] = pd.to_numeric(save_data[col], errors='coerce')
+                # 删除全为 NaN 的行
+                save_data = save_data.dropna(how='all', subset=[c for c in save_data.columns if c != date_col])
+                if save_data.empty:
+                    logger.error(f"[{symbol}][{data_type}] 清理后数据为空")
+                    return False
+                try:
+                    save_data.to_parquet(full_path, compression='snappy', index=False)
+                    logger.info(f"[{symbol}][{data_type}] 强制转换后保存成功")
+                except Exception as e:
+                    logger.error(f"[{symbol}][{data_type}] 强制转换后仍失败: {e}")
+                    return False
+
+        size_bytes = full_path.stat().st_size
+
+        try:
             # 更新元数据
             now = datetime.now()
             expires_at = now + timedelta(days=self.default_ttl_days)
@@ -548,7 +682,7 @@ class IncrementalDataManager:
                 data_type,
                 earliest.strftime("%Y-%m-%d"),
                 latest.strftime("%Y-%m-%d"),
-                len(data),
+                len(save_data),
                 file_path,
                 now.isoformat(),
                 expires_at.isoformat(),
@@ -566,13 +700,13 @@ class IncrementalDataManager:
                 'update',
                 earliest.strftime("%Y-%m-%d"),
                 latest.strftime("%Y-%m-%d"),
-                len(data),
+                len(save_data),
                 now.isoformat()
             ))
 
             self.conn.commit()
 
-            logger.debug(f"[{symbol}][{data_type}] 保存缓存: {earliest.date()} ~ {latest.date()}, {len(data)} 行")
+            logger.debug(f"[{symbol}][{data_type}] 保存缓存: {earliest.date()} ~ {latest.date()}, {len(save_data)} 行")
             return True
 
         except Exception as e:

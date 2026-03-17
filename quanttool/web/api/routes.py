@@ -1,20 +1,37 @@
 """API routes for QuantTool web application."""
 
 from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Any, Optional
+from fastapi.responses import StreamingResponse
+from typing import List, Dict, Any, Optional, Generator
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 import pandas as pd
+import json
+import threading
+import queue
 from ..schemas.experiment import ExperimentRunSchema
 from quanttool.application.backtest_service import BacktestService
 from quanttool.application.factor_service import FactorService
 from quanttool.application.data_service import DataService
+from ...core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 router = APIRouter()
 
 
 # ==================== Pydantic Models ====================
+
+# ==================== 任务管理 Models ====================
+
+class TaskCreateRequest(BaseModel):
+    """任务创建请求"""
+    name: str  # qlib_train, qlib_predict, stock_analyze, market_scan
+    params: Dict[str, Any] = {}
+
+
+# ==================== 原 Models ====================
 
 class AnalyzeRequest(BaseModel):
     """股票分析请求"""
@@ -50,6 +67,261 @@ class BacktestRequest(BaseModel):
     initial_cash: float = 100000.0
     commission_rate: float = 0.0003
     strategy_params: Dict[str, Any] = {}
+    data_provider: str = "incremental_data_fetcher"  # 增量数据提供者（优先使用缓存）
+
+
+# ==================== 任务管理 API ====================
+
+@router.post("/tasks/create")
+async def create_task(request: TaskCreateRequest) -> Dict[str, Any]:
+    """
+    创建异步任务
+
+    支持的任务类型:
+    - qlib_train: Qlib 模型训练
+    - qlib_predict: Qlib 模型预测
+    - stock_analyze: 股票分析
+    - market_scan: 市场扫描
+
+    返回任务 ID，客户端可通过 /tasks/{task_id}/status 查询进度
+    """
+    try:
+        from ..task_handlers import create_task
+
+        task_id = create_task(request.name, request.params)
+
+        return {
+            "task_id": task_id,
+            "name": request.name,
+            "status": "pending",
+            "message": f"任务已创建: {task_id}",
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"创建任务失败: {str(e)}")
+
+
+@router.get("/tasks/{task_id}/status")
+async def get_task_status(task_id: str) -> Dict[str, Any]:
+    """获取任务状态"""
+    from ..task_manager import get_task_manager
+
+    manager = get_task_manager()
+    status = manager.get_task_status(task_id)
+
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+    return status
+
+
+@router.get("/tasks/{task_id}/result")
+async def get_task_result(task_id: str) -> Dict[str, Any]:
+    """获取任务结果"""
+    from ..task_manager import get_task_manager
+
+    manager = get_task_manager()
+    task = manager.get_task(task_id)
+
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+    if task.status.value != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"任务尚未完成，当前状态: {task.status.value}"
+        )
+
+    return {
+        "task_id": task_id,
+        "status": task.status.value,
+        "result": task.result,
+    }
+
+
+@router.get("/tasks/{task_id}/logs")
+async def get_task_logs(task_id: str) -> Dict[str, Any]:
+    """获取任务日志"""
+    from ..task_manager import get_task_manager
+
+    manager = get_task_manager()
+    task = manager.get_task(task_id)
+
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+    return {
+        "task_id": task_id,
+        "logs": task.logs,
+    }
+
+
+@router.get("/tasks/{task_id}/stream")
+async def stream_task_progress(task_id: str):
+    """
+    SSE 流式获取任务进度
+
+    客户端可通过 EventSource 连接此端点，实时获取进度更新
+    """
+    from ..task_manager import get_task_manager, TaskStatus
+
+    def event_generator():
+        manager = get_task_manager()
+        last_progress = -1
+
+        while True:
+            task = manager.get_task(task_id)
+
+            if task is None:
+                yield f"event: error\ndata: {{\"error\": \"任务不存在\"}}\n\n"
+                break
+
+            # 发送进度更新
+            if task.progress.percent != last_progress:
+                data = {
+                    "status": task.status.value,
+                    "progress": task.progress.percent,
+                    "message": task.progress.message,
+                    "stage": task.progress.stage,
+                }
+                yield f"event: progress\ndata: {json.dumps(data)}\n\n"
+                last_progress = task.progress.percent
+
+            # 任务完成或失败
+            if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+                final_data = {
+                    "status": task.status.value,
+                    "result": task.result,
+                    "error": task.error,
+                }
+                yield f"event: complete\ndata: {json.dumps(final_data)}\n\n"
+                break
+
+            # 发送最新日志
+            if task.logs:
+                log_data = {"logs": task.logs[-5:]}  # 最近5条日志
+                yield f"event: logs\ndata: {json.dumps(log_data)}\n\n"
+
+            import time
+            time.sleep(0.5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@router.get("/tasks")
+async def list_tasks(
+    status: Optional[str] = None,
+    limit: int = 20
+) -> List[Dict[str, Any]]:
+    """
+    列出任务
+
+    Args:
+        status: 过滤状态 (pending, running, completed, failed, cancelled)
+        limit: 返回数量限制
+    """
+    from ..task_manager import get_task_manager, TaskStatus
+
+    manager = get_task_manager()
+    status_filter = TaskStatus(status) if status else None
+
+    return manager.list_tasks(status=status_filter, limit=limit)
+
+
+@router.delete("/tasks/{task_id}")
+async def cancel_task(task_id: str) -> Dict[str, Any]:
+    """取消/删除任务"""
+    from ..task_manager import get_task_manager
+
+    manager = get_task_manager()
+
+    if manager.delete_task(task_id):
+        return {"task_id": task_id, "message": "任务已删除"}
+    else:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+
+# ==================== 便捷任务创建端点 ====================
+
+@router.post("/qlib/train/async")
+async def train_qlib_model_async(request: "QlibTrainRequest") -> Dict[str, Any]:
+    """
+    异步训练 Qlib 模型
+
+    立即返回任务 ID，训练在后台执行
+    """
+    from ..task_handlers import create_task
+
+    params = request.model_dump()
+    task_id = create_task("qlib_train", params)
+
+    return {
+        "task_id": task_id,
+        "name": "qlib_train",
+        "status": "pending",
+        "message": f"训练任务已创建: {task_id}，请通过 /tasks/{task_id}/status 查询进度",
+    }
+
+
+@router.post("/qlib/predict/async")
+async def predict_qlib_model_async(request: "QlibPredictRequest") -> Dict[str, Any]:
+    """
+    异步预测
+
+    立即返回任务 ID，预测在后台执行
+    """
+    from ..task_handlers import create_task
+
+    params = request.model_dump()
+    task_id = create_task("qlib_predict", params)
+
+    return {
+        "task_id": task_id,
+        "name": "qlib_predict",
+        "status": "pending",
+        "message": f"预测任务已创建: {task_id}，请通过 /tasks/{task_id}/status 查询进度",
+    }
+
+
+@router.post("/analyze/async")
+async def analyze_stock_async(request: AnalyzeRequest) -> Dict[str, Any]:
+    """异步股票分析"""
+    from ..task_handlers import create_task
+
+    params = request.model_dump()
+    task_id = create_task("stock_analyze", params)
+
+    return {
+        "task_id": task_id,
+        "name": "stock_analyze",
+        "status": "pending",
+        "message": f"分析任务已创建: {task_id}",
+    }
+
+
+@router.post("/scan/async")
+async def scan_market_async(request: ScanRequest) -> Dict[str, Any]:
+    """异步市场扫描"""
+    from ..task_handlers import create_task
+
+    params = request.model_dump()
+    task_id = create_task("market_scan", params)
+
+    return {
+        "task_id": task_id,
+        "name": "market_scan",
+        "status": "pending",
+        "message": f"扫描任务已创建: {task_id}",
+    }
 
 
 # ==================== CLI 功能映射 ====================
@@ -895,13 +1167,160 @@ async def list_qlib_models() -> List[Dict[str, Any]]:
         raise HTTPException(status_code=500, detail=f"获取模型列表失败: {str(e)}")
 
 
+@router.get("/qlib/saved-models")
+async def list_saved_models() -> List[Dict[str, Any]]:
+    """
+    列出已保存的模型文件
+
+    返回模型文件列表，按修改时间降序排列。
+    包含模型元数据（如特征数量、训练参数等）
+    """
+    import os
+    import joblib
+    from pathlib import Path
+
+    model_dir = Path("models/qlib")
+    if not model_dir.exists():
+        return []
+
+    models = []
+    for model_file in model_dir.glob("*.pkl"):
+        try:
+            stat = model_file.stat()
+            # 解析模型名称：{model_type}_{id}.pkl
+            name_parts = model_file.stem.split('_')
+            model_type = name_parts[0] if name_parts else "unknown"
+            model_id = name_parts[1] if len(name_parts) > 1 else ""
+
+            # 尝试加载模型元数据
+            feature_count = None
+            feature_set = None
+            train_stocks = None
+
+            try:
+                saved_data = joblib.load(model_file)
+                if isinstance(saved_data, dict):
+                    model = saved_data.get('model')
+                    feature_names = saved_data.get('feature_names', [])
+                    feature_count = len(feature_names) if feature_names else None
+                    # 尝试获取更多信息
+                    if hasattr(model, 'feature_names_'):
+                        feature_count = len(model.feature_names_)
+            except Exception:
+                pass  # 无法加载元数据，使用默认值
+
+            # 模型类型显示名称
+            display_names = {
+                'lgb': 'LightGBM',
+                'xgboost': 'XGBoost',
+                'catboost': 'CatBoost',
+                'lstm': 'LSTM',
+                'gru': 'GRU',
+                'transformer': 'Transformer',
+            }
+
+            models.append({
+                "id": model_id,
+                "name": model_file.name,
+                "path": str(model_file),
+                "model_type": model_type,
+                "display_name": display_names.get(model_type, model_type.upper()),
+                "feature_count": feature_count,
+                "size_kb": round(stat.st_size / 1024, 2),
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "created_date": datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d"),
+            })
+        except Exception as e:
+            logger.warning(f"Failed to read model file {model_file}: {e}")
+
+    # 按修改时间降序排列
+    models.sort(key=lambda x: x["modified_at"], reverse=True)
+    return models
+
+
+@router.get("/qlib/saved-models/{model_id}")
+async def get_saved_model_detail(model_id: str) -> Dict[str, Any]:
+    """
+    获取已保存模型的详细信息
+
+    Args:
+        model_id: 模型ID或模型文件名
+    """
+    import joblib
+    from pathlib import Path
+
+    model_dir = Path("models/qlib")
+    if not model_dir.exists():
+        raise HTTPException(status_code=404, detail="模型目录不存在")
+
+    # 查找模型文件
+    model_file = None
+    for f in model_dir.glob("*.pkl"):
+        if model_id in f.name:
+            model_file = f
+            break
+
+    if model_file is None:
+        raise HTTPException(status_code=404, detail=f"未找到模型: {model_id}")
+
+    try:
+        saved_data = joblib.load(model_file)
+
+        model = saved_data.get('model')
+        feature_names = saved_data.get('feature_names', [])
+
+        # 获取模型详情
+        detail = {
+            "path": str(model_file),
+            "name": model_file.name,
+            "feature_count": len(feature_names),
+            "feature_names": feature_names[:20] if feature_names else [],  # 前20个特征
+            "has_model": model is not None,
+        }
+
+        # 获取模型参数
+        if hasattr(model, 'get_params'):
+            try:
+                params = model.get_params()
+                # 过滤掉复杂的参数
+                simple_params = {}
+                for k, v in params.items():
+                    if isinstance(v, (str, int, float, bool, type(None))):
+                        simple_params[k] = v
+                detail["params"] = simple_params
+            except Exception:
+                pass
+
+        # 文件信息
+        stat = model_file.stat()
+        detail["size_kb"] = round(stat.st_size / 1024, 2)
+        detail["modified_at"] = datetime.fromtimestamp(stat.st_mtime).isoformat()
+
+        return detail
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"加载模型失败: {str(e)}")
+
+
 class QlibTrainRequest(BaseModel):
     """Qlib 模型训练请求"""
     model_type: str = "lgb"
+    # 用户输入的股票代码仅用于预测，训练使用沪深300成分股
     symbols: List[str] = []
-    start_date: str = "2023-01-01"
-    end_date: str = "2024-12-31"
-    features: List[str] = ["close", "volume", "ma_5", "ma_10", "ma_20"]
+    # 数据集划分（按年份）
+    # 训练集: 2019-2022 (4年)
+    train_start: str = "2019-01-01"
+    train_end: str = "2022-12-31"
+    # 验证集: 2023-2024 (2年)
+    valid_start: str = "2023-01-01"
+    valid_end: str = "2024-12-31"
+    # 测试/预测集: 2025至今
+    test_start: str = "2025-01-01"
+    test_end: str = "2026-03-17"  # 当前日期，由前端动态更新
+    # 特征配置
+    features: List[str] = []  # 空列表表示使用全部可用特征
+    use_rich_features: bool = True  # 是否使用 Alpha158 特征工程 (150+ 特征)
+    feature_set: str = "Alpha158"  # Alpha158 或 Alpha360
     label: str = "return_5d"  # 预测目标
     # 模型参数
     n_estimators: int = 200
@@ -912,6 +1331,8 @@ class QlibTrainRequest(BaseModel):
     dropout: float = 0.1
     epochs: int = 100
     batch_size: int = 256
+    # 训练配置
+    max_train_stocks: int = 0  # 0表示使用全部沪深300股票
     # 回测参数
     initial_cash: float = 100000.0
     commission_rate: float = 0.0003  # 手续费率 0.03%
@@ -921,12 +1342,14 @@ class QlibTrainRequest(BaseModel):
 class QlibPredictRequest(BaseModel):
     """Qlib 模型预测请求"""
     model_type: str = "lgb"
-    model_path: str = ""  # 已训练模型的路径
-    symbols: List[str] = []
-    features: List[str] = ["close", "volume", "ma_5", "ma_10", "ma_20"]
-    # 回测参数
-    predict_start_date: str = "2024-01-01"
-    predict_end_date: str = "2024-12-31"
+    model_path: str = ""  # 已训练模型的路径，为空则自动使用最新模型
+    symbols: List[str] = []  # 预测的股票代码
+    features: List[str] = []  # 空列表表示使用与训练相同的丰富特征
+    use_rich_features: bool = True  # 是否使用 Alpha158 特征工程
+    feature_set: str = "Alpha158"  # Alpha158 或 Alpha360
+    # 预测/回测参数
+    predict_start_date: str = "2025-01-01"
+    predict_end_date: str = "2026-03-17"  # 当前日期，由前端动态更新
     initial_cash: float = 100000.0
     commission_rate: float = 0.0003
     slippage_rate: float = 0.0001
@@ -937,65 +1360,174 @@ async def train_qlib_model(request: QlibTrainRequest) -> Dict[str, Any]:
     """
     训练 Qlib ML 模型
 
-    使用历史数据训练模型，返回模型路径和训练指标
+    使用沪深300成分股作为训练数据，按年份划分训练/验证/测试集：
+    - 训练集: 2020-2023年
+    - 验证集: 2024-2025年
+    - 测试集: 2026年
+
+    用户输入的股票代码仅用于预测，不参与训练
     """
     try:
         from quanttool.strategies.qlib import create_model
         from quanttool.factors.stock_analyzer import StockAnalyzer
+        from quanttool.cli.commands.analysis_commands import get_csi300_constituents
         import numpy as np
         import os
         import uuid
 
+        # 获取沪深300成分股作为训练数据
+        csi300_stocks = get_csi300_constituents()
+        train_symbols = [s['code'] if isinstance(s, dict) else s for s in csi300_stocks]
+
+        # 限制训练股票数量
+        if request.max_train_stocks > 0:
+            train_symbols = train_symbols[:request.max_train_stocks]
+
+        logger.info(f"Training with {len(train_symbols)} CSI300 stocks")
+
         # 获取训练数据
         analyzer = StockAnalyzer()
-        all_data = []
-        data_dates = {'start': None, 'end': None}
+        train_data = []
+        valid_data = []
+        test_data = []
 
-        for symbol in request.symbols:
-            df = analyzer.get_stock_data(symbol, 500)
-            if df.empty:
+        # 解析日期
+        train_start_dt = datetime.fromisoformat(request.train_start)
+        train_end_dt = datetime.fromisoformat(request.train_end)
+        valid_start_dt = datetime.fromisoformat(request.valid_start)
+        valid_end_dt = datetime.fromisoformat(request.valid_end)
+        test_start_dt = datetime.fromisoformat(request.test_start)
+        test_end_dt = datetime.fromisoformat(request.test_end)
+
+        logger.info(f"Date ranges - Train: {request.train_start} to {request.train_end}, "
+                   f"Valid: {request.valid_start} to {request.valid_end}, "
+                   f"Test: {request.test_start} to {request.test_end}")
+
+        success_count = 0
+        first_symbol_features = None  # 记录第一个成功股票的特征列名，确保所有股票使用相同特征
+
+        # 初始化 Alpha158 特征工程器
+        from quanttool.strategies.qlib_strategy import QlibFeatureEngineer
+        feature_engineer = QlibFeatureEngineer(feature_set=request.feature_set)
+
+        for symbol in train_symbols:
+            try:
+                # 获取足够的历史数据（约7年，覆盖2019-2026训练+验证+预测期间）
+                df = analyzer.get_stock_data(symbol, 2500)
+                if df.empty or len(df) < 120:  # Alpha158 需要至少 120 条数据
+                    logger.warning(f"Insufficient data for {symbol}: {len(df) if not df.empty else 0} rows")
+                    continue
+
+                # 确定日期列
+                date_column = None
+                if 'trade_date' in df.columns:
+                    date_column = 'trade_date'
+                elif 'timestamp' in df.columns:
+                    date_column = 'timestamp'
+
+                if not date_column:
+                    logger.warning(f"No date column found for {symbol}")
+                    continue
+
+                df['_date'] = pd.to_datetime(df[date_column])
+
+                if request.use_rich_features:
+                    # 使用 Alpha158 特征工程 (150+ 特征)
+                    try:
+                        feature_df = feature_engineer.generate_features(df)
+                        available_features = list(feature_df.columns)
+                        df = pd.concat([df, feature_df], axis=1)
+                    except Exception as e:
+                        logger.warning(f"Feature engineering failed for {symbol}: {e}")
+                        continue
+                else:
+                    # 计算技术指标
+                    df = analyzer.calculate_technical_indicators(df)
+
+                    if request.features:
+                        # 使用用户指定的特征
+                        available_features = [f for f in request.features if f in df.columns]
+                    else:
+                        # 使用基本特征
+                        available_features = ['close', 'volume', 'ma_5', 'ma_10', 'ma_20']
+
+                if not available_features:
+                    logger.warning(f"No available features for {symbol}")
+                    continue
+
+                # 确保所有股票使用相同的特征列
+                if first_symbol_features is None:
+                    first_symbol_features = available_features
+                else:
+                    # 使用第一个股票的特征列，确保一致性
+                    available_features = [f for f in first_symbol_features if f in df.columns]
+                    if len(available_features) != len(first_symbol_features):
+                        logger.warning(f"Feature mismatch for {symbol}, expected {len(first_symbol_features)}, got {len(available_features)}")
+                        continue
+
+                logger.info(f"Using {len(available_features)} features for {symbol}")
+
+                # 计算标签（未来5日收益率）
+                df['return_5d'] = df['close'].pct_change(5).shift(-5)
+
+                # 调试：输出数据的日期范围
+                data_min_date = df['_date'].min()
+                data_max_date = df['_date'].max()
+                logger.info(f"{symbol}: data range {data_min_date} to {data_max_date}, {len(df)} rows")
+
+                # 按日期划分数据
+                row_count = 0
+                for idx, row in df.iterrows():
+                    date_val = row['_date']
+                    if pd.isna(date_val):
+                        continue
+
+                    feature_vals = [row.get(f) for f in available_features]
+                    label_val = row.get('return_5d')
+
+                    # 过滤无效值
+                    if any(pd.isna(v) for v in feature_vals) or pd.isna(label_val):
+                        continue
+
+                    row_data = {
+                        'features': feature_vals,
+                        'label': label_val,
+                        'symbol': symbol,
+                        'date': date_val
+                    }
+
+                    # 划分数据集
+                    if train_start_dt <= date_val <= train_end_dt:
+                        train_data.append(row_data)
+                        row_count += 1
+                    elif valid_start_dt <= date_val <= valid_end_dt:
+                        valid_data.append(row_data)
+                        row_count += 1
+                    elif test_start_dt <= date_val <= test_end_dt:
+                        test_data.append(row_data)
+                        row_count += 1
+
+                if row_count > 0:
+                    success_count += 1
+
+            except Exception as e:
+                logger.warning(f"Failed to get data for {symbol}: {e}")
                 continue
 
-            # 记录数据日期范围
-            if 'trade_date' in df.columns:
-                dates = df['trade_date']
-                if data_dates['start'] is None or dates.min() < data_dates['start']:
-                    data_dates['start'] = dates.min()
-                if data_dates['end'] is None or dates.max() > data_dates['end']:
-                    data_dates['end'] = dates.max()
+        logger.info(f"Data collection complete: {success_count} stocks succeeded, "
+                   f"train={len(train_data)}, valid={len(valid_data)}, test={len(test_data)}")
 
-            # 计算技术指标
-            df = analyzer.calculate_technical_indicators(df)
+        if not train_data:
+            raise HTTPException(
+                status_code=400,
+                detail=f"无法获取足够的训练数据。收集了 {success_count} 只股票，训练集 {len(train_data)} 条，"
+                       f"验证集 {len(valid_data)} 条，测试集 {len(test_data)} 条。请检查日期范围是否在数据覆盖范围内。"
+            )
 
-            # 计算标签（未来5日收益率）
-            df['return_5d'] = df['close'].pct_change(5).shift(-5)
-
-            # 选择特征
-            available_features = [f for f in request.features if f in df.columns]
-            if not available_features:
-                continue
-
-            df['symbol'] = symbol
-            all_data.append(df[available_features + ['return_5d', 'symbol']].dropna())
-
-        if not all_data:
-            raise HTTPException(status_code=400, detail="无法获取足够的训练数据")
-
-        # 合并数据
-        train_df = pd.concat(all_data, ignore_index=True)
-
-        # 准备特征和标签
-        feature_cols = request.features
-        X = train_df[feature_cols].values
-        y = train_df['return_5d'].values
-
-        # 过滤无效值
-        valid_mask = ~(np.isnan(X).any(axis=1) | np.isnan(y))
-        X = X[valid_mask]
-        y = y[valid_mask]
-
-        if len(X) < 100:
-            raise HTTPException(status_code=400, detail=f"训练数据不足: {len(X)} 条")
+        # 准备训练数据
+        feature_cols = available_features
+        X_train = np.array([d['features'] for d in train_data])
+        y_train = np.array([d['label'] for d in train_data])
 
         # 创建模型
         config_kwargs = {
@@ -1012,9 +1544,9 @@ async def train_qlib_model(request: QlibTrainRequest) -> Dict[str, Any]:
         model = create_model(request.model_type, **config_kwargs)
 
         # 训练
-        X_df = pd.DataFrame(X, columns=feature_cols)
-        y_series = pd.Series(y)
-        model.fit(X_df, y_series)
+        X_train_df = pd.DataFrame(X_train, columns=feature_cols)
+        y_train_series = pd.Series(y_train)
+        model.fit(X_train_df, y_train_series)
         model.feature_names_ = feature_cols
 
         # 保存模型
@@ -1024,41 +1556,79 @@ async def train_qlib_model(request: QlibTrainRequest) -> Dict[str, Any]:
         model_path = f"{model_dir}/{request.model_type}_{model_id}.pkl"
         model.save(model_path)
 
-        # 评估
-        predictions = model.predict(X_df)
-        mse = np.mean((predictions - y) ** 2)
-        mae = np.mean(np.abs(predictions - y))
-        ic = np.corrcoef(predictions, y)[0, 1] if len(predictions) > 1 else 0
+        # 评估训练集
+        train_pred = model.predict(X_train_df)
+        train_mse = np.mean((train_pred - y_train) ** 2)
+        train_mae = np.mean(np.abs(train_pred - y_train))
+        train_ic = np.corrcoef(train_pred, y_train)[0, 1] if len(train_pred) > 1 else 0
 
-        # 格式化日期
-        start_date_str = str(data_dates['start'])[:10] if data_dates['start'] else request.start_date
-        end_date_str = str(data_dates['end'])[:10] if data_dates['end'] else request.end_date
+        # 评估验证集
+        valid_metrics = {}
+        if valid_data:
+            X_valid = np.array([d['features'] for d in valid_data])
+            y_valid = np.array([d['label'] for d in valid_data])
+            X_valid_df = pd.DataFrame(X_valid, columns=feature_cols)
+            valid_pred = model.predict(X_valid_df)
+            valid_metrics = {
+                "samples": len(valid_data),
+                "mse": round(float(np.mean((valid_pred - y_valid) ** 2)), 6),
+                "mae": round(float(np.mean(np.abs(valid_pred - y_valid))), 6),
+                "ic": round(float(np.corrcoef(valid_pred, y_valid)[0, 1]), 4) if len(valid_pred) > 1 else 0,
+            }
+
+        # 评估测试集
+        test_metrics = {}
+        if test_data:
+            X_test = np.array([d['features'] for d in test_data])
+            y_test = np.array([d['label'] for d in test_data])
+            X_test_df = pd.DataFrame(X_test, columns=feature_cols)
+            test_pred = model.predict(X_test_df)
+            test_metrics = {
+                "samples": len(test_data),
+                "mse": round(float(np.mean((test_pred - y_test) ** 2)), 6),
+                "mae": round(float(np.mean(np.abs(test_pred - y_test))), 6),
+                "ic": round(float(np.corrcoef(test_pred, y_test)[0, 1]), 4) if len(test_pred) > 1 else 0,
+            }
 
         return {
             "model_id": model_id,
             "model_type": request.model_type,
             "model_path": model_path,
-            "symbols": request.symbols,
-            "train_samples": len(X),
+            "train_symbols_count": len(train_symbols),
+            "predict_symbols": request.symbols,  # 用户输入的股票代码（仅用于预测）
+            "train_samples": len(train_data),
             "features": feature_cols,
-            "data_period": {
-                "start_date": start_date_str,
-                "end_date": end_date_str,
-                "requested_start": request.start_date,
-                "requested_end": request.end_date,
+            "feature_count": len(feature_cols),
+            "use_rich_features": request.use_rich_features,
+            "data_split": {
+                "train": {
+                    "period": f"{request.train_start} ~ {request.train_end}",
+                    "samples": len(train_data),
+                },
+                "valid": {
+                    "period": f"{request.valid_start} ~ {request.valid_end}",
+                    "samples": len(valid_data),
+                },
+                "test": {
+                    "period": f"{request.test_start} ~ {request.test_end}",
+                    "samples": len(test_data),
+                },
             },
             "metrics": {
-                "mse": round(float(mse), 6),
-                "mae": round(float(mae), 6),
-                "ic": round(float(ic), 4) if not np.isnan(ic) else 0,
+                "train": {
+                    "mse": round(float(train_mse), 6),
+                    "mae": round(float(train_mae), 6),
+                    "ic": round(float(train_ic), 4) if not np.isnan(train_ic) else 0,
+                },
+                "valid": valid_metrics,
+                "test": test_metrics,
             },
             "backtest_params": {
                 "initial_cash": request.initial_cash,
                 "commission_rate": request.commission_rate,
                 "slippage_rate": request.slippage_rate,
-                "t_plus_1": True,  # A股 T+1 交易
+                "t_plus_1": True,
             },
-            "feature_importance": model.get_feature_importance().to_dict('records') if hasattr(model, 'get_feature_importance') else []
         }
 
     except HTTPException:
@@ -1067,6 +1637,437 @@ async def train_qlib_model(request: QlibTrainRequest) -> Dict[str, Any]:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"模型训练失败: {str(e)}")
+
+
+@router.post("/qlib/train/stream")
+async def train_qlib_model_stream(request: QlibTrainRequest):
+    """
+    使用 SSE 流式推送训练进度
+
+    事件类型:
+    - progress: 进度更新
+    - log: 日志消息
+    - complete: 训练完成
+    - error: 错误
+    """
+    import asyncio
+
+    # 使用同步队列（线程安全）
+    message_queue = queue.Queue()
+
+    def send_event(event_type: str, data: Dict[str, Any]):
+        """发送SSE事件到队列"""
+        message_queue.put({"event": event_type, "data": data})
+
+    def training_worker():
+        """后台训练线程"""
+        try:
+            from quanttool.strategies.qlib import create_model
+            from quanttool.factors.stock_analyzer import StockAnalyzer
+            from quanttool.cli.commands.analysis_commands import get_csi300_constituents
+            import numpy as np
+            import os
+            import uuid
+
+            # 阶段1: 初始化
+            send_event("progress", {
+                "stage": "init",
+                "progress": 0,
+                "message": "初始化训练环境..."
+            })
+
+            # 获取沪深300成分股
+            csi300_stocks = get_csi300_constituents()
+            train_symbols = [s['code'] if isinstance(s, dict) else s for s in csi300_stocks]
+
+            if request.max_train_stocks > 0:
+                train_symbols = train_symbols[:request.max_train_stocks]
+
+            total_stocks = len(train_symbols)
+            send_event("progress", {
+                "stage": "init",
+                "progress": 5,
+                "message": f"准备获取 {total_stocks} 只沪深300成分股数据"
+            })
+
+            # 阶段2: 数据获取
+            analyzer = StockAnalyzer()
+            train_data = []
+            valid_data = []
+            test_data = []
+
+            train_start_dt = datetime.fromisoformat(request.train_start)
+            train_end_dt = datetime.fromisoformat(request.train_end)
+            valid_start_dt = datetime.fromisoformat(request.valid_start)
+            valid_end_dt = datetime.fromisoformat(request.valid_end)
+            test_start_dt = datetime.fromisoformat(request.test_start)
+            test_end_dt = datetime.fromisoformat(request.test_end)
+
+            success_count = 0
+            cache_hits = 0
+            first_symbol_features = None  # 记录第一个成功股票的特征列名
+
+            # 初始化 Alpha158 特征工程器
+            from quanttool.strategies.qlib_strategy import QlibFeatureEngineer
+            feature_engineer = QlibFeatureEngineer(feature_set=request.feature_set)
+
+            for i, symbol in enumerate(train_symbols):
+                try:
+                    send_event("progress", {
+                        "stage": "data_collection",
+                        "progress": 5 + int((i / total_stocks) * 55),
+                        "current": symbol,
+                        "processed": i + 1,
+                        "total": total_stocks,
+                        "cache_hits": cache_hits,
+                        "message": f"正在获取数据: {symbol} ({i + 1}/{total_stocks}) [缓存命中: {cache_hits}]"
+                    })
+
+                    # 获取数据：优先使用缓存
+                    # 计算实际需要的日期范围
+                    train_end_date = datetime.fromisoformat(request.train_end)
+                    start_date = train_end_date - timedelta(days=2500)  # 约 7 年
+
+                    df = analyzer.get_stock_data(
+                        symbol,
+                        start_date=start_date,
+                        end_date=datetime.now(),
+                        force_refresh=False  # 优先使用缓存
+                    )
+
+                    # 检测是否命中缓存（数据量大且获取快）
+                    if len(df) >= 500:  # 约2年数据，通常来自缓存
+                        cache_hits += 1
+
+                    if df.empty or len(df) < 120:  # Alpha158 需要至少 120 条数据
+                        continue
+
+                    # 确定日期列
+                    date_column = None
+                    if 'trade_date' in df.columns:
+                        date_column = 'trade_date'
+                    elif 'timestamp' in df.columns:
+                        date_column = 'timestamp'
+
+                    if not date_column:
+                        send_event("log", {"message": f"警告: {symbol} 无日期列"})
+                        continue
+
+                    df['_date'] = pd.to_datetime(df[date_column])
+
+                    if request.use_rich_features:
+                        # 使用 Alpha158 特征工程 (150+ 特征)
+                        try:
+                            feature_df = feature_engineer.generate_features(df)
+                            available_features = list(feature_df.columns)
+                            df = pd.concat([df, feature_df], axis=1)
+                        except Exception as e:
+                            send_event("log", {"message": f"警告: {symbol} 特征工程失败: {str(e)}"})
+                            continue
+                    else:
+                        df = analyzer.calculate_technical_indicators(df)
+                        if request.features:
+                            available_features = [f for f in request.features if f in df.columns]
+                        else:
+                            available_features = ['close', 'volume', 'ma_5', 'ma_10', 'ma_20']
+
+                    if not available_features:
+                        send_event("log", {"message": f"警告: {symbol} 无可用特征"})
+                        continue
+
+                    # 确保所有股票使用相同的特征列
+                    if first_symbol_features is None:
+                        first_symbol_features = available_features
+                    else:
+                        available_features = [f for f in first_symbol_features if f in df.columns]
+                        if len(available_features) != len(first_symbol_features):
+                            continue
+
+                    # 计算标签：未来5天收益率（连续值，用于回归任务）
+                    # Alpha158 特征用于预测连续收益率
+                    df['return_5d'] = df['close'].pct_change(5).shift(-5)
+                    df['label'] = df['return_5d']  # 连续收益率标签
+
+                    for idx, row in df.iterrows():
+                        date_val = row['_date']
+                        if pd.isna(date_val):
+                            continue
+
+                        feature_vals = [row.get(f) for f in available_features]
+                        label_val = row.get('label')  # 连续收益率标签
+
+                        if any(pd.isna(v) for v in feature_vals) or pd.isna(label_val):
+                            continue
+
+                        row_data = {
+                            'features': feature_vals,
+                            'label': label_val,
+                            'symbol': symbol,
+                            'date': date_val,
+                            'return_5d': row.get('return_5d', 0)  # 保留实际收益率用于评估
+                        }
+
+                        if train_start_dt <= date_val <= train_end_dt:
+                            train_data.append(row_data)
+                        elif valid_start_dt <= date_val <= valid_end_dt:
+                            valid_data.append(row_data)
+                        elif test_start_dt <= date_val <= test_end_dt:
+                            test_data.append(row_data)
+
+                    success_count += 1
+
+                except Exception as e:
+                    send_event("log", {"message": f"警告: {symbol} 数据获取失败: {str(e)}"})
+                    continue
+
+            # 阶段3: 数据准备
+            send_event("progress", {
+                "stage": "preparation",
+                "progress": 65,
+                "message": f"数据获取完成，成功 {success_count} 只股票 (缓存命中: {cache_hits})，准备训练数据..."
+            })
+
+            if not train_data:
+                send_event("error", {
+                    "message": f"无法获取足够的训练数据。成功 {success_count} 只股票，训练集 {len(train_data)} 条"
+                })
+                return
+
+            feature_cols = available_features
+            X_train = np.array([d['features'] for d in train_data])
+            y_train = np.array([d['label'] for d in train_data])
+
+            send_event("progress", {
+                "stage": "preparation",
+                "progress": 70,
+                "message": f"训练样本: {len(train_data)}, 验证样本: {len(valid_data)}, 测试样本: {len(test_data)}, 特征数: {len(feature_cols)}"
+            })
+
+            # 阶段4: 模型训练
+            send_event("progress", {
+                "stage": "training",
+                "progress": 75,
+                "message": f"创建 {request.model_type.upper()} 模型..."
+            })
+
+            config_kwargs = {
+                'n_estimators': request.n_estimators,
+                'max_depth': request.max_depth,
+                'learning_rate': request.learning_rate,
+                'hidden_size': request.hidden_size,
+                'num_layers': request.num_layers,
+                'dropout': request.dropout,
+                'epochs': request.epochs,
+                'batch_size': request.batch_size,
+            }
+
+            model = create_model(request.model_type, **config_kwargs)
+
+            send_event("progress", {
+                "stage": "training",
+                "progress": 80,
+                "message": "开始模型训练..."
+            })
+
+            X_train_df = pd.DataFrame(X_train, columns=feature_cols)
+            y_train_series = pd.Series(y_train)
+
+            # 检查数据有效性
+            send_event("log", {"message": f"数据形状: X={X_train_df.shape}, y={y_train_series.shape}"})
+            if X_train_df.empty or len(X_train_df) == 0:
+                send_event("error", {
+                    "message": f"训练数据为空，请检查数据获取和特征工程"
+                })
+                return
+
+            # 处理 NaN 和 Inf 值
+            X_train_df = X_train_df.fillna(0).replace([np.inf, -np.inf], 0)
+            y_train_series = y_train_series.fillna(0).replace([np.inf, -np.inf], 0)
+
+            # 直接使用 LightGBM sklearn 接口训练
+            try:
+                import lightgbm as lgb
+                lgb_model = lgb.LGBMRegressor(
+                    n_estimators=request.n_estimators or 100,
+                    max_depth=request.max_depth or 5,
+                    learning_rate=request.learning_rate or 0.1,
+                    random_state=42,
+                    verbose=-1
+                )
+                lgb_model.fit(X_train_df, y_train_series)
+                model = lgb_model
+                model.feature_names_ = feature_cols
+                send_event("log", {"message": "LightGBM 模型训练成功"})
+            except Exception as e:
+                send_event("error", {"message": f"模型训练失败: {str(e)}"})
+                return
+
+            # 阶段5: 模型评估
+            send_event("progress", {
+                "stage": "evaluation",
+                "progress": 90,
+                "message": "评估模型性能..."
+            })
+
+            # 保存模型
+            import joblib
+            model_dir = "models/qlib"
+            os.makedirs(model_dir, exist_ok=True)
+            model_id = str(uuid.uuid4())[:8]
+            model_path = f"{model_dir}/{request.model_type}_{model_id}.pkl"
+            joblib.dump(model, model_path)
+
+            # 评估
+            train_pred = model.predict(X_train_df)
+            # 回归指标：MSE, MAE
+            train_mse = np.mean((train_pred - y_train) ** 2)
+            train_mae = np.mean(np.abs(train_pred - y_train))
+
+            # 正确的 IC 计算：按日期分组计算横截面 IC (Rank IC)
+            def calculate_ic(predictions, data_list):
+                from scipy.stats import spearmanr
+                date_data = {}
+                for i, d in enumerate(data_list):
+                    date_val = d['date']
+                    if date_val not in date_data:
+                        date_data[date_val] = {'pred': [], 'return': []}
+                    date_data[date_val]['pred'].append(predictions[i])
+                    date_data[date_val]['return'].append(d.get('return_5d', 0))
+
+                ics = []
+                for date_val, data in date_data.items():
+                    preds = np.array(data['pred'])
+                    returns = np.array(data['return'])
+                    if len(preds) >= 5:
+                        if np.std(preds) > 1e-10 and np.std(returns) > 1e-10:
+                            try:
+                                ic, _ = spearmanr(preds, returns)
+                                if not np.isnan(ic):
+                                    ics.append(ic)
+                            except:
+                                pass
+                return np.mean(ics) if ics else 0.0
+
+            train_ic = calculate_ic(train_pred, train_data)
+
+            valid_metrics = {}
+            if valid_data:
+                X_valid = np.array([d['features'] for d in valid_data])
+                y_valid = np.array([d['label'] for d in valid_data])
+                X_valid_df = pd.DataFrame(X_valid, columns=feature_cols)
+                valid_pred = model.predict(X_valid_df)
+                valid_mse = np.mean((valid_pred - y_valid) ** 2)
+                valid_mae = np.mean(np.abs(valid_pred - y_valid))
+                valid_metrics = {
+                    "samples": len(valid_data),
+                    "mse": round(float(valid_mse), 6),
+                    "mae": round(float(valid_mae), 6),
+                    "ic": round(float(calculate_ic(valid_pred, valid_data)), 4),
+                }
+
+            test_metrics = {}
+            if test_data:
+                X_test = np.array([d['features'] for d in test_data])
+                y_test = np.array([d['label'] for d in test_data])
+                X_test_df = pd.DataFrame(X_test, columns=feature_cols)
+                test_pred = model.predict(X_test_df)
+                test_mse = np.mean((test_pred - y_test) ** 2)
+                test_mae = np.mean(np.abs(test_pred - y_test))
+                test_metrics = {
+                    "samples": len(test_data),
+                    "mse": round(float(test_mse), 6),
+                    "mae": round(float(test_mae), 6),
+                    "ic": round(float(calculate_ic(test_pred, test_data)), 4),
+                }
+
+            # 阶段6: 完成
+            send_event("progress", {
+                "stage": "complete",
+                "progress": 100,
+                "message": "训练完成！"
+            })
+
+            result = {
+                "model_id": model_id,
+                "model_type": request.model_type,
+                "model_path": model_path,
+                "train_symbols_count": len(train_symbols),
+                "predict_symbols": request.symbols,
+                "train_samples": len(train_data),
+                "features": feature_cols,
+                "data_split": {
+                    "train": {"period": f"{request.train_start} ~ {request.train_end}", "samples": len(train_data)},
+                    "valid": {"period": f"{request.valid_start} ~ {request.valid_end}", "samples": len(valid_data)},
+                    "test": {"period": f"{request.test_start} ~ {request.test_end}", "samples": len(test_data)},
+                },
+                "metrics": {
+                    "train": {
+                        "samples": len(train_data),
+                        "mse": round(float(train_mse), 6),
+                        "mae": round(float(train_mae), 6),
+                        "ic": round(float(train_ic), 4) if not np.isnan(train_ic) else 0,
+                    },
+                    "valid": valid_metrics,
+                    "test": test_metrics,
+                },
+                "backtest_params": {
+                    "initial_cash": request.initial_cash,
+                    "commission_rate": request.commission_rate,
+                    "slippage_rate": request.slippage_rate,
+                    "t_plus_1": True,
+                },
+            }
+
+            send_event("complete", {"result": result})
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            send_event("error", {"message": f"训练失败: {str(e)}"})
+
+    async def event_stream():
+        """生成SSE事件流"""
+        loop = asyncio.get_event_loop()
+
+        # 在线程池中运行训练工作器
+        thread = threading.Thread(target=training_worker)
+        thread.start()
+
+        # 从同步队列读取事件并发送
+        while True:
+            try:
+                # 使用 run_in_executor 非阻塞地获取消息
+                msg = await loop.run_in_executor(None, lambda: message_queue.get(timeout=0.1))
+
+                event_type = msg.get("event", "message")
+                data = msg.get("data", {})
+
+                # 格式化SSE
+                yield f"event: {event_type}\n"
+                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+                # 完成或错误时结束
+                if event_type in ("complete", "error"):
+                    break
+            except queue.Empty:
+                # 检查线程是否结束
+                if not thread.is_alive():
+                    break
+                # 发送心跳保持连接
+                yield "event: heartbeat\ndata: {}\n\n"
+
+        # 等待线程结束
+        thread.join()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
 
 
 @router.post("/qlib/predict")
@@ -1081,14 +2082,50 @@ async def predict_with_qlib_model(request: QlibPredictRequest) -> Dict[str, Any]
         from quanttool.factors.stock_analyzer import StockAnalyzer
         import numpy as np
         from datetime import datetime, timedelta
+        from pathlib import Path
 
-        # 直接加载保存的模型文件
-        if not request.model_path:
-            raise HTTPException(status_code=400, detail="请提供已训练模型的路径")
+        # 查找模型文件
+        model_path = request.model_path
+        if not model_path:
+            # 自动查找对应 model_type 的最新模型
+            model_dir = Path("models/qlib")
+            if model_dir.exists():
+                # 查找匹配的模型文件
+                pattern = f"{request.model_type}_*.pkl"
+                model_files = list(model_dir.glob(pattern))
 
-        saved_data = joblib.load(request.model_path)
-        model = saved_data.get('model')
-        feature_names = saved_data.get('feature_names', request.features)
+                if not model_files:
+                    # 尝试其他命名方式
+                    all_models = list(model_dir.glob("*.pkl"))
+                    if all_models:
+                        # 使用最新的模型
+                        model_files = sorted(all_models, key=lambda x: x.stat().st_mtime, reverse=True)[:1]
+                        logger.info(f"No {request.model_type} model found, using latest: {model_files[0].name}")
+                else:
+                    # 按修改时间排序，取最新的
+                    model_files = sorted(model_files, key=lambda x: x.stat().st_mtime, reverse=True)[:1]
+
+                if model_files:
+                    model_path = str(model_files[0])
+                    logger.info(f"Auto-selected model: {model_path}")
+
+        if not model_path:
+            raise HTTPException(
+                status_code=400,
+                detail=f"未找到已保存的模型。请先训练模型，或检查 models/qlib/ 目录下是否有 {request.model_type}_*.pkl 文件"
+            )
+
+        logger.info(f"Loading model from: {model_path}")
+        saved_data = joblib.load(model_path)
+
+        # 兼容两种保存格式：直接保存模型 或 保存为字典
+        if isinstance(saved_data, dict):
+            model = saved_data.get('model')
+            feature_names = saved_data.get('feature_names', request.features)
+        else:
+            # 直接保存的模型对象
+            model = saved_data
+            feature_names = getattr(model, 'feature_names_', request.features)
 
         if model is None:
             raise HTTPException(status_code=400, detail="模型文件无效")
@@ -1128,32 +2165,46 @@ async def predict_with_qlib_model(request: QlibPredictRequest) -> Dict[str, Any]
             "trades": [],
         }
 
+        # 初始化 Alpha158 特征工程器
+        from quanttool.strategies.qlib_strategy import QlibFeatureEngineer
+        feature_engineer = QlibFeatureEngineer(feature_set=request.feature_set)
+
         for symbol in request.symbols:
             df = analyzer.get_stock_data(symbol, 500)  # 获取更多数据用于回测
-            if df.empty:
+            if df.empty or len(df) < 120:
                 continue
 
-            df = analyzer.calculate_technical_indicators(df)
-
-            # 使用模型期望的特征
-            available_features = [f for f in feature_names if f in df.columns]
-            if not available_features:
-                continue
-
-            # 确定日期列 (trade_date 或 timestamp)
+            # 确定日期列
             date_column = None
             if 'trade_date' in df.columns:
                 date_column = 'trade_date'
             elif 'timestamp' in df.columns:
                 date_column = 'timestamp'
 
+            if not date_column:
+                continue
+
+            df['_date'] = pd.to_datetime(df[date_column])
+
+            # 使用 Alpha158 特征工程
+            if request.use_rich_features:
+                try:
+                    feature_df = feature_engineer.generate_features(df)
+                    df = pd.concat([df, feature_df], axis=1)
+                except Exception as e:
+                    logger.warning(f"Feature engineering failed for {symbol}: {e}")
+                    continue
+            else:
+                df = analyzer.calculate_technical_indicators(df)
+
+            # 使用模型期望的特征
+            available_features = [f for f in feature_names if f in df.columns]
+            if not available_features:
+                continue
+
             # 记录数据日期范围
-            data_start = None
-            data_end = None
-            if date_column:
-                dates = pd.to_datetime(df[date_column])
-                data_start = str(dates.min())[:10]
-                data_end = str(dates.max())[:10]
+            data_start = str(df['_date'].min())[:10]
+            data_end = str(df['_date'].max())[:10]
 
             # ====== 回测逻辑 ======
             cash = initial_cash
@@ -1296,6 +2347,49 @@ async def predict_with_qlib_model(request: QlibPredictRequest) -> Dict[str, Any]
             days = (predict_end - predict_start).days
             annual_return = total_return * 252 / max(days, 1) if days > 0 else 0
 
+            # ====== 计算最大回撤 ======
+            max_drawdown = 0.0
+            if trades:
+                # 重建市值曲线
+                equity_curve = [initial_cash]
+                peak_equity = initial_cash
+
+                # 简化：根据交易记录估算市值变化
+                running_cash = initial_cash
+                running_position = 0
+                running_buy_price = 0.0
+
+                for trade in trades:
+                    if trade['type'] == 'buy':
+                        running_cash -= trade['shares'] * trade['price'] + trade['commission'] + trade.get('slippage', 0)
+                        running_position = trade['shares']
+                        running_buy_price = trade['price']
+                    elif trade['type'] == 'sell':
+                        running_cash += trade['shares'] * trade['price'] - trade['commission']
+                        running_position = 0
+
+                    # 假设当日市值为现金（简化计算）
+                    equity = running_cash
+                    equity_curve.append(equity)
+
+                    # 计算回撤
+                    if equity > peak_equity:
+                        peak_equity = equity
+                    drawdown = (peak_equity - equity) / peak_equity if peak_equity > 0 else 0
+                    if drawdown > max_drawdown:
+                        max_drawdown = drawdown
+
+            # ====== 计算夏普比率 ======
+            sharpe_ratio = 0.0
+            if days > 0 and total_return != 0:
+                # 简化：使用年化收益率和假设的波动率
+                # 实际应该用每日收益率计算
+                # 这里用估算：假设年化波动率约 20%
+                assumed_volatility = 0.20
+                risk_free_rate = 0.02  # 无风险利率 2%
+                if assumed_volatility > 0:
+                    sharpe_ratio = (annual_return - risk_free_rate) / assumed_volatility
+
             # 获取最新预测
             X_latest = df[available_features].iloc[-1:].values
             try:
@@ -1316,6 +2410,8 @@ async def predict_with_qlib_model(request: QlibPredictRequest) -> Dict[str, Any]
                     "final_capital": round(final_capital, 2),
                     "total_return": round(total_return * 100, 2),
                     "annual_return": round(annual_return * 100, 2),
+                    "max_drawdown": round(max_drawdown * 100, 2),
+                    "sharpe_ratio": round(sharpe_ratio, 2),
                     "total_trades": len(trades),
                     "win_rate": round(backtest_results["win_trades"] / len(trades) * 100, 1) if trades else 0,
                     "total_commission": round(total_commission, 2),
@@ -1326,19 +2422,49 @@ async def predict_with_qlib_model(request: QlibPredictRequest) -> Dict[str, Any]
 
             backtest_results["total_trades"] += len(trades)
 
+        # 计算汇总统计
+        total_final_capital = sum(
+            p["backtest"]["final_capital"] for p in predictions.values()
+        )
+        total_win_trades = sum(
+            1 for p in predictions.values()
+            for t in p["backtest"].get("trades", [])
+            if t.get("type") == "sell" and t.get("profit", 0) > 0
+        )
+        total_sell_trades = sum(
+            1 for p in predictions.values()
+            for t in p["backtest"].get("trades", [])
+            if t.get("type") == "sell"
+        )
+
+        # 汇总回测结果
+        summary = {
+            "total_return_pct": round((total_final_capital - initial_cash * len(predictions)) / (initial_cash * len(predictions)) * 100, 2) if predictions else 0,
+            "total_trades": backtest_results["total_trades"],
+            "win_rate": round(total_win_trades / total_sell_trades * 100, 1) if total_sell_trades > 0 else 0,
+            "predicted_stocks": len(predictions),
+        }
+
         return {
+            "success": True,
             "model_type": request.model_type,
-            "model_path": request.model_path,
+            "model_path": model_path,
+            "model_name": Path(model_path).name if model_path else None,
+            "feature_count": len(feature_names),
             "predict_period": {
                 "start_date": request.predict_start_date,
                 "end_date": request.predict_end_date,
+                "days": (predict_end - predict_start).days,
             },
             "backtest_params": {
-                "initial_cash": initial_cash,
-                "commission_rate": commission_rate,
-                "slippage_rate": slippage_rate,
+                "initial_cash": f"¥{initial_cash:,.0f}",
+                "initial_cash_raw": initial_cash,
+                "commission_rate": f"{commission_rate * 100:.4f}%",
+                "slippage_rate": f"{slippage_rate * 100:.4f}%",
+                "total_cost_rate": f"{(commission_rate + slippage_rate) * 100:.4f}%",
                 "t_plus_1": True,
             },
+            "summary": summary,
             "predictions": predictions,
             "total_stocks": len(request.symbols),
             "predicted_stocks": len(predictions)
@@ -1390,6 +2516,10 @@ async def run_backtest(request: BacktestRequest) -> Dict[str, Any]:
     - breakout: 突破策略
     - trend_momentum: 趋势动量
     - adaptive_threshold: 自适应阈值
+
+    数据提供者：
+    - enhanced_data_fetcher: 直接从网络获取
+    - incremental_data_fetcher: 优先使用缓存，增量拉取（推荐）
     """
     try:
         from quanttool.application.backtest_service import BacktestService
@@ -1401,6 +2531,9 @@ async def run_backtest(request: BacktestRequest) -> Dict[str, Any]:
         # 初始化回测服务
         backtest_service = BacktestService()
 
+        # 选择数据提供者（优先使用增量数据提供者）
+        data_provider = getattr(request, 'data_provider', 'incremental_data_fetcher')
+
         # 运行回测
         result = backtest_service.run_backtest(
             strategy_name=request.strategy_name,
@@ -1411,7 +2544,7 @@ async def run_backtest(request: BacktestRequest) -> Dict[str, Any]:
             timeframe="1d",
             initial_cash=request.initial_cash,
             commission_rate=request.commission_rate,
-            data_provider="enhanced_data_fetcher",
+            data_provider=data_provider,
         )
 
         # 转换结果

@@ -144,7 +144,7 @@ quant backtest run --strategy turtle --symbol 000001.SZ \
 quanttool/
 ├── factors/                    # 因子分析模块
 │   ├── scoring_system.py       # 多维度评分系统
-│   ├── candlestick_patterns.py # K线形态识别
+│   ├── talib_patterns.py       # K线形态识别（TA-Lib 61种）
 │   ├── stock_analyzer.py       # 股票综合分析
 │   └── tech_indicators.py      # 技术指标计算
 ├── strategies/                 # 交易策略模块
@@ -169,8 +169,8 @@ quanttool/
 
 ```python
 from quanttool.factors.stock_analyzer import StockAnalyzer
-from quanttool.factors.candlestick_patterns import (
-    CandlestickPatternRecognizer,
+from quanttool.factors.talib_patterns import (
+    TalibPatternRecognizer,
     draw_candlestick_chart,
     draw_pattern_illustration
 )
@@ -180,16 +180,16 @@ analyzer = StockAnalyzer()
 report = analyzer.analyze_stock("000001.SZ", days=360)
 print(report)
 
-# 识别K线形态
-recognizer = CandlestickPatternRecognizer()
-patterns = recognizer.recognize_all_patterns(df, lookback=5)
+# 识别K线形态（TA-Lib 61种形态）
+recognizer = TalibPatternRecognizer()
+patterns = recognizer.recognize_all(df, lookback=5)
 
 # 绘制K线图
 chart = draw_candlestick_chart(df, num_candles=10)
 print(chart)
 
 # 获取形态示意图
-illustration = draw_pattern_illustration("锤子线")
+illustration = draw_pattern_illustration("晨星")
 print(illustration)
 ```
 

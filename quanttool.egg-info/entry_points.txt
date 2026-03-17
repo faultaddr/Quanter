@@ -1,2 +1,3 @@
 [console_scripts]
 quant = quanttool.cli.main:app
+quanttool-mcp = quanttool.agent.server:main

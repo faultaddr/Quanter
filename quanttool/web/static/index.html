@@ -534,8 +534,9 @@
                                         </select>
                                     </div>
                                     <div class="mb-3">
-                                        <label class="form-label">训练股票 (逗号分隔)</label>
+                                        <label class="form-label">预测股票 (逗号分隔)</label>
                                         <input type="text" class="form-control" id="qlibSymbols" value="000001.SZ,600000.SH,600519.SH" placeholder="股票代码">
+                                        <small class="text-muted">训练使用沪深300成分股，此处仅用于预测</small>
                                     </div>
                                     <div class="mb-3">
                                         <label class="form-label">训练参数</label>
@@ -554,22 +555,35 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="row mb-3">
-                                        <div class="col-6">
-                                            <label class="form-label small">开始日期</label>
-                                            <input type="date" class="form-control form-control-sm" id="qlibStartDate" value="2023-01-01">
-                                        </div>
-                                        <div class="col-6">
-                                            <label class="form-label small">结束日期</label>
-                                            <input type="date" class="form-control form-control-sm" id="qlibEndDate" value="2024-12-31">
-                                        </div>
+                                    <div class="alert alert-info py-2 mb-3">
+                                        <small>
+                                            <strong>数据划分:</strong><br>
+                                            训练: 2020-2023 | 验证: 2024-2025 | 测试: 2026
+                                        </small>
                                     </div>
                                     <button type="submit" class="btn btn-success w-100 mb-2" id="qlibTrainBtn">
-                                        <i class="bi bi-cpu me-1"></i>训练模型
+                                        <i class="bi bi-cpu me-1"></i>训练模型 (沪深300)
                                     </button>
                                     <button type="button" class="btn btn-outline-primary w-100" id="qlibPredictBtn">
                                         <i class="bi bi-graph-up me-1"></i>预测信号
                                     </button>
+
+                                    <!-- 训练进度条 -->
+                                    <div id="trainingProgress" class="mt-3" style="display: none;">
+                                        <div class="d-flex justify-content-between mb-1">
+                                            <span class="small text-muted" id="trainingStage">初始化...</span>
+                                            <span class="small fw-bold" id="trainingPercent">0%</span>
+                                        </div>
+                                        <div class="progress" style="height: 20px;">
+                                            <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                                 id="trainingProgressBar"
+                                                 role="progressbar"
+                                                 style="width: 0%"
+                                                 aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                                        </div>
+                                        <div class="small text-muted mt-1" id="trainingMessage">准备开始...</div>
+                                        <div id="trainingLogs" class="mt-2 small" style="max-height: 100px; overflow-y: auto; font-family: monospace; font-size: 11px; background: #f8f9fa; border-radius: 4px; padding: 8px;"></div>
+                                    </div>
                                 </form>
                             </div>
                         </div>
@@ -1469,58 +1483,153 @@
         async function trainQlibModel() {
             const modelType = document.getElementById('qlibModelType').value;
             const symbols = document.getElementById('qlibSymbols').value.split(',').map(s => s.trim()).filter(s => s);
-            const startDate = document.getElementById('qlibStartDate').value;
-            const endDate = document.getElementById('qlibEndDate').value;
             const nEstimators = parseInt(document.getElementById('qlibNestimators').value) || 200;
             const maxDepth = parseInt(document.getElementById('qlibMaxDepth').value) || 6;
             const learningRate = parseFloat(document.getElementById('qlibLearningRate').value) || 0.01;
             const batchSize = parseInt(document.getElementById('qlibBatchSize').value) || 256;
 
-            if (symbols.length === 0) {
-                showToast('请输入至少一个股票代码', 'warning');
-                return;
+            // 显示进度条
+            const progressContainer = document.getElementById('trainingProgress');
+            const progressBar = document.getElementById('trainingProgressBar');
+            const progressPercent = document.getElementById('trainingPercent');
+            const progressStage = document.getElementById('trainingStage');
+            const progressMessage = document.getElementById('trainingMessage');
+            const progressLogs = document.getElementById('trainingLogs');
+
+            progressContainer.style.display = 'block';
+            progressLogs.innerHTML = '';
+            progressBar.style.width = '0%';
+            progressBar.textContent = '0%';
+            progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated';
+
+            // 禁用训练按钮
+            const trainBtn = document.getElementById('qlibTrainBtn');
+            trainBtn.disabled = true;
+
+            // 阶段名称映射
+            const stageNames = {
+                'init': '初始化',
+                'data_collection': '数据获取',
+                'preparation': '数据准备',
+                'training': '模型训练',
+                'evaluation': '模型评估',
+                'complete': '训练完成'
+            };
+
+            // 更新进度显示
+            function updateProgress(data) {
+                const progress = data.progress || 0;
+                progressBar.style.width = `${progress}%`;
+                progressBar.textContent = `${progress}%`;
+                progressBar.setAttribute('aria-valuenow', progress);
+                progressPercent.textContent = `${progress}%`;
+
+                if (data.stage) {
+                    progressStage.textContent = stageNames[data.stage] || data.stage;
+                }
+
+                if (data.message) {
+                    progressMessage.textContent = data.message;
+                }
+
+                // 根据阶段调整颜色
+                if (data.stage === 'complete') {
+                    progressBar.className = 'progress-bar bg-success';
+                } else if (data.stage === 'training') {
+                    progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-primary';
+                }
             }
 
-            showLoading(true);
+            // 添加日志
+            function addLog(message) {
+                const time = new Date().toLocaleTimeString();
+                progressLogs.innerHTML += `<div class="text-muted">[${time}] ${message}</div>`;
+                progressLogs.scrollTop = progressLogs.scrollHeight;
+            }
+
             try {
-                const response = await fetch(`${API_BASE}/qlib/train`, {
+                // 使用 fetch 发送 POST 请求并接收 SSE 流
+                const response = await fetch(`${API_BASE}/qlib/train/stream`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         model_type: modelType,
                         symbols: symbols,
-                        start_date: startDate,
-                        end_date: endDate,
+                        train_start: '2019-01-01',
+                        train_end: '2023-12-31',
+                        valid_start: '2024-01-01',
+                        valid_end: '2024-12-31',
+                        test_start: '2025-01-01',
+                        test_end: '2026-03-17',
                         n_estimators: nEstimators,
                         max_depth: maxDepth,
                         learning_rate: learningRate,
                         batch_size: batchSize,
-                        epochs: nEstimators  // 对于 PyTorch 模型，使用同样的参数
+                        epochs: nEstimators,
+                        max_train_stocks: 0  // 0 表示使用全部沪深300股票
                     })
                 });
-                const data = await response.json();
-                if (response.ok) {
-                    renderQlibResults(data);
-                    addToHistory('qlib', symbols.join(','), data);
-                    showToast('模型训练完成', 'success');
-                } else {
-                    throw new Error(data.detail || '训练失败');
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
                 }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let result = null;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    let eventType = 'message';
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.slice(7);
+                        } else if (line.startsWith('data: ')) {
+                            const data = JSON.parse(line.slice(6));
+
+                            if (eventType === 'progress') {
+                                updateProgress(data);
+                            } else if (eventType === 'log') {
+                                addLog(data.message);
+                            } else if (eventType === 'complete') {
+                                result = data.result;
+                                progressBar.className = 'progress-bar bg-success';
+                                showToast(`模型训练完成！训练集IC: ${result.metrics?.train?.ic?.toFixed(4) || '-'}`, 'success');
+                            } else if (eventType === 'error') {
+                                throw new Error(data.message);
+                            }
+                        }
+                    }
+                }
+
+                if (result) {
+                    renderQlibResults(result);
+                    addToHistory('qlib', `CSI300训练/${modelType}`, result);
+                }
+
             } catch (error) {
+                progressBar.className = 'progress-bar bg-danger';
+                progressBar.textContent = '失败';
                 showError(error.message);
+                addLog(`错误: ${error.message}`);
             } finally {
-                showLoading(false);
+                trainBtn.disabled = false;
             }
         }
 
         async function predictQlibModel() {
             const modelType = document.getElementById('qlibModelType').value;
             const symbols = document.getElementById('qlibSymbols').value.split(',').map(s => s.trim()).filter(s => s);
-            const startDate = document.getElementById('qlibStartDate').value;
-            const endDate = document.getElementById('qlibEndDate').value;
 
             if (symbols.length === 0) {
-                showToast('请输入股票代码', 'warning');
+                showToast('请输入预测股票代码', 'warning');
                 return;
             }
 
@@ -1533,6 +1642,11 @@
 
             showLoading(true);
             try {
+                // 计算合理的预测日期范围（过去6个月到今天）
+                const today = new Date();
+                const endDate = today.toISOString().split('T')[0];
+                const startDate = new Date(today.setMonth(today.getMonth() - 6)).toISOString().split('T')[0];
+
                 const response = await fetch(`${API_BASE}/qlib/predict`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1540,6 +1654,7 @@
                         model_type: modelType,
                         model_path: lastTrainedModelPath,
                         symbols: symbols,
+                        // 使用最近6个月数据进行预测和回测
                         predict_start_date: startDate,
                         predict_end_date: endDate,
                         initial_cash: 100000,
@@ -1575,19 +1690,27 @@
                 lastTrainedModelPath = data.model_path;
             }
 
-            // 填充训练数据日期
-            if (data.data_period) {
+            // 填充数据划分信息
+            if (data.data_split) {
+                const trainSplit = data.data_split.train || {};
+                const validSplit = data.data_split.valid || {};
+                const testSplit = data.data_split.test || {};
+
                 document.getElementById('qlibTrainDataPeriod').textContent =
-                    `${data.data_period.start_date || '-'} ~ ${data.data_period.end_date || '-'}`;
+                    `训练: ${trainSplit.period || '-'} (${(trainSplit.samples || 0).toLocaleString()} 样本)`;
                 document.getElementById('qlibTrainRequestPeriod').textContent =
-                    `${data.data_period.requested_start || '-'} ~ ${data.data_period.requested_end || '-'}`;
+                    `验证: ${validSplit.period || '-'} (${(validSplit.samples || 0).toLocaleString()} 样本) | ` +
+                    `测试: ${testSplit.period || '-'} (${(testSplit.samples || 0).toLocaleString()} 样本)`;
             }
 
             // 填充训练结果
             document.getElementById('qlibResultModelType').textContent = data.model_type.toUpperCase();
-            document.getElementById('qlibResultSamples').textContent = data.train_samples?.toLocaleString() || '-';
-            document.getElementById('qlibResultIC').textContent = data.metrics?.ic?.toFixed(4) || '-';
-            document.getElementById('qlibResultMSE').textContent = data.metrics?.mse?.toFixed(6) || '-';
+            document.getElementById('qlibResultSamples').textContent =
+                `${data.train_samples?.toLocaleString() || '-'} (${data.train_symbols_count || 0} 只沪深300股票)`;
+            document.getElementById('qlibResultIC').textContent =
+                data.metrics?.train?.ic?.toFixed(4) || '-';
+            document.getElementById('qlibResultMSE').textContent =
+                `${(data.metrics?.train?.mse || 0).toFixed(6)}`;  // MSE 值
             document.getElementById('qlibResultModelPath').textContent = data.model_path || '-';
 
             // 填充回测参数
@@ -1598,6 +1721,62 @@
                     `${((data.backtest_params.commission_rate || 0.0003) * 100).toFixed(3)}%`;
                 document.getElementById('qlibParamSlippage').textContent =
                     `${((data.backtest_params.slippage_rate || 0.0001) * 100).toFixed(3)}%`;
+            }
+
+            // 显示验证集和测试集指标
+            if (data.metrics) {
+                const metricsHtml = `
+                    <div class="mt-3">
+                        <h6 class="text-muted mb-2">各数据集指标</h6>
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>数据集</th>
+                                        <th>样本数</th>
+                                        <th>IC</th>
+                                        <th>MSE</th>
+                                        <th>MAE</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td><span class="badge bg-primary">训练集</span></td>
+                                        <td>${(data.metrics.train?.samples || data.train_samples || 0).toLocaleString()}</td>
+                                        <td>${data.metrics.train?.ic?.toFixed(4) || '-'}</td>
+                                        <td>${(data.metrics.train?.mse || 0).toFixed(6)}</td>
+                                        <td>${(data.metrics.train?.mae || 0).toFixed(6)}</td>
+                                    </tr>
+                                    ${data.metrics.valid?.samples ? `
+                                    <tr>
+                                        <td><span class="badge bg-warning">验证集</span></td>
+                                        <td>${(data.metrics.valid.samples || 0).toLocaleString()}</td>
+                                        <td>${data.metrics.valid.ic?.toFixed(4) || '-'}</td>
+                                        <td>${(data.metrics.valid.mse || 0).toFixed(6)}</td>
+                                        <td>${(data.metrics.valid.mae || 0).toFixed(6)}</td>
+                                    </tr>
+                                    ` : ''}
+                                    ${data.metrics.test?.samples ? `
+                                    <tr>
+                                        <td><span class="badge bg-success">测试集</span></td>
+                                        <td>${(data.metrics.test.samples || 0).toLocaleString()}</td>
+                                        <td>${data.metrics.test.ic?.toFixed(4) || '-'}</td>
+                                        <td>${(data.metrics.test.mse || 0).toFixed(6)}</td>
+                                        <td>${(data.metrics.test.mae || 0).toFixed(6)}</td>
+                                    </tr>
+                                    ` : ''}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+
+                // 找到并添加指标表格
+                const qlibFeatureImportance = document.getElementById('qlibFeatureImportance');
+                if (qlibFeatureImportance) {
+                    // 在特征重要性之前插入指标表格
+                    qlibFeatureImportance.insertAdjacentHTML('beforebegin', metricsHtml);
+                }
             }
 
             // 显示特征重要性（如果有）

@@ -10,6 +10,7 @@ import threading
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+from tqdm import tqdm
 from ...domain.interfaces.data_provider import IDataProvider
 from ...core.errors import DataProviderError, ConfigurationError
 from ...core.registry import registry, ComponentType
@@ -23,9 +24,15 @@ from .anti_crawler import (
     DelayController,
     retry_on_failure,
     safe_request,
+    safe_request_with_proxy,
     get_sina_headers,
     get_tencent_headers,
     get_eastmoney_headers,
+    ProxyPool,
+    ProxyInfo,
+    setup_proxy_pool,
+    get_proxy,
+    get_proxy_dict,
 )
 
 # Clear proxy environment variables at module level to avoid connection issues
@@ -120,7 +127,7 @@ class BaoStockSessionManager:
                     result = bs.login()
                     if result.error_code == '0':
                         cls._logged_in = True
-                        logger.info("BaoStock logged in successfully")
+                        logger.debug("BaoStock logged in successfully")
                     else:
                         logger.warning(f"BaoStock login failed: {result.error_msg}")
                         return False
@@ -153,7 +160,7 @@ class BaoStockSessionManager:
                     bs.logout()
                     cls._logged_in = False
                     cls._ref_count = 0
-                    logger.info("BaoStock logged out successfully")
+                    logger.debug("BaoStock logged out successfully")
                 except Exception as e:
                     logger.error(f"BaoStock logout exception: {str(e)}")
 
@@ -222,11 +229,33 @@ class AshareFetcher:
             stk = st['data'][code]
             buf = stk[ms] if ms in stk else stk[unit]
 
-            df = pd.DataFrame(buf, columns=['timestamp', 'open', 'close', 'high', 'low', 'volume'], dtype='float')
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            # 腾讯API返回的列数可能变化，需要动态处理
+            # 标准列: ['timestamp', 'open', 'close', 'high', 'low', 'volume']
+            # 有时可能多返回一列
+            if not buf:
+                return pd.DataFrame()
 
-            # 添加 amount 列（腾讯不提供成交额，用 close * volume 估算）
-            df['amount'] = df['close'] * df['volume'] * 100  # 手转换为股
+            # 直接从数据创建DataFrame，不指定列名
+            df = pd.DataFrame(buf)
+
+            # 根据列数确定列名
+            num_cols = len(df.columns)
+            if num_cols >= 6:
+                # 标准格式: 日期, 开, 收, 高, 低, 量 [, 额]
+                df.columns = ['timestamp', 'open', 'close', 'high', 'low', 'volume'] + \
+                             (['amount'] if num_cols == 7 else [])
+            else:
+                # 列数不够，返回空
+                return pd.DataFrame()
+
+            # 转换数据类型
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            for col in ['open', 'close', 'high', 'low', 'volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+            # 如果没有 amount 列，用 close * volume 估算
+            if 'amount' not in df.columns:
+                df['amount'] = df['close'] * df['volume'] * 100  # 手转换为股
 
             return df
         except Exception as e:
@@ -274,7 +303,7 @@ class AshareFetcher:
 
             return df
         except Exception as e:
-            logger.warning(f"新浪数据获取失败: {str(e)}")
+            logger.debug(f"新浪数据获取失败: {str(e)}")
             return pd.DataFrame()
 
     @classmethod
@@ -336,7 +365,12 @@ class EnhancedDataFetcher(IDataProvider):
         max_workers: int = 10,
         cache_dir: str = ".cache/stock_data",
         cache_ttl: int = 86400,
-        use_cache: bool = True
+        use_cache: bool = True,
+        proxy_file: str = None,
+        proxy_list: List[str] = None,
+        proxy_api_url: str = None,
+        proxy_api_key: str = None,
+        use_proxy: bool = False
     ):
         """
         Initialize enhanced data fetcher.
@@ -349,21 +383,33 @@ class EnhancedDataFetcher(IDataProvider):
             cache_dir: Directory for local data cache (default: .cache/stock_data).
             cache_ttl: Cache time-to-live in seconds (default: 86400 = 1 day).
             use_cache: Whether to use local cache (default: True).
+            proxy_file: 代理列表文件路径(每行一个代理，格式: host:port)
+            proxy_list: 代理列表 ['http://1.2.3.4:8080', ...]
+            proxy_api_url: 代理API URL（付费代理服务商提供）
+            proxy_api_key: 代理API密钥
+            use_proxy: 是否启用代理池（默认 False）
         """
         self.tushare_token = tushare_token or os.getenv("TUSHARE_TOKEN")
         self.eastmoney_cookie = eastmoney_cookie or os.getenv("EASTMONEY_COOKIE")
         self.use_akshare = use_akshare and AKSHARE_AVAILABLE
         self.max_workers = max_workers
         self.use_cache = use_cache
+        self.use_proxy = use_proxy
 
-        if not self.tushare_token:
-            raise ConfigurationError(
-                "Tushare token not provided and TUSHARE_TOKEN environment variable not set"
-            )
-
-        # Setup Tushare API
-        self.pro_api = setup_tushare_api(self.tushare_token)
+        # Setup Tushare API if token available
+        self.pro_api = None
         self._tushare_initialized = False
+        if self.tushare_token:
+            try:
+                self.pro_api = setup_tushare_api(self.tushare_token)
+            except Exception as e:
+                logger.warning(f"Failed to initialize Tushare: {e}")
+
+        # 如果没有 tushare 且 akshare 也不可用，则报错
+        if not self.pro_api and not self.use_akshare:
+            raise ConfigurationError(
+                "No data source available. Please provide TUSHARE_TOKEN or install akshare."
+            )
 
         # TuShare rate limiting (50 stocks per minute)
         self._tushare_request_count = 0
@@ -374,8 +420,27 @@ class EnhancedDataFetcher(IDataProvider):
         if self.eastmoney_cookie:
             self.eastmoney_headers['Cookie'] = self.eastmoney_cookie
 
-        # 延迟控制器
+        # 延迟控制器 - 使用更保守的延迟设置
         self._delay_controller = DelayController.get_instance()
+        if use_proxy:
+            # 使用代理时可以用较短延迟
+            self._delay_controller.min_delay = 0.5
+            self._delay_controller.max_delay = 2.0
+        else:
+            # 不使用代理时使用更长延迟避免被封
+            self._delay_controller.min_delay = 2.0
+            self._delay_controller.max_delay = 5.0
+
+        # 代理池设置
+        self._proxy_pool = None
+        if use_proxy or proxy_file or proxy_list or proxy_api_url:
+            self._proxy_pool = setup_proxy_pool(
+                proxy_file=proxy_file,
+                proxy_list=proxy_list,
+                api_url=proxy_api_url,
+                api_key=proxy_api_key
+            )
+            logger.debug(f"Proxy pool initialized with {len(self._proxy_pool._proxies)} proxies")
 
         # Thread pool for parallel fetching
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -386,41 +451,84 @@ class EnhancedDataFetcher(IDataProvider):
                 cache_dir=cache_dir,
                 default_ttl=cache_ttl
             )
-            logger.info(f"Local cache enabled at {cache_dir}")
+            logger.debug(f"Local cache enabled at {cache_dir}")
         else:
             self._cache = None
 
         # AkShare availability
         if self.use_akshare:
-            logger.info("AkShare is available and will be used as fallback")
+            logger.debug("AkShare is available and will be used as fallback")
         elif not AKSHARE_AVAILABLE:
             logger.warning("AkShare is not installed. Install it with: pip install akshare")
+
+    def _make_request(
+        self,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: int = 15,
+        use_delay: bool = True,
+        method: str = 'GET',
+        **kwargs
+    ) -> Any:
+        """
+        统一的HTTP请求方法，自动处理代理和反爬虫防护
+
+        Args:
+            url: 请求URL
+            headers: 请求头
+            timeout: 超时时间
+            use_delay: 是否使用延迟
+            method: HTTP方法
+            **kwargs: 其他参数
+
+        Returns:
+            Response对象
+        """
+        if self.use_proxy and self._proxy_pool:
+            return safe_request_with_proxy(
+                url,
+                method=method,
+                headers=headers,
+                timeout=timeout,
+                use_delay=use_delay,
+                use_proxy=True,
+                **kwargs
+            )
+        else:
+            return safe_request(
+                url,
+                method=method,
+                headers=headers,
+                timeout=timeout,
+                use_delay=use_delay,
+                **kwargs
+            )
 
     def initialize(self) -> None:
         """Initialize the data fetcher connections."""
         try:
             # Skip Tushare connection test - it's unreliable
             # Just mark as initialized and fail later if needed
-            logger.info("Skipping Tushare connection test (unreliable)")
+            logger.debug("Skipping Tushare connection test (unreliable)")
 
             # Verify EastMoney connection
             if self.eastmoney_cookie:
                 # Perform a simple request to verify cookie is valid
                 try:
                     test_url = "https://np-analyse.eastmoney.com/api/qt/ulist.np/get?po=1&pz=1&pn=1&np=1&fltt=2&invt=2&wbp2u=12915131124252524252135421&fid=f3&fs=m:0+t:6+f:!50&fields=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f24,f25,f26,f22,f33,f11,f62,f128,f136,f115,f152"
-                    response = safe_request(
+                    response = self._make_request(
                         test_url,
                         headers=self.eastmoney_headers,
                         timeout=10,
                         use_delay=False  # 初始化时不需要延迟
                     )
                     # Just check if we get a response without error
-                    logger.info("EastMoney connection verified")
+                    logger.debug("EastMoney connection verified")
                 except Exception as e:
                     logger.warning(f"Could not verify EastMoney connection: {str(e)}")
 
             self._tushare_initialized = True
-            logger.info("EnhancedDataFetcher initialized successfully (Ashare as primary)")
+            logger.debug("EnhancedDataFetcher initialized successfully (Ashare as primary)")
         except Exception as e:
             raise DataProviderError(f"Failed to initialize EnhancedDataFetcher: {str(e)}")
 
@@ -440,7 +548,7 @@ class EnhancedDataFetcher(IDataProvider):
             days = (end_dt - start_dt).days + 1
             count = min(days + 30, 1000)  # 多取一些数据确保覆盖
 
-            logger.info(f"Fetching {symbol} from Ashare (primary source)")
+            logger.debug(f"Fetching {symbol} from Ashare (primary source)")
 
             df = AshareFetcher.get_price(
                 code=symbol,
@@ -478,7 +586,7 @@ class EnhancedDataFetcher(IDataProvider):
             df.sort_values('timestamp', inplace=True)
             df.reset_index(drop=True, inplace=True)
 
-            logger.info(f"Successfully fetched {len(df)} bars from Ashare for {symbol}")
+            logger.debug(f"Fetched {len(df)} bars from Ashare for {symbol}")
             return df
 
         except Exception as e:
@@ -523,13 +631,13 @@ class EnhancedDataFetcher(IDataProvider):
                 'end': end_date.replace('-', '')
             }
 
-            # 使用反爬虫防护
-            response = safe_request(
+            # 使用反爬虫防护和代理
+            response = self._make_request(
                 url,
                 headers=self.eastmoney_headers,
-                params=params,
                 timeout=15,
-                use_delay=True
+                use_delay=True,
+                params=params
             )
             data = response.json()
 
@@ -600,7 +708,7 @@ class EnhancedDataFetcher(IDataProvider):
             start_formatted = start_date.replace('-', '')
             end_formatted = end_date.replace('-', '')
 
-            logger.info(f"Fetching {symbol} from AkShare using base symbol {base_symbol}")
+            logger.debug(f"Fetching {symbol} from AkShare using base symbol {base_symbol}")
 
             # Use AkShare's stock_zh_a_hist interface with retry
             max_retries = 3
@@ -662,7 +770,7 @@ class EnhancedDataFetcher(IDataProvider):
             df.sort_values("timestamp", inplace=True)
             df.reset_index(drop=True, inplace=True)
 
-            logger.info(f"Successfully fetched {len(df)} bars from AkShare for {symbol}")
+            logger.debug(f"Fetched {len(df)} bars from AkShare for {symbol}")
             return df
 
         except Exception as e:
@@ -691,7 +799,7 @@ class EnhancedDataFetcher(IDataProvider):
                 else:
                     bs_symbol = f"sz.{base_symbol}"
 
-            logger.info(f"Fetching {symbol} from BaoStock using {bs_symbol}")
+            logger.debug(f"Fetching {symbol} from BaoStock using {bs_symbol}")
 
             # Use thread-safe session manager instead of direct bs.login()
             if not BaoStockSessionManager.login():
@@ -756,7 +864,7 @@ class EnhancedDataFetcher(IDataProvider):
                 # Drop rows with NaN values
                 df = df.dropna(subset=['open', 'high', 'low', 'close'])
 
-                logger.info(f"Successfully fetched {len(df)} bars from BaoStock for {symbol}")
+                logger.debug(f"Fetched {len(df)} bars from BaoStock for {symbol}")
                 return df
 
             finally:
@@ -811,7 +919,7 @@ class EnhancedDataFetcher(IDataProvider):
                 df = pd.DataFrame()
 
                 # 1. 最高优先级：Ashare（免费、无需Token、双核心）
-                logger.info(f"Fetching {symbol} from Ashare (primary source)")
+                logger.debug(f"Fetching {symbol} from Ashare (primary source)")
                 df = self._fetch_from_ashare(symbol, start_str, end_str)
                 if not df.empty:
                     results[symbol] = df
@@ -819,7 +927,7 @@ class EnhancedDataFetcher(IDataProvider):
 
                 # 2. 备用：EastMoney
                 if self.eastmoney_cookie:
-                    logger.info(f"Falling back to EastMoney for {symbol}")
+                    logger.debug(f"Falling back to EastMoney for {symbol}")
                     df = self._fetch_from_eastmoney(symbol, start_str, end_str)
                     if not df.empty:
                         results[symbol] = df
@@ -827,14 +935,14 @@ class EnhancedDataFetcher(IDataProvider):
 
                 # 3. 备用：AkShare
                 if self.use_akshare:
-                    logger.info(f"Falling back to AkShare for {symbol}")
+                    logger.debug(f"Falling back to AkShare for {symbol}")
                     df = self._fetch_from_akshare(symbol, start_str, end_str)
                     if not df.empty:
                         results[symbol] = df
                         continue
 
                 # 4. 备用：TuShare（有频率限制，可能超时）
-                logger.info(f"Falling back to TuShare for {symbol}")
+                logger.debug(f"Falling back to TuShare for {symbol}")
 
                 # Convert to Tushare format
                 if '.' not in symbol:
@@ -856,7 +964,7 @@ class EnhancedDataFetcher(IDataProvider):
                     elapsed = time.time() - self._tushare_last_reset
                     if elapsed < 60:
                         sleep_time = 60 - elapsed
-                        logger.info(f"TuShare rate limit reached ({self._tushare_request_count} requests), waiting {sleep_time:.1f} seconds...")
+                        logger.debug(f"TuShare rate limit reached ({self._tushare_request_count} requests), waiting {sleep_time:.1f} seconds...")
                         time.sleep(sleep_time)
                     self._tushare_request_count = 0
                     self._tushare_last_reset = time.time()
@@ -910,7 +1018,7 @@ class EnhancedDataFetcher(IDataProvider):
 
                 # 5. 最后备用：BaoStock
                 if BAOSTOCK_AVAILABLE:
-                    logger.info(f"Last resort: falling back to BaoStock for {symbol}")
+                    logger.debug(f"Last resort: falling back to BaoStock for {symbol}")
                     df = self._fetch_from_baostock(symbol, start_str, end_str)
                     if not df.empty:
                         results[symbol] = df
@@ -963,7 +1071,7 @@ class EnhancedDataFetcher(IDataProvider):
 
             # 4. 备用：TuShare（有频率限制）
             if df.empty:
-                logger.info(f"Falling back to TuShare for {symbol}")
+                logger.debug(f"Falling back to TuShare for {symbol}")
                 # Convert to Tushare format
                 if '.' not in symbol:
                     if len(symbol) == 6:
@@ -984,7 +1092,7 @@ class EnhancedDataFetcher(IDataProvider):
                     elapsed = time.time() - self._tushare_last_reset
                     if elapsed < 60:
                         sleep_time = 60 - elapsed
-                        logger.info(f"TuShare rate limit reached ({self._tushare_request_count} requests), waiting {sleep_time:.1f} seconds...")
+                        logger.debug(f"TuShare rate limit reached ({self._tushare_request_count} requests), waiting {sleep_time:.1f} seconds...")
                         time.sleep(sleep_time)
                     self._tushare_request_count = 0
                     self._tushare_last_reset = time.time()
@@ -1085,6 +1193,9 @@ class EnhancedDataFetcher(IDataProvider):
         pending_futures = set(futures.keys())
 
         try:
+            # 使用 tqdm 进度条
+            pbar = tqdm(total=total, desc="获取数据", unit="只", disable=not show_progress)
+
             for future in as_completed(futures, timeout=300):
                 symbol = futures[future]
                 pending_futures.discard(future)
@@ -1093,13 +1204,14 @@ class EnhancedDataFetcher(IDataProvider):
                     if df is not None and not df.empty:
                         results[result_symbol] = df
                     completed += 1
-
-                    if show_progress and completed % 10 == 0:
-                        logger.info(f"Progress: {completed}/{total} symbols fetched")
+                    pbar.update(1)
 
                 except Exception as e:
-                    logger.error(f"Failed to get result for {symbol}: {str(e)}")
+                    logger.debug(f"Failed to get result for {symbol}: {str(e)}")
                     completed += 1
+                    pbar.update(1)
+
+            pbar.close()
 
         except FuturesTimeoutError:
             # Handle timeout gracefully - log which symbols didn't complete
@@ -1113,7 +1225,8 @@ class EnhancedDataFetcher(IDataProvider):
             for future in pending_futures:
                 future.cancel()
 
-        logger.info(f"Parallel fetch completed: {len(results)}/{total} symbols successful")
+        if show_progress:
+            print(f"✅ 获取完成: {len(results)}/{total} 只股票")
         return results
 
     def get_bars_cached(
@@ -1155,7 +1268,8 @@ class EnhancedDataFetcher(IDataProvider):
                     results[symbol] = cached
                 else:
                     symbols_to_fetch.append(symbol)
-            logger.info(f"Cache hit: {len(results)}/{len(symbols)} symbols")
+            if results:
+                print(f"📦 缓存命中: {len(results)}/{len(symbols)} 只股票")
         else:
             symbols_to_fetch = symbols
 
@@ -1197,12 +1311,12 @@ class EnhancedDataFetcher(IDataProvider):
 
             # Try EastMoney first if available
             if self.eastmoney_cookie:
-                logger.info(f"Attempting to get latest bar for {symbol} from EastMoney")
+                logger.debug(f"Attempting to get latest bar for {symbol} from EastMoney")
                 df = self._fetch_from_eastmoney(symbol, start_str, end_str)
 
             # Fallback to Tushare if EastMoney data not available or failed
             if df.empty:
-                logger.info(f"Falling back to Tushare for latest bar of {symbol}")
+                logger.debug(f"Falling back to Tushare for latest bar of {symbol}")
 
                 # Convert to Tushare format
                 if '.' not in symbol:
@@ -1262,12 +1376,12 @@ class EnhancedDataFetcher(IDataProvider):
 
             # Fallback to AkShare if Tushare failed
             if df.empty and self.use_akshare:
-                logger.info(f"Falling back to AkShare for latest bar of {symbol}")
+                logger.debug(f"Falling back to AkShare for latest bar of {symbol}")
                 df = self._fetch_from_akshare(symbol, start_str, end_str)
 
             # Fallback to BaoStock if AkShare failed
             if df.empty and BAOSTOCK_AVAILABLE:
-                logger.info(f"Falling back to BaoStock for latest bar of {symbol}")
+                logger.debug(f"Falling back to BaoStock for latest bar of {symbol}")
                 df = self._fetch_from_baostock(symbol, start_str, end_str)
 
             if df.empty:
@@ -1335,7 +1449,7 @@ class EnhancedDataFetcher(IDataProvider):
                         logger.warning(f"Failed to fetch stock names from Tushare: {str(e)}")
                         constituents = [{"code": code, "name": code} for code in constituents]
 
-                logger.info(f"Successfully got {len(constituents)} CSI 300 constituents from Tushare")
+                logger.debug(f"Got from Tushare")
                 return constituents
             else:
                 logger.warning("Tushare returned empty CSI 300 constituents list")
@@ -1345,7 +1459,7 @@ class EnhancedDataFetcher(IDataProvider):
         # Fallback to AkShare
         if self.use_akshare and AKSHARE_AVAILABLE:
             try:
-                logger.info("Trying to get CSI 300 constituents from AkShare...")
+                logger.debug("Trying to get CSI 300 constituents from AkShare...")
                 # ak.index_stock_cons_weight_csindex returns df with columns like: 成分券代码, 成分券名称, etc.
                 df = ak.index_stock_cons_weight_csindex(symbol="000300")
                 if not df.empty:
@@ -1364,7 +1478,7 @@ class EnhancedDataFetcher(IDataProvider):
                         else:
                             constituents.append(code_with_suffix)
 
-                    logger.info(f"Successfully got {len(constituents)} CSI 300 constituents from AkShare")
+                    logger.debug(f"Got from AkShare")
                     return constituents
                 else:
                     logger.warning("AkShare returned empty CSI 300 constituents list")
@@ -1427,7 +1541,7 @@ class EnhancedDataFetcher(IDataProvider):
                         logger.warning(f"Failed to fetch stock names from Tushare: {str(e)}")
                         constituents = [{"code": code, "name": code} for code in constituents]
 
-                logger.info(f"Successfully got {len(constituents)} CSI 1000 constituents from Tushare")
+                logger.debug(f"Got from Tushare")
                 return constituents
             else:
                 logger.warning("Tushare returned empty CSI 1000 constituents list")
@@ -1437,7 +1551,7 @@ class EnhancedDataFetcher(IDataProvider):
         # Fallback to AkShare
         if self.use_akshare and AKSHARE_AVAILABLE:
             try:
-                logger.info("Trying to get CSI 1000 constituents from AkShare...")
+                logger.debug("Trying to get CSI 1000 constituents from AkShare...")
                 # ak.index_stock_cons_weight_csindex returns df with columns like: 成分券代码, 成分券名称, etc.
                 df = ak.index_stock_cons_weight_csindex(symbol="000852")
                 if not df.empty:
@@ -1456,7 +1570,7 @@ class EnhancedDataFetcher(IDataProvider):
                         else:
                             constituents.append(code_with_suffix)
 
-                    logger.info(f"Successfully got {len(constituents)} CSI 1000 constituents from AkShare")
+                    logger.debug(f"Got from AkShare")
                     return constituents
                 else:
                     logger.warning("AkShare returned empty CSI 1000 constituents list")
@@ -1559,6 +1673,313 @@ class EnhancedDataFetcher(IDataProvider):
         except Exception as e:
             logger.error(f"Failed to get trading calendar: {str(e)}")
             return []
+
+    # ==================== 基本面数据获取 ====================
+
+    def get_fundamental_data(
+        self,
+        symbol: str,
+        include_valuation: bool = True,
+        include_profit: bool = True,
+        include_growth: bool = True
+    ) -> Dict[str, Any]:
+        """
+        获取股票基本面数据（PE/PB/ROE等）
+
+        使用 BaoStock 作为数据源（免费、无需权限）
+
+        Args:
+            symbol: 股票代码，如 '000001.SZ' 或 '000001'
+            include_valuation: 是否包含估值指标（PE/PB）
+            include_profit: 是否包含盈利能力指标（ROE/净利润率）
+            include_growth: 是否包含成长能力指标
+
+        Returns:
+            Dict: 基本面数据字典
+        """
+        result = {
+            'symbol': symbol,
+            'pe': None,
+            'pb': None,
+            'roe': None,
+            'profit_margin': None,
+            'eps': None,
+            'yoy_profit': None,
+            'data_source': None,
+            'error': None
+        }
+
+        # 标准化股票代码格式 (BaoStock 使用 sz.000001 或 sh.600000 格式)
+        bs_code = self._normalize_symbol_for_baostock(symbol)
+        if not bs_code:
+            result['error'] = '无效的股票代码格式'
+            return result
+
+        # 尝试从 BaoStock 获取数据
+        if BAOSTOCK_AVAILABLE:
+            try:
+                data = self._fetch_fundamental_from_baostock(
+                    bs_code,
+                    include_valuation,
+                    include_profit,
+                    include_growth
+                )
+                if data:
+                    result.update(data)
+                    result['data_source'] = 'baostock'
+                    return result
+            except Exception as e:
+                logger.warning(f"BaoStock 获取基本面数据失败: {str(e)}")
+
+        # 尝试从 AkShare 获取数据
+        if AKSHARE_AVAILABLE:
+            try:
+                data = self._fetch_fundamental_from_akshare(symbol)
+                if data:
+                    result.update(data)
+                    result['data_source'] = 'akshare'
+                    return result
+            except Exception as e:
+                logger.warning(f"AkShare 获取基本面数据失败: {str(e)}")
+
+        result['error'] = '无法获取基本面数据'
+        return result
+
+    def _normalize_symbol_for_baostock(self, symbol: str) -> Optional[str]:
+        """
+        将股票代码转换为 BaoStock 格式
+
+        Args:
+            symbol: 股票代码，如 '000001.SZ', 'sz000001', '000001'
+
+        Returns:
+            BaoStock 格式的股票代码，如 'sz.000001'
+        """
+        if not symbol:
+            return None
+
+        # 移除空格
+        symbol = symbol.strip().upper()
+
+        # 提取纯数字代码
+        import re
+        match = re.search(r'(\d{6})', symbol)
+        if not match:
+            return None
+
+        pure_code = match.group(1)
+
+        # 判断市场
+        if pure_code.startswith('6'):
+            return f'sh.{pure_code}'
+        elif pure_code.startswith(('0', '3')):
+            return f'sz.{pure_code}'
+        else:
+            return f'sz.{pure_code}'  # 默认深圳
+
+    def _fetch_fundamental_from_baostock(
+        self,
+        bs_code: str,
+        include_valuation: bool,
+        include_profit: bool,
+        include_growth: bool
+    ) -> Optional[Dict[str, Any]]:
+        """
+        从 BaoStock 获取基本面数据
+
+        Args:
+            bs_code: BaoStock 格式的股票代码
+            include_valuation: 是否包含估值指标
+            include_profit: 是否包含盈利能力指标
+            include_growth: 是否包含成长能力指标
+
+        Returns:
+            基本面数据字典
+        """
+        import baostock as bs
+
+        result = {}
+
+        # 登录 BaoStock
+        lg = bs.login()
+        if lg.error_code != '0':
+            logger.error(f"BaoStock 登录失败: {lg.error_msg}")
+            return None
+
+        try:
+            # 1. 获取估值指标（PE/PB）- 从K线数据中获取
+            if include_valuation:
+                from datetime import datetime, timedelta
+                end_date = datetime.now().strftime('%Y-%m-%d')
+                start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+
+                rs = bs.query_history_k_data_plus(
+                    bs_code,
+                    'date,close,peTTM,pbMRQ,psTTM',
+                    start_date=start_date,
+                    end_date=end_date,
+                    frequency='d',
+                    adjustflag='3'
+                )
+
+                valuation_data = []
+                while (rs.error_code == '0') & rs.next():
+                    valuation_data.append(rs.get_row_data())
+
+                if valuation_data:
+                    # 取最新一条
+                    latest = valuation_data[-1]
+                    if len(latest) >= 5:
+                        result['close'] = float(latest[1]) if latest[1] else None
+                        result['pe'] = float(latest[2]) if latest[2] else None
+                        result['pb'] = float(latest[3]) if latest[3] else None
+                        result['ps'] = float(latest[4]) if latest[4] else None
+
+            # 2. 获取盈利能力指标（ROE/净利润率）
+            if include_profit:
+                current_year = datetime.now().year
+                current_quarter = (datetime.now().month - 1) // 3 + 1
+
+                # 尝试获取最近报告期数据
+                for quarter in [current_quarter, current_quarter - 1, 4, 3, 2, 1]:
+                    if quarter <= 0:
+                        continue
+                    year = current_year if quarter <= current_quarter else current_year - 1
+                    if quarter <= 0:
+                        year -= 1
+                        quarter += 4
+
+                    rs = bs.query_profit_data(
+                        code=bs_code,
+                        year=year,
+                        quarter=quarter
+                    )
+
+                    profit_data = []
+                    while (rs.error_code == '0') & rs.next():
+                        profit_data.append(rs.get_row_data())
+
+                    if profit_data:
+                        latest = profit_data[0]
+                        # 字段: code, pubDate, statDate, roeAvg, npMargin, gpMargin, netProfit, epsTTM, MBRevenue, totalShare, liqaShare
+                        if len(latest) >= 8:
+                            result['roe'] = float(latest[3]) * 100 if latest[3] else None  # ROE 转为百分比
+                            result['profit_margin'] = float(latest[4]) * 100 if latest[4] else None  # 净利润率
+                            result['eps'] = float(latest[7]) if latest[7] else None  # 每股收益TTM
+                            result['report_date'] = latest[2]  # 报告期
+                        break
+
+            # 3. 获取成长能力指标
+            if include_growth:
+                current_year = datetime.now().year
+                current_quarter = (datetime.now().month - 1) // 3 + 1
+
+                for quarter in [current_quarter, current_quarter - 1, 4, 3, 2, 1]:
+                    if quarter <= 0:
+                        continue
+                    year = current_year if quarter <= current_quarter else current_year - 1
+                    if quarter <= 0:
+                        year -= 1
+                        quarter += 4
+
+                    rs = bs.query_growth_data(
+                        code=bs_code,
+                        year=year,
+                        quarter=quarter
+                    )
+
+                    growth_data = []
+                    while (rs.error_code == '0') & rs.next():
+                        growth_data.append(rs.get_row_data())
+
+                    if growth_data:
+                        latest = growth_data[0]
+                        # 字段: code, pubDate, statDate, YOYEquity, YOYAsset, YOYNI, YOYEPSBasic, YOYPNI
+                        if len(latest) >= 6:
+                            result['yoy_profit'] = float(latest[5]) * 100 if latest[5] else None  # 净利润同比增长率
+                        break
+
+            return result if result else None
+
+        finally:
+            bs.logout()
+
+    def _fetch_fundamental_from_akshare(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        从 AkShare 获取基本面数据（备用方案）
+
+        Args:
+            symbol: 股票代码
+
+        Returns:
+            基本面数据字典
+        """
+        import akshare as ak
+
+        result = {}
+
+        # 提取纯数字代码
+        import re
+        match = re.search(r'(\d{6})', symbol)
+        if not match:
+            return None
+        pure_code = match.group(1)
+
+        try:
+            # 获取个股信息
+            info_df = ak.stock_individual_info_em(symbol=pure_code)
+            if info_df is not None and not info_df.empty:
+                info_dict = dict(zip(info_df['item'], info_df['value']))
+                result['total_mv'] = info_dict.get('总市值')
+                result['float_mv'] = info_dict.get('流通市值')
+                result['industry'] = info_dict.get('行业')
+        except Exception:
+            pass
+
+        return result if result else None
+
+    def get_stock_basic_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        获取股票基本信息（行业、上市日期等）
+
+        Args:
+            symbol: 股票代码
+
+        Returns:
+            基本信息字典
+        """
+        result = {
+            'symbol': symbol,
+            'name': None,
+            'industry': None,
+            'list_date': None,
+            'area': None
+        }
+
+        # 标准化代码
+        bs_code = self._normalize_symbol_for_baostock(symbol)
+        if not bs_code:
+            return result
+
+        if BAOSTOCK_AVAILABLE:
+            import baostock as bs
+            lg = bs.login()
+            if lg.error_code == '0':
+                try:
+                    # 查询股票基本信息
+                    rs = bs.query_stock_basic()
+
+                    while (rs.error_code == '0') & rs.next():
+                        row = rs.get_row_data()
+                        if row[0] == bs_code:
+                            result['name'] = row[1]
+                            result['list_date'] = row[2]
+                            result['status'] = row[5]
+                            break
+                finally:
+                    bs.logout()
+
+        return result
 
 
 def create_data_fetcher_with_credentials():

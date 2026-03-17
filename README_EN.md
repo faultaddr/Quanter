@@ -144,7 +144,7 @@ quant backtest run --strategy turtle --symbol 000001.SZ \
 quanttool/
 ├── factors/                    # Factor analysis module
 │   ├── scoring_system.py       # Multi-dimensional scoring system
-│   ├── candlestick_patterns.py # Candlestick pattern recognition
+│   ├── talib_patterns.py       # Candlestick pattern recognition (TA-Lib 61 patterns)
 │   ├── stock_analyzer.py       # Stock comprehensive analysis
 │   └── tech_indicators.py      # Technical indicator calculation
 ├── strategies/                 # Trading strategies module
@@ -169,8 +169,8 @@ quanttool/
 
 ```python
 from quanttool.factors.stock_analyzer import StockAnalyzer
-from quanttool.factors.candlestick_patterns import (
-    CandlestickPatternRecognizer,
+from quanttool.factors.talib_patterns import (
+    TalibPatternRecognizer,
     draw_candlestick_chart,
     draw_pattern_illustration
 )
@@ -180,16 +180,16 @@ analyzer = StockAnalyzer()
 report = analyzer.analyze_stock("000001.SZ", days=360)
 print(report)
 
-# Recognize candlestick patterns
-recognizer = CandlestickPatternRecognizer()
-patterns = recognizer.recognize_all_patterns(df, lookback=5)
+# Recognize candlestick patterns (TA-Lib 61 patterns)
+recognizer = TalibPatternRecognizer()
+patterns = recognizer.recognize_all(df, lookback=5)
 
 # Draw candlestick chart
 chart = draw_candlestick_chart(df, num_candles=10)
 print(chart)
 
 # Get pattern illustration
-illustration = draw_pattern_illustration("Hammer")
+illustration = draw_pattern_illustration("晨星")
 print(illustration)
 ```
 

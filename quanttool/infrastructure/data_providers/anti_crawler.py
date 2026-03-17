@@ -1,21 +1,35 @@
 """
-反爬虫防护模块 v1.0
+反爬虫防护模块 v2.0
 
 核心功能：
 - User-Agent管理
 - 请求头生成
 - 延迟控制
-- 代理管理
+- 代理池管理（支持免费代理和付费代理API）
 - 指数退避重试
+- Cookie会话管理
 
 用于规避AShare爬虫被封的风险
 """
 
 import random
 import time
-from typing import List, Dict, Optional, Callable, Any
+import threading
+import json
+import os
+from typing import List, Dict, Optional, Callable, Any, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from enum import Enum
 import functools
 import logging
+from urllib.parse import urlparse
+
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -406,3 +420,691 @@ def get_tencent_headers() -> Dict[str, str]:
 def get_eastmoney_headers() -> Dict[str, str]:
     """获取东方财富请求头"""
     return HeaderGenerator.generate_eastmoney_headers()
+
+
+# ============================= 代理池管理器 =============================
+
+class ProxyStatus(Enum):
+    """代理状态枚举"""
+    AVAILABLE = "available"
+    IN_USE = "in_use"
+    FAILED = "failed"
+    COOLDOWN = "cooldown"
+
+
+@dataclass
+class ProxyInfo:
+    """代理信息"""
+    host: str
+    port: int
+    protocol: str = "http"  # http, https, socks5
+    username: Optional[str] = None
+    password: Optional[str] = None
+    status: ProxyStatus = ProxyStatus.AVAILABLE
+    fail_count: int = 0
+    success_count: int = 0
+    last_used: Optional[datetime] = None
+    last_failed: Optional[datetime] = None
+    response_time: float = 0.0  # 平均响应时间(秒)
+
+    @property
+    def url(self) -> str:
+        """获取代理URL"""
+        if self.username and self.password:
+            return f"{self.protocol}://{self.username}:{self.password}@{self.host}:{self.port}"
+        return f"{self.protocol}://{self.host}:{self.port}"
+
+    @property
+    def address(self) -> str:
+        """获取代理地址"""
+        return f"{self.host}:{self.port}"
+
+    @property
+    def success_rate(self) -> float:
+        """成功率"""
+        total = self.fail_count + self.success_count
+        if total == 0:
+            return 1.0
+        return self.success_count / total
+
+
+class ProxyPool:
+    """
+    代理池管理器
+
+    功能：
+    - 支持多种代理来源：文件、API、手动添加
+    - 自动健康检查
+    - 智能轮换策略
+    - 失败自动切换
+    - 支持付费代理API（快代理、芝麻代理等）
+    """
+
+    _instance: Optional['ProxyPool'] = None
+    _lock = threading.Lock()
+
+    # 默认配置
+    DEFAULT_CONFIG = {
+        'max_fail_count': 3,          # 最大失败次数
+        'cooldown_minutes': 10,       # 冷却时间(分钟)
+        'check_timeout': 10,          # 健康检查超时(秒)
+        'check_url': 'http://httpbin.org/ip',  # 健康检查URL
+        'min_success_rate': 0.5,      # 最低成功率阈值
+    }
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(
+        self,
+        proxy_file: Optional[str] = None,
+        api_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        config: Optional[Dict] = None
+    ):
+        """
+        初始化代理池
+
+        Args:
+            proxy_file: 代理列表文件路径(每行一个代理，格式: host:port 或 protocol://user:pass@host:port)
+            api_url: 代理API URL（付费代理服务商提供）
+            api_key: 代理API密钥
+            config: 配置字典
+        """
+        if self._initialized:
+            return
+
+        self._proxies: List[ProxyInfo] = []
+        self._current_index = 0
+        self._config = {**self.DEFAULT_CONFIG, **(config or {})}
+        self._api_url = api_url
+        self._api_key = api_key
+        self._last_fetch_time: Optional[datetime] = None
+        self._fetch_interval = timedelta(minutes=5)  # API获取间隔
+
+        # 加载代理
+        if proxy_file:
+            self.load_from_file(proxy_file)
+
+        self._initialized = True
+        logger.info(f"ProxyPool initialized with {len(self._proxies)} proxies")
+
+    # ==================== 代理加载方法 ====================
+
+    def load_from_file(self, filepath: str) -> int:
+        """
+        从文件加载代理列表
+
+        Args:
+            filepath: 文件路径
+
+        Returns:
+            加载的代理数量
+        """
+        if not os.path.exists(filepath):
+            logger.warning(f"Proxy file not found: {filepath}")
+            return 0
+
+        count = 0
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+
+                proxy = self._parse_proxy_line(line)
+                if proxy:
+                    self._proxies.append(proxy)
+                    count += 1
+
+        logger.info(f"Loaded {count} proxies from {filepath}")
+        return count
+
+    def load_from_list(self, proxy_list: List[str]) -> int:
+        """
+        从列表加载代理
+
+        Args:
+            proxy_list: 代理列表，格式如 ["http://1.2.3.4:8080", "socks5://user:pass@5.6.7.8:1080"]
+
+        Returns:
+            加载的代理数量
+        """
+        count = 0
+        for line in proxy_list:
+            proxy = self._parse_proxy_line(line)
+            if proxy:
+                self._proxies.append(proxy)
+                count += 1
+        logger.info(f"Loaded {count} proxies from list")
+        return count
+
+    def add_proxy(
+        self,
+        host: str,
+        port: int,
+        protocol: str = "http",
+        username: Optional[str] = None,
+        password: Optional[str] = None
+    ) -> None:
+        """手动添加单个代理"""
+        proxy = ProxyInfo(
+            host=host,
+            port=port,
+            protocol=protocol,
+            username=username,
+            password=password
+        )
+        self._proxies.append(proxy)
+        logger.info(f"Added proxy: {proxy.address}")
+
+    def _parse_proxy_line(self, line: str) -> Optional[ProxyInfo]:
+        """解析代理行"""
+        try:
+            # 格式1: protocol://user:pass@host:port
+            if '://' in line:
+                parsed = urlparse(line)
+                protocol = parsed.scheme
+                host = parsed.hostname
+                port = parsed.port
+                username = parsed.username
+                password = parsed.password
+            # 格式2: host:port
+            elif ':' in line:
+                parts = line.split(':')
+                host = parts[0]
+                port = int(parts[1])
+                protocol = "http"
+                username = None
+                password = None
+            else:
+                return None
+
+            if not host or not port:
+                return None
+
+            return ProxyInfo(
+                host=host,
+                port=port,
+                protocol=protocol,
+                username=username,
+                password=password
+            )
+        except Exception as e:
+            logger.debug(f"Failed to parse proxy line '{line}': {e}")
+            return None
+
+    # ==================== 代理获取方法 ====================
+
+    def get_proxy(self) -> Optional[ProxyInfo]:
+        """
+        获取一个可用代理
+
+        Returns:
+            ProxyInfo对象，如果没有可用代理返回None
+        """
+        with self._lock:
+            if not self._proxies:
+                # 尝试从API获取
+                if self._api_url:
+                    self._fetch_from_api()
+
+                if not self._proxies:
+                    logger.warning("No proxies available")
+                    return None
+
+            # 过滤可用代理
+            available = [
+                p for p in self._proxies
+                if p.status == ProxyStatus.AVAILABLE
+                and p.fail_count < self._config['max_fail_count']
+            ]
+
+            # 如果没有可用的，尝试恢复冷却中的代理
+            if not available:
+                available = self._recover_cooldown_proxies()
+
+            if not available:
+                logger.warning("All proxies are unavailable or in cooldown")
+                return None
+
+            # 按成功率排序，选择成功率最高的
+            available.sort(key=lambda p: p.success_rate, reverse=True)
+
+            # 使用加权随机选择（成功率高的更容易被选中）
+            proxy = random.choices(
+                available,
+                weights=[p.success_rate + 0.1 for p in available],  # +0.1避免权重为0
+                k=1
+            )[0]
+
+            proxy.status = ProxyStatus.IN_USE
+            proxy.last_used = datetime.now()
+
+            logger.debug(f"Selected proxy: {proxy.address} (success rate: {proxy.success_rate:.2%})")
+            return proxy
+
+    def get_proxy_dict(self) -> Optional[Dict[str, str]]:
+        """
+        获取代理字典格式（requests库使用）
+
+        Returns:
+            {'http': 'http://...', 'https': 'http://...'} 或 None
+        """
+        proxy = self.get_proxy()
+        if not proxy:
+            return None
+
+        proxy_url = proxy.url
+        return {
+            'http': proxy_url,
+            'https': proxy_url
+        }
+
+    def release_proxy(self, proxy: ProxyInfo, success: bool = True) -> None:
+        """
+        释放代理，更新状态
+
+        Args:
+            proxy: 代理对象
+            success: 是否成功
+        """
+        with self._lock:
+            if success:
+                proxy.success_count += 1
+                proxy.status = ProxyStatus.AVAILABLE
+            else:
+                proxy.fail_count += 1
+                proxy.last_failed = datetime.now()
+
+                if proxy.fail_count >= self._config['max_fail_count']:
+                    proxy.status = ProxyStatus.COOLDOWN
+                    logger.warning(f"Proxy {proxy.address} moved to cooldown (fail count: {proxy.fail_count})")
+                else:
+                    proxy.status = ProxyStatus.AVAILABLE
+
+            logger.debug(f"Released proxy {proxy.address}: success={success}, fail_count={proxy.fail_count}")
+
+    # ==================== 代理池管理 ====================
+
+    def _fetch_from_api(self) -> None:
+        """从代理API获取新代理"""
+        if not self._api_url:
+            return
+
+        # 检查获取间隔
+        if self._last_fetch_time and datetime.now() - self._last_fetch_time < self._fetch_interval:
+            return
+
+        try:
+            logger.info("Fetching proxies from API...")
+
+            headers = {}
+            if self._api_key:
+                headers['Authorization'] = f'Bearer {self._api_key}'
+
+            response = requests.get(
+                self._api_url,
+                headers=headers,
+                timeout=10
+            )
+            response.raise_for_status()
+
+            data = response.json()
+
+            # 解析不同API格式
+            proxies = self._parse_api_response(data)
+
+            # 添加到代理池
+            for proxy_info in proxies:
+                # 避免重复
+                if not any(p.address == proxy_info.address for p in self._proxies):
+                    self._proxies.append(proxy_info)
+
+            self._last_fetch_time = datetime.now()
+            logger.info(f"Fetched {len(proxies)} proxies from API")
+
+        except Exception as e:
+            logger.error(f"Failed to fetch proxies from API: {e}")
+
+    def _parse_api_response(self, data: Any) -> List[ProxyInfo]:
+        """
+        解析代理API响应（支持多种格式）
+
+        常见格式：
+        1. 快代理: {"data": {"proxy_list": ["ip:port", ...]}}
+        2. 芝麻代理: {"code": 0, "data": [{"ip": "x.x.x.x", "port": 8080}, ...]}
+        3. 自定义: [{"host": "...", "port": ...}, ...]
+        """
+        proxies = []
+
+        try:
+            # 格式1: 快代理格式
+            if isinstance(data, dict) and 'data' in data:
+                inner = data['data']
+                if isinstance(inner, dict) and 'proxy_list' in inner:
+                    for item in inner['proxy_list']:
+                        proxy = self._parse_proxy_line(item)
+                        if proxy:
+                            proxies.append(proxy)
+
+                # 格式2: 芝麻代理格式
+                elif isinstance(inner, list):
+                    for item in inner:
+                        if isinstance(item, dict):
+                            host = item.get('ip') or item.get('host')
+                            port = item.get('port')
+                            if host and port:
+                                proxies.append(ProxyInfo(
+                                    host=host,
+                                    port=int(port),
+                                    protocol=item.get('protocol', 'http')
+                                ))
+
+            # 格式3: 自定义列表格式
+            elif isinstance(data, list):
+                for item in data:
+                    if isinstance(item, str):
+                        proxy = self._parse_proxy_line(item)
+                        if proxy:
+                            proxies.append(proxy)
+                    elif isinstance(item, dict):
+                        host = item.get('host') or item.get('ip')
+                        port = item.get('port')
+                        if host and port:
+                            proxies.append(ProxyInfo(
+                                host=host,
+                                port=int(port),
+                                protocol=item.get('protocol', 'http'),
+                                username=item.get('username'),
+                                password=item.get('password')
+                            ))
+
+        except Exception as e:
+            logger.error(f"Failed to parse API response: {e}")
+
+        return proxies
+
+    def _recover_cooldown_proxies(self) -> List[ProxyInfo]:
+        """恢复冷却时间已过的代理"""
+        now = datetime.now()
+        cooldown_expired = now - timedelta(minutes=self._config['cooldown_minutes'])
+
+        recovered = []
+        for proxy in self._proxies:
+            if proxy.status == ProxyStatus.COOLDOWN:
+                if proxy.last_failed and proxy.last_failed < cooldown_expired:
+                    proxy.status = ProxyStatus.AVAILABLE
+                    proxy.fail_count = 0  # 重置失败计数
+                    recovered.append(proxy)
+                    logger.info(f"Recovered proxy from cooldown: {proxy.address}")
+
+        return recovered
+
+    def health_check(self) -> Dict[str, int]:
+        """
+        对所有代理进行健康检查
+
+        Returns:
+            检查结果统计
+        """
+        if not REQUESTS_AVAILABLE:
+            logger.warning("requests not available, skipping health check")
+            return {'checked': 0, 'alive': 0, 'dead': 0}
+
+        results = {'checked': 0, 'alive': 0, 'dead': 0}
+
+        logger.info(f"Starting health check for {len(self._proxies)} proxies...")
+
+        for proxy in self._proxies[:]:  # 使用切片创建副本
+            try:
+                start_time = time.time()
+                response = requests.get(
+                    self._config['check_url'],
+                    proxies={'http': proxy.url, 'https': proxy.url},
+                    timeout=self._config['check_timeout']
+                )
+                elapsed = time.time() - start_time
+
+                if response.status_code == 200:
+                    proxy.status = ProxyStatus.AVAILABLE
+                    proxy.response_time = elapsed
+                    results['alive'] += 1
+                    logger.debug(f"Proxy {proxy.address} is alive ({elapsed:.2f}s)")
+                else:
+                    proxy.status = ProxyStatus.FAILED
+                    results['dead'] += 1
+                    logger.debug(f"Proxy {proxy.address} returned status {response.status_code}")
+
+            except Exception as e:
+                proxy.status = ProxyStatus.FAILED
+                results['dead'] += 1
+                logger.debug(f"Proxy {proxy.address} failed: {e}")
+
+            results['checked'] += 1
+
+        logger.info(f"Health check complete: {results['alive']}/{results['checked']} proxies alive")
+        return results
+
+    def remove_dead_proxies(self) -> int:
+        """移除失效的代理"""
+        with self._lock:
+            initial_count = len(self._proxies)
+            self._proxies = [
+                p for p in self._proxies
+                if p.status != ProxyStatus.FAILED
+                or p.fail_count < self._config['max_fail_count']
+            ]
+            removed = initial_count - len(self._proxies)
+            if removed > 0:
+                logger.info(f"Removed {removed} dead proxies")
+            return removed
+
+    # ==================== 统计信息 ====================
+
+    def get_stats(self) -> Dict[str, Any]:
+        """获取代理池统计信息"""
+        status_counts = {}
+        for status in ProxyStatus:
+            count = sum(1 for p in self._proxies if p.status == status)
+            status_counts[status.value] = count
+
+        return {
+            'total': len(self._proxies),
+            'by_status': status_counts,
+            'avg_success_rate': sum(p.success_rate for p in self._proxies) / len(self._proxies) if self._proxies else 0
+        }
+
+    @classmethod
+    def get_instance(cls) -> 'ProxyPool':
+        """获取全局单例"""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    @classmethod
+    def reset(cls) -> None:
+        """重置代理池（测试用）"""
+        with cls._lock:
+            if cls._instance:
+                cls._instance._proxies = []
+                cls._instance._initialized = False
+            cls._instance = None
+
+
+# ============================= 带代理的安全请求函数 =============================
+
+def safe_request_with_proxy(
+    url: str,
+    method: str = 'GET',
+    headers: Optional[Dict[str, str]] = None,
+    timeout: int = 15,
+    use_delay: bool = True,
+    use_proxy: bool = True,
+    max_proxy_retries: int = 3,
+    **kwargs
+) -> Any:
+    """
+    安全的HTTP请求函数，集成反爬虫防护和代理池
+
+    Args:
+        url: 请求URL
+        method: HTTP方法
+        headers: 自定义请求头
+        timeout: 超时时间(秒)
+        use_delay: 是否使用延迟控制
+        use_proxy: 是否使用代理
+        max_proxy_retries: 代理失败时的最大重试次数
+        **kwargs: 传递给requests的其他参数
+
+    Returns:
+        Response对象
+    """
+    if not REQUESTS_AVAILABLE:
+        raise ImportError("requests library is required")
+
+    # 延迟控制
+    if use_delay:
+        delay_controller = DelayController.get_instance()
+        delay_controller.wait()
+
+    # 生成请求头
+    if headers is None:
+        headers = HeaderGenerator.generate_headers()
+
+    proxy_pool = ProxyPool.get_instance() if use_proxy else None
+    current_proxy = None
+    last_exception = None
+
+    # 代理重试循环
+    for attempt in range(max_proxy_retries + 1):
+        try:
+            proxies = None
+            if use_proxy and proxy_pool:
+                current_proxy = proxy_pool.get_proxy()
+                if current_proxy:
+                    proxies = {
+                        'http': current_proxy.url,
+                        'https': current_proxy.url
+                    }
+                    logger.debug(f"Using proxy: {current_proxy.address}")
+
+            # 执行请求
+            if method.upper() == 'GET':
+                response = requests.get(url, headers=headers, timeout=timeout, proxies=proxies, **kwargs)
+            elif method.upper() == 'POST':
+                response = requests.post(url, headers=headers, timeout=timeout, proxies=proxies, **kwargs)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
+            # 检查是否被反爬虫拦截
+            if _is_blocked(response):
+                raise Exception("Blocked by anti-crawler system")
+
+            # 成功，释放代理
+            if current_proxy:
+                proxy_pool.release_proxy(current_proxy, success=True)
+
+            return response
+
+        except Exception as e:
+            last_exception = e
+
+            # 释放失败的代理
+            if current_proxy:
+                proxy_pool.release_proxy(current_proxy, success=False)
+                logger.warning(f"Proxy {current_proxy.address} failed: {e}")
+
+            # 如果不是代理问题或已达到最大重试，抛出异常
+            if attempt >= max_proxy_retries or not use_proxy:
+                logger.error(f"Request failed after {attempt + 1} attempts: {e}")
+                raise last_exception
+
+            # 等待后重试
+            time.sleep(random.uniform(1, 3))
+
+    raise last_exception
+
+
+def _is_blocked(response: Any) -> bool:
+    """
+    检查响应是否被反爬虫系统拦截
+
+    Args:
+        response: requests Response对象
+
+    Returns:
+        是否被拦截
+    """
+    # 检查状态码
+    if response.status_code in [403, 429, 503]:
+        # 检查响应内容
+        content = response.text.lower()
+        block_indicators = [
+            'blocked', 'captcha', 'verify', 'forbidden',
+            'access denied', 'too many requests', 'rate limit',
+            'cloudflare', 'ddos protection'
+        ]
+        if any(indicator in content for indicator in block_indicators):
+            return True
+
+    return False
+
+
+# ============================= 便捷函数 =============================
+
+def get_proxy() -> Optional[ProxyInfo]:
+    """获取一个代理（便捷函数）"""
+    return ProxyPool.get_instance().get_proxy()
+
+
+def get_proxy_dict() -> Optional[Dict[str, str]]:
+    """获取代理字典（便捷函数）"""
+    return ProxyPool.get_instance().get_proxy_dict()
+
+
+def setup_proxy_pool(
+    proxy_file: Optional[str] = None,
+    proxy_list: Optional[List[str]] = None,
+    api_url: Optional[str] = None,
+    api_key: Optional[str] = None
+) -> ProxyPool:
+    """
+    设置代理池（便捷函数）
+
+    Args:
+        proxy_file: 代理文件路径
+        proxy_list: 代理列表
+        api_url: 代理API URL
+        api_key: API密钥
+
+    Returns:
+        ProxyPool实例
+    """
+    pool = ProxyPool.get_instance()
+
+    if proxy_file:
+        pool.load_from_file(proxy_file)
+
+    if proxy_list:
+        pool.load_from_list(proxy_list)
+
+    if api_url:
+        pool._api_url = api_url
+        pool._api_key = api_key
+        pool._fetch_from_api()
+
+    return pool
+
+
+# 免费代理源（示例，实际使用时需要更新）
+FREE_PROXY_SOURCES = {
+    'kuaidaili': 'https://www.kuaidaili.com/api/getproxy/?orderid=xxx&num=100&format=json',
+    'zhima': 'http://webapi.http.zhimacangku.com/getip?num=100&type=2&pro=&city=0&yys=0&port=1&time=1&ts=1&ys=1&cs=1&lb=1&sb=0&pb=4&mr=1&regions=',
+    'ip3366': 'http://www.ip3366.net/api/?key=xxx&num=100&format=json',
+}

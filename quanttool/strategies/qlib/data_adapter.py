@@ -320,8 +320,26 @@ def create_qlib_compatible_dataset(
     valid_end = int(total_len * (train_ratio + valid_ratio))
 
     dates = features.index
-    if not isinstance(dates, pd.DatetimeIndex):
-        dates = pd.to_datetime(dates)
+
+    # 检查索引是否为有效的日期索引
+    has_valid_dates = isinstance(dates, pd.DatetimeIndex)
+    if not has_valid_dates:
+        # 尝试转换，但检查结果是否合理
+        try:
+            converted_dates = pd.to_datetime(dates)
+            # 如果所有日期都是 1970-01-01，说明索引不是日期
+            if converted_dates[0].year == 1970 and converted_dates[-1].year == 1970:
+                has_valid_dates = False
+                # 创建虚拟日期索引（按行号生成日期）
+                dates = pd.date_range(start='2020-01-01', periods=total_len, freq='D')
+                logger.info("输入无有效日期索引，使用虚拟日期范围")
+            else:
+                dates = converted_dates
+                has_valid_dates = True
+        except Exception:
+            # 无法转换为日期，使用虚拟日期
+            dates = pd.date_range(start='2020-01-01', periods=total_len, freq='D')
+            logger.info("无法解析日期索引，使用虚拟日期范围")
 
     segments = {
         'train': (dates[0].strftime('%Y-%m-%d'), dates[train_end - 1].strftime('%Y-%m-%d')),
@@ -330,7 +348,7 @@ def create_qlib_compatible_dataset(
     }
 
     # 尝试使用 Qlib 原生 DatasetH
-    if use_native and QLIB_AVAILABLE:
+    if use_native and QLIB_AVAILABLE and has_valid_dates:
         try:
             return create_qlib_dataset_from_dataframe(
                 features, labels, "stock", train_ratio, valid_ratio

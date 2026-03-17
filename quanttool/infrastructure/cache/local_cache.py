@@ -47,7 +47,7 @@ class LocalDataCache:
         self._lock = threading.Lock()
 
         self._init_db()
-        logger.info(f"LocalDataCache initialized at {self.cache_dir}")
+        logger.debug(f"LocalDataCache initialized at {self.cache_dir}")
 
     def _init_db(self) -> None:
         """Initialize SQLite metadata database."""
@@ -128,7 +128,7 @@ class LocalDataCache:
 
         try:
             df = pd.read_parquet(full_path)
-            logger.info(f"Cache hit for {symbol}: {len(df)} rows")
+            logger.debug(f"Cache hit for {symbol}: {len(df)} rows")
             return df
         except Exception as e:
             logger.error(f"Failed to read cache for {symbol}: {e}")
@@ -169,16 +169,49 @@ class LocalDataCache:
         full_path = self.cache_dir / file_path
 
         try:
+            # 清理无法序列化的列（如 dict, list 类型）
+            data_to_cache = data.copy()
+            cols_to_drop = []
+
+            for col in data_to_cache.columns:
+                # 检查整列中是否有不可序列化的类型
+                try:
+                    # 尝试对列进行 hash 测试
+                    sample = data_to_cache[col].dropna()
+                    if len(sample) > 0:
+                        # 检查所有非空值
+                        for val in sample.values:
+                            if isinstance(val, (dict, list, set)):
+                                cols_to_drop.append(col)
+                                logger.debug(f"Dropping unhashable column '{col}' (contains {type(val).__name__}) from cache data for {symbol}")
+                                break
+                except Exception:
+                    # 如果检查失败，安全起见也删除
+                    cols_to_drop.append(col)
+                    logger.debug(f"Dropping column '{col}' (type check failed) from cache data for {symbol}")
+
+            if cols_to_drop:
+                data_to_cache = data_to_cache.drop(columns=cols_to_drop)
+
+            # 检查是否还有列剩下
+            if data_to_cache.empty or len(data_to_cache.columns) == 0:
+                logger.warning(f"No hashable columns left for {symbol}, skipping cache")
+                return False
+
             # Save data as Parquet (no lock needed for file write)
-            data.to_parquet(full_path, compression='snappy', index=False)
+            data_to_cache.to_parquet(full_path, compression='snappy', index=False)
 
             # Get file size
             size_bytes = full_path.stat().st_size
 
-            # Calculate data hash
-            data_hash = hashlib.md5(
-                pd.util.hash_pandas_object(data).values.tobytes()
-            ).hexdigest()
+            # Calculate data hash with error handling
+            try:
+                data_hash = hashlib.md5(
+                    pd.util.hash_pandas_object(data_to_cache).values.tobytes()
+                ).hexdigest()
+            except Exception as hash_err:
+                logger.debug(f"Could not compute hash for {symbol}: {hash_err}")
+                data_hash = "no_hash"
 
             # Update metadata with lock
             now = datetime.now()
@@ -191,11 +224,11 @@ class LocalDataCache:
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     key, file_path, now.isoformat(), expires_at.isoformat(),
-                    data_hash, len(data), size_bytes
+                    data_hash, len(data_to_cache), size_bytes
                 ))
                 self.conn.commit()
 
-            logger.info(f"Cached {len(data)} rows for {symbol} ({size_bytes} bytes)")
+            logger.debug(f"Cached {len(data_to_cache)} rows for {symbol} ({size_bytes} bytes)")
             return True
 
         except Exception as e:
@@ -250,7 +283,7 @@ class LocalDataCache:
 
             self.conn.commit()
             if count > 0:
-                logger.info(f"Cleared {count} expired cache entries")
+                logger.debug(f"Cleared {count} expired cache entries")
 
             return count
 
@@ -270,7 +303,7 @@ class LocalDataCache:
             self.conn.execute("DELETE FROM cache_meta")
             self.conn.commit()
 
-            logger.info(f"Cleared all cache: {count} files")
+            logger.debug(f"Cleared all cache: {count} files")
             return count
 
     def get_stats(self) -> Dict[str, Any]:
@@ -320,7 +353,7 @@ class LocalDataCache:
         """Close the database connection."""
         if self.conn:
             self.conn.close()
-            logger.info("LocalDataCache connection closed")
+            logger.debug("LocalDataCache connection closed")
 
     def __enter__(self):
         return self
