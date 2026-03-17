@@ -92,6 +92,12 @@ class Position(BaseModel):
     realized_pnl: float = 0.0
     # T+1 规则支持：记录可卖日期（A股当天买入次日才可卖）
     sellable_date: Optional[datetime] = None  # 可以卖出的日期
+    # 止损止盈支持
+    stop_loss_price: Optional[float] = None  # 止损价格
+    take_profit_price: Optional[float] = None  # 止盈价格
+    trailing_stop_enabled: bool = False  # 是否启用移动止损
+    trailing_stop_percent: float = 0.0  # 移动止损比例
+    highest_price_since_entry: Optional[float] = None  # 入场后最高价（用于移动止损）
 
 
 class Portfolio(BaseModel):

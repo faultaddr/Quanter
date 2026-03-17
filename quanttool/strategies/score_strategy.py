@@ -189,6 +189,9 @@ class ScoreStrategy(IStrategy):
 
             # 计算止损位
             stop_loss = None
+            take_profit = None
+            risk_reward_ratio = 2.0  # 默认盈亏比 2:1
+
             if direction == 'buy' and self.use_risk_control and self.risk_controller is not None:
                 try:
                     stop_result = self.risk_controller.calculate_dynamic_stop_loss(
@@ -197,6 +200,11 @@ class ScoreStrategy(IStrategy):
                         signal_strength=final_score / 100
                     )
                     stop_loss = stop_result.stop_price
+
+                    # 计算止盈价格（基于盈亏比）
+                    if stop_loss:
+                        risk = current_bar['close'] - stop_loss
+                        take_profit = current_bar['close'] + risk * risk_reward_ratio
                 except Exception:
                     pass
 
@@ -206,6 +214,7 @@ class ScoreStrategy(IStrategy):
                 'score': final_score,
                 'last_score': last_score,
                 'stop_loss': stop_loss,
+                'take_profit': take_profit,
                 'strategy_name': 'ScoreStrategy',
                 'timestamp': current_bar.get('timestamp', datetime.now())
             }

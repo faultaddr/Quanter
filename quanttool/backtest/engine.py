@@ -24,6 +24,10 @@ class BacktestEngine:
         self.max_position_size = 0.1
         self.max_positions = 10
         self.enable_t_plus_1 = True  # A股 T+1 规则开关
+        self.enable_stop_loss = True  # 启用止损
+        self.enable_take_profit = True  # 启用止盈
+        self.enable_trailing_stop = False  # 启用移动止损（默认关闭）
+        self.trailing_stop_percent = 0.05  # 移动止损比例（5%）
 
         # Runtime state
         self.current_portfolio = None
@@ -31,6 +35,9 @@ class BacktestEngine:
         self.orders = []
         self.positions = {}
         self.equity_curve = []
+        # 止损止盈统计
+        self.stop_loss_triggers = 0  # 止损触发次数
+        self.take_profit_triggers = 0  # 止盈触发次数
 
     def set_initial_cash(self, cash: float):
         """Set initial cash for backtest."""
@@ -113,6 +120,8 @@ class BacktestEngine:
         self.positions = {}
         self.equity_curve = []
         self.latest_market_prices = {}  # Track latest market prices for each symbol
+        self.stop_loss_triggers = 0  # 止损触发次数
+        self.take_profit_triggers = 0  # 止盈触发次数
 
         # Process each timestamp in chronological order
         for timestamp in all_timestamps:
@@ -130,44 +139,32 @@ class BacktestEngine:
                     # Update latest market price for this symbol
                     self.latest_market_prices[symbol] = current_bar["close"]
 
-                    # Get historical data up to this point for the strategy
-                    hist_data = df[df["timestamp"] <= timestamp].copy()
+                    # 先检查止损止盈（在处理策略信号之前）
+                    if symbol in self.positions:
+                        self._check_stop_loss_take_profit(
+                            symbol, current_bar, timestamp
+                        )
 
-                    # Get signal from strategy
-                    signal = strategy.get_signal(current_bar, hist_data)
+                    # 如果持仓已被止损止盈平掉，跳过策略信号处理
+                    if symbol not in self.positions:
+                        # Get historical data up to this point for the strategy
+                        hist_data = df[df["timestamp"] <= timestamp].copy()
 
-                    if signal and signal.get("direction"):
-                        # Execute the signal at the next bar's close (next_close execution model)
-                        next_timestamp = get_next_trading_bar_timestamp(timestamp)
+                        # Get signal from strategy
+                        signal = strategy.get_signal(current_bar, hist_data)
 
-                        # Find the next available bar for this symbol
-                        # Convert next_timestamp to the same timezone-naive format as the dataframe
-                        if hasattr(next_timestamp, 'tz') and next_timestamp.tz is not None:
-                            # Convert timezone-aware timestamp to naive but keep the same time
-                            next_timestamp_naive = next_timestamp.replace(tzinfo=None)
-                        else:
-                            next_timestamp_naive = next_timestamp
+                        if signal and signal.get("direction"):
+                            self._process_strategy_signal(
+                                symbol, signal, df, timestamp, current_bar
+                            )
+                    else:
+                        # 已有持仓，仍然检查策略卖出信号
+                        hist_data = df[df["timestamp"] <= timestamp].copy()
+                        signal = strategy.get_signal(current_bar, hist_data)
 
-                        next_bar_data = df[df["timestamp"] >= next_timestamp_naive]
-                        if not next_bar_data.empty:
-                            execution_bar = next_bar_data.iloc[
-                                0
-                            ]  # First bar at or after next_timestamp
-                            execution_price = execution_bar["close"]
-
-                            # Apply slippage
-                            if signal["direction"] == "buy":
-                                execution_price *= 1 + self.slippage_rate
-                            else:  # sell
-                                execution_price *= 1 - self.slippage_rate
-
-                            # Execute the order
-                            self._execute_signal(
-                                symbol,
-                                signal,
-                                execution_price,
-                                timestamp,
-                                execution_bar["timestamp"],
+                        if signal and signal.get("direction") == "sell":
+                            self._process_strategy_signal(
+                                symbol, signal, df, timestamp, current_bar
                             )
 
             # Record portfolio value at this timestamp
@@ -259,6 +256,11 @@ class BacktestEngine:
                         # Create new position with T+1 restriction
                         from datetime import timedelta
                         sellable_date = self._get_next_trading_day(exec_time) if self.enable_t_plus_1 else exec_time
+
+                        # 获取止损止盈价格
+                        stop_loss_price = signal.get("stop_loss")
+                        take_profit_price = signal.get("take_profit")
+
                         pos = Position(
                             symbol=symbol,
                             side="long",
@@ -266,6 +268,11 @@ class BacktestEngine:
                             avg_price=price,
                             timestamp=exec_time,
                             sellable_date=sellable_date,
+                            stop_loss_price=stop_loss_price,
+                            take_profit_price=take_profit_price,
+                            trailing_stop_enabled=self.enable_trailing_stop,
+                            trailing_stop_percent=self.trailing_stop_percent,
+                            highest_price_since_entry=price,  # 初始最高价为入场价
                         )
                         self.positions[symbol] = pos
                         self.current_portfolio.positions.append(pos)
@@ -349,6 +356,162 @@ class BacktestEngine:
                     pnl=pnl,
                 )
                 self.trades.append(trade)
+
+    def _process_strategy_signal(
+        self,
+        symbol: str,
+        signal: Dict[str, Any],
+        df: pd.DataFrame,
+        timestamp: datetime,
+        current_bar: pd.Series,
+    ):
+        """处理策略信号，包含执行延迟逻辑"""
+        if not signal or not signal.get("direction"):
+            return
+
+        # Execute the signal at the next bar's close (next_close execution model)
+        next_timestamp = get_next_trading_bar_timestamp(timestamp)
+
+        # Convert next_timestamp to the same timezone-naive format as the dataframe
+        if hasattr(next_timestamp, 'tz') and next_timestamp.tz is not None:
+            next_timestamp_naive = next_timestamp.replace(tzinfo=None)
+        else:
+            next_timestamp_naive = next_timestamp
+
+        next_bar_data = df[df["timestamp"] >= next_timestamp_naive]
+        if not next_bar_data.empty:
+            execution_bar = next_bar_data.iloc[0]
+            execution_price = execution_bar["close"]
+
+            # Apply slippage
+            if signal["direction"] == "buy":
+                execution_price *= 1 + self.slippage_rate
+            else:  # sell
+                execution_price *= 1 - self.slippage_rate
+
+            # Execute the order
+            self._execute_signal(
+                symbol,
+                signal,
+                execution_price,
+                timestamp,
+                execution_bar["timestamp"],
+            )
+
+    def _check_stop_loss_take_profit(
+        self,
+        symbol: str,
+        current_bar: pd.Series,
+        timestamp: datetime,
+    ):
+        """
+        检查止损止盈条件
+
+        在每根K线检查持仓是否触发止损或止盈
+        """
+        if symbol not in self.positions:
+            return
+
+        pos = self.positions[symbol]
+        current_price = current_bar["close"]
+        current_low = current_bar["low"]
+        current_high = current_bar["high"]
+
+        # T+1 检查：当天买入的股票不能卖出
+        if self.enable_t_plus_1 and pos.sellable_date is not None:
+            if timestamp < pos.sellable_date:
+                return
+
+        # 更新最高价（用于移动止损）
+        if pos.trailing_stop_enabled and pos.highest_price_since_entry:
+            if current_high > pos.highest_price_since_entry:
+                pos.highest_price_since_entry = current_high
+                # 更新移动止损价
+                new_stop = current_high * (1 - pos.trailing_stop_percent)
+                if pos.stop_loss_price is None or new_stop > pos.stop_loss_price:
+                    pos.stop_loss_price = new_stop
+
+        # 检查止损（使用当日最低价判断是否触发）
+        if self.enable_stop_loss and pos.stop_loss_price is not None:
+            if current_low <= pos.stop_loss_price:
+                # 触发止损，使用止损价执行卖出
+                self._execute_stop_loss_take_profit(
+                    symbol, pos, pos.stop_loss_price, timestamp, "stop_loss"
+                )
+                self.stop_loss_triggers += 1
+                logger.info(f"[{timestamp}] {symbol} 触发止损 @ {pos.stop_loss_price:.2f}")
+                return
+
+        # 检查止盈（使用当日最高价判断是否触发）
+        if self.enable_take_profit and pos.take_profit_price is not None:
+            if current_high >= pos.take_profit_price:
+                # 触发止盈，使用止盈价执行卖出
+                self._execute_stop_loss_take_profit(
+                    symbol, pos, pos.take_profit_price, timestamp, "take_profit"
+                )
+                self.take_profit_triggers += 1
+                logger.info(f"[{timestamp}] {symbol} 触发止盈 @ {pos.take_profit_price:.2f}")
+                return
+
+    def _execute_stop_loss_take_profit(
+        self,
+        symbol: str,
+        pos: Position,
+        execution_price: float,
+        timestamp: datetime,
+        reason: str,
+    ):
+        """执行止损或止盈卖出"""
+        sell_quantity = pos.quantity
+
+        # Apply slippage for sell
+        execution_price *= 1 - self.slippage_rate
+
+        # Place sell order
+        order = Order(
+            id=f"order_{len(self.orders)+1}",
+            symbol=symbol,
+            side="sell",
+            order_type="market",
+            quantity=sell_quantity,
+            price=execution_price,
+            timestamp=timestamp,
+            parent_strategy=f"{reason}_trigger",
+        )
+        self.orders.append(order)
+
+        # Execute the trade
+        gross_proceeds = sell_quantity * execution_price
+        commission = max(
+            self.min_commission, sell_quantity * execution_price * self.commission_rate
+        )
+        net_proceeds = gross_proceeds - commission
+
+        # Update portfolio
+        self.current_portfolio.cash += net_proceeds
+
+        # Calculate PnL
+        cost_basis = sell_quantity * pos.avg_price
+        pnl = gross_proceeds - cost_basis - commission
+
+        # Record the trade
+        trade = Trade(
+            id=f"trade_{len(self.trades)+1}",
+            symbol=symbol,
+            side="sell",
+            quantity=sell_quantity,
+            price=execution_price,
+            timestamp=timestamp,
+            fee=commission,
+            pnl=pnl,
+        )
+        self.trades.append(trade)
+
+        # Close position
+        self.current_portfolio.positions = [
+            p for p in self.current_portfolio.positions if p.symbol != symbol
+        ]
+        del self.positions[symbol]
 
     def _calculate_portfolio_value(self, timestamp: datetime) -> float:
         """Calculate total portfolio value at a given timestamp."""
@@ -549,6 +712,16 @@ class BacktestEngine:
                 name="avg_loss_trade",
                 value=gross_loss / len(losing_trades) if losing_trades else 0,
                 description="Average loss per losing trade",
+            ),
+            Metric(
+                name="stop_loss_triggers",
+                value=self.stop_loss_triggers if hasattr(self, 'stop_loss_triggers') else 0,
+                description="Number of stop loss triggers",
+            ),
+            Metric(
+                name="take_profit_triggers",
+                value=self.take_profit_triggers if hasattr(self, 'take_profit_triggers') else 0,
+                description="Number of take profit triggers",
             ),
         ]
 
