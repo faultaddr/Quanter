@@ -356,7 +356,8 @@ class IncrementalDataManager:
         symbol: str,
         start_date: datetime,
         end_date: datetime,
-        cached_range: Optional[DataRange]
+        cached_range: Optional[DataRange],
+        min_coverage_threshold: float = 0.95
     ) -> List[Tuple[datetime, datetime]]:
         """
         计算需要拉取的日期范围
@@ -366,11 +367,20 @@ class IncrementalDataManager:
         2. 缓存完全覆盖：无需拉取
         3. 缓存部分覆盖：拉取缺失的前段和/或后段
         4. 缓存过期：只拉取增量部分
+        5. 缓存覆盖率高于阈值：跳过拉取（避免频繁请求小范围数据）
 
         注意：
         - 只比较日期部分，忽略时间
         - 如果缓存的最新日期是今天或昨天，不拉取后段（今天数据可能还没有）
         - 先判断是否包含交易日，不包含则跳过拉取
+        - 如果缓存覆盖率 >= min_coverage_threshold，直接返回空列表
+
+        Args:
+            symbol: 股票代码
+            start_date: 请求开始日期
+            end_date: 请求结束日期
+            cached_range: 缓存数据范围
+            min_coverage_threshold: 最小覆盖率阈值（默认 95%），超过此阈值不拉取
 
         Returns:
             List of (start_date, end_date) tuples
@@ -391,6 +401,21 @@ class IncrementalDataManager:
         # 获取缓存的日期范围（只取日期部分）
         earliest = cached_range.earliest_date.date() if hasattr(cached_range.earliest_date, 'date') else cached_range.earliest_date
         latest = cached_range.latest_date.date() if hasattr(cached_range.latest_date, 'date') else cached_range.latest_date
+
+        # 计算缓存覆盖率
+        request_days = (end_date_day - start_date_day).days + 1
+        overlap_start = max(start_date_day, earliest)
+        overlap_end = min(end_date_day, latest)
+        if overlap_start <= overlap_end:
+            covered_days = (overlap_end - overlap_start).days + 1
+            coverage = covered_days / request_days if request_days > 0 else 1.0
+        else:
+            coverage = 0.0
+
+        # 如果覆盖率足够高，跳过拉取
+        if coverage >= min_coverage_threshold:
+            logger.debug(f"[{symbol}] 缓存覆盖率 {coverage:.1%} >= {min_coverage_threshold:.0%}，跳过增量拉取")
+            return []
 
         # 需要前段数据？
         if start_date_day < earliest:

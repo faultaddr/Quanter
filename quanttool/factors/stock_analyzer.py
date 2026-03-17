@@ -113,7 +113,37 @@ class StockAnalyzer:
 
         # 使用增量数据管理器
         if self._incremental_manager and not force_refresh:
-            print(f"⏳ 增量获取 {normalized_symbol} 数据 ({start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')})...")
+            # 先检查缓存状态
+            cached_range = self._incremental_manager._get_data_range(normalized_symbol, DataType.STOCK_BAR)
+
+            if cached_range:
+                # 计算缓存覆盖率（与增量管理器保持一致的计算方式）
+                from datetime import date
+                start_date_day = start_date.date() if hasattr(start_date, 'date') else start_date
+                end_date_day = end_date.date() if hasattr(end_date, 'date') else end_date
+                earliest = cached_range.earliest_date.date() if hasattr(cached_range.earliest_date, 'date') else cached_range.earliest_date
+                latest = cached_range.latest_date.date() if hasattr(cached_range.latest_date, 'date') else cached_range.latest_date
+
+                request_days = (end_date_day - start_date_day).days + 1
+                overlap_start = max(start_date_day, earliest)
+                overlap_end = min(end_date_day, latest)
+
+                if overlap_start <= overlap_end:
+                    covered_days = (overlap_end - overlap_start).days + 1
+                    coverage = covered_days / request_days if request_days > 0 else 1.0
+                else:
+                    coverage = 0.0
+
+                # 使用与增量管理器相同的阈值
+                MIN_COVERAGE_THRESHOLD = 0.95
+
+                if coverage >= MIN_COVERAGE_THRESHOLD:
+                    print(f"✅ 从缓存获取 {normalized_symbol} ({cached_range.row_count} 条)")
+                else:
+                    print(f"⏳ 增量获取 {normalized_symbol} (缓存覆盖 {coverage:.0%})")
+            else:
+                print(f"⏳ 首次获取 {normalized_symbol} 数据...")
+
             try:
                 df = self._incremental_manager.get_data(
                     normalized_symbol,
