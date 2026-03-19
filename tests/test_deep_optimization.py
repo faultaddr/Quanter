@@ -3,6 +3,8 @@
 深度参数优化
 
 使用网格搜索找出最优参数组合
+
+注意：此文件是独立脚本，非单元测试文件
 """
 import sys
 import os
@@ -12,6 +14,10 @@ import time
 import warnings
 import itertools
 warnings.filterwarnings('ignore')
+
+# 标记为非测试文件，让 pytest 跳过
+import pytest
+pytestmark = pytest.mark.skip(reason="This is a standalone script, not a test file")
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
