@@ -12,15 +12,17 @@ from quanttool.infrastructure.stores.parquet_store import ParquetStore
 from quanttool.infrastructure.stores.meta_db import MetaDB
 
 
+# Module-level fixture for all test classes
+@pytest.fixture
+def temp_dir():
+    """Create a temporary directory."""
+    temp_path = tempfile.mkdtemp()
+    yield temp_path
+    shutil.rmtree(temp_path)
+
+
 class TestParquetStore:
     """Test cases for ParquetStore."""
-
-    @pytest.fixture
-    def temp_dir(self):
-        """Create a temporary directory."""
-        temp_path = tempfile.mkdtemp()
-        yield temp_path
-        shutil.rmtree(temp_path)
 
     @pytest.fixture
     def store(self, temp_dir):

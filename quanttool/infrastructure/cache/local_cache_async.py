@@ -109,8 +109,15 @@ class AsyncLocalDataCache:
                 logger.debug(f"Cache miss for {symbol}")
                 return None
 
-            # Check expiration
-            if datetime.now() > row["expires_at"]:
+            # Check expiration (use timezone-aware datetime)
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+            expires_at = row["expires_at"]
+            # Ensure both are timezone-aware for comparison
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+            if now > expires_at:
                 logger.debug(f"Cache expired for {symbol}")
                 await self._delete_unlocked(conn, key)
                 return None
@@ -159,6 +166,14 @@ class AsyncLocalDataCache:
 
         key = self._generate_key(symbol, start_date, end_date, timeframe)
         ttl = ttl or self.default_ttl
+
+        # Convert string dates to date objects for PostgreSQL
+        if isinstance(start_date, str):
+            from datetime import datetime as dt
+            start_date = dt.strptime(start_date, "%Y-%m-%d").date()
+        if isinstance(end_date, str):
+            from datetime import datetime as dt
+            end_date = dt.strptime(end_date, "%Y-%m-%d").date()
 
         # Generate file path
         file_path = f"{key}.parquet"

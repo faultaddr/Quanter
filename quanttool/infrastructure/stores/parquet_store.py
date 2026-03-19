@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+import pyarrow as pa
 import pyarrow.parquet as pq
 from ...domain.interfaces.store import IStore
 from ...core.errors import DataProviderError
@@ -70,7 +71,7 @@ class ParquetStore(IStore):
             file_path = self.data_dir / f"{safe_key}.parquet"
 
             # Add metadata to the table as key-value pairs
-            table = pq.Table.from_pandas(data)
+            table = pa.Table.from_pandas(data)
 
             # If we have metadata, attach it to the schema
             if metadata:
