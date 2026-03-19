@@ -10,7 +10,7 @@ interface MetricsGridProps {
 }
 
 export default function MetricsGrid({ metrics, excessReturn }: MetricsGridProps) {
-  const profitRatio = metrics.profit_factor ?? metrics.profit_loss_ratio ?? 0;
+  const profitRatio = metrics.profit_factor ?? 0;
   const profitTrades = metrics.profit_trades ?? Math.floor(metrics.total_trades * metrics.win_rate);
 
   const metricItems = [

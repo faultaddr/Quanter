@@ -303,16 +303,16 @@ class DelayController:
 # ============================= 重试装饰器 =============================
 
 def retry_on_failure(
-    max_retries: int = 3,
-    base_delay: float = 1.0,
-    max_delay: float = 60.0,
+    max_retries: int = 1,  # Reduced from 3 to minimize latency
+    base_delay: float = 0.5,  # Reduced from 1.0 for faster retry
+    max_delay: float = 10.0,  # Reduced from 60.0
     exceptions: tuple = (Exception,)
 ) -> Callable:
     """
     失败时指数退避重试装饰器
 
     Args:
-        max_retries: 最大重试次数
+        max_retries: 最大重试次数（默认1次以降低延迟）
         base_delay: 基础延迟（秒）
         max_delay: 最大延迟（秒）
         exceptions: 需要重试的异常类型

@@ -14,6 +14,8 @@ import numpy as np
 import json
 import threading
 import queue
+import time
+from functools import lru_cache
 from ..schemas.experiment import ExperimentRunSchema
 from quanttool.application.backtest_service import BacktestService
 from quanttool.application.factor_service import FactorService
@@ -27,6 +29,29 @@ logger = get_logger(__name__)
 
 
 router = APIRouter()
+
+# ==================== 缓存配置 ====================
+# 简单的内存缓存，用于减少重复请求的延迟
+_analysis_cache: Dict[str, tuple] = {}  # {cache_key: (data, timestamp)}
+_analysis_cache_ttl = 60  # 缓存60秒
+
+def _get_cached_analysis(cache_key: str) -> Optional[Dict]:
+    """从缓存获取分析结果"""
+    if cache_key in _analysis_cache:
+        data, timestamp = _analysis_cache[cache_key]
+        if time.time() - timestamp < _analysis_cache_ttl:
+            return data
+    return None
+
+def _set_cached_analysis(cache_key: str, data: Dict) -> None:
+    """设置分析结果缓存"""
+    _analysis_cache[cache_key] = (data, time.time())
+    # 清理过期缓存
+    current_time = time.time()
+    expired_keys = [k for k, (_, t) in _analysis_cache.items()
+                    if current_time - t > _analysis_cache_ttl * 2]
+    for k in expired_keys:
+        del _analysis_cache[k]
 
 
 def to_python_types(obj: Any) -> Any:
@@ -781,6 +806,12 @@ async def get_stock_kline(symbol: str, days: int = 60) -> Dict[str, Any]:
     Returns:
         K线数据和指标数据
     """
+    # 检查缓存
+    cache_key = f"kline_{symbol}_{days}"
+    cached = _get_cached_analysis(cache_key)
+    if cached:
+        return cached
+
     try:
         from quanttool.factors.stock_analyzer import StockAnalyzer
 
@@ -875,7 +906,7 @@ async def get_stock_kline(symbol: str, days: int = 60) -> Dict[str, Any]:
         change = current_price - float(prev_close) if prev_close else 0
         change_pct = (change / float(prev_close) * 100) if prev_close else 0
 
-        return {
+        result = {
             "symbol": symbol,
             "days": days,
             "kline": kline_data,
@@ -894,6 +925,10 @@ async def get_stock_kline(symbol: str, days: int = 60) -> Dict[str, Any]:
                 "prev_close": round(float(prev_close), 2) if prev_close else 0
             }
         }
+
+        # 缓存结果
+        _set_cached_analysis(cache_key, result)
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -1002,6 +1037,12 @@ async def get_technical_signals(symbol: str, days: int = 60) -> Dict[str, Any]:
     Returns:
         技术指标异动信号列表，包含时间戳用于图表标记
     """
+    # 检查缓存
+    cache_key = f"signals_{symbol}_{days}"
+    cached = _get_cached_analysis(cache_key)
+    if cached:
+        return cached
+
     try:
         from quanttool.factors.stock_analyzer import StockAnalyzer
 
@@ -1289,7 +1330,7 @@ async def get_technical_signals(symbol: str, days: int = 60) -> Dict[str, Any]:
                     "time": latest_ts
                 })
 
-        return {
+        result = {
             "symbol": symbol,
             "signals": signals,
             "markers": markers,  # K线图标记
@@ -1299,6 +1340,10 @@ async def get_technical_signals(symbol: str, days: int = 60) -> Dict[str, Any]:
             "latest_price": float(latest.get('close', 0)),
             "latest_change": float(latest.get('close', 0) - prev.get('close', 0)) if prev.get('close') else 0
         }
+
+        # 缓存结果
+        _set_cached_analysis(cache_key, result)
+        return result
 
     except HTTPException:
         raise
@@ -1315,6 +1360,12 @@ async def get_stock_analysis(symbol: str, days: int = 120) -> Dict[str, Any]:
 
     一次性返回 K线、筹码、信号等所有分析数据
     """
+    # 检查缓存
+    cache_key = f"analysis_{symbol}_{days}"
+    cached = _get_cached_analysis(cache_key)
+    if cached:
+        return cached
+
     try:
         from quanttool.factors.stock_analyzer import StockAnalyzer
 
@@ -1425,7 +1476,7 @@ async def get_stock_analysis(symbol: str, days: int = 120) -> Dict[str, Any]:
             elif rsi > 70:
                 signals.append({"name": "RSI超买", "type": "sell", "description": f"RSI={rsi:.1f}，超买区间"})
 
-        return {
+        result = {
             "symbol": symbol,
             "name": name,
             "kline": kline,
@@ -1435,6 +1486,10 @@ async def get_stock_analysis(symbol: str, days: int = 120) -> Dict[str, Any]:
             "latest_price": float(latest.get('close', 0)),
             "latest_change_pct": float(latest.get('pct_chg', 0)),
         }
+
+        # 缓存结果
+        _set_cached_analysis(cache_key, result)
+        return result
 
     except HTTPException:
         raise
@@ -4186,13 +4241,44 @@ async def list_factors() -> List[str]:
 # 监控服务管理器（全局状态）
 _monitor_services: Dict[str, Any] = {}
 
+# 熔断器状态：记录失败的服务和失败时间
+_circuit_breaker: Dict[str, float] = {}
+_CIRCUIT_BREAKER_TIMEOUT = 300  # 5 分钟熔断时间
+
+
+def _is_circuit_open(service_name: str) -> bool:
+    """检查熔断器是否打开（服务是否应该被跳过）"""
+    if service_name in _circuit_breaker:
+        failure_time = _circuit_breaker[service_name]
+        if time.time() - failure_time < _CIRCUIT_BREAKER_TIMEOUT:
+            return True
+        else:
+            # 熔断时间已过，重置
+            del _circuit_breaker[service_name]
+    return False
+
+
+def _record_failure(service_name: str):
+    """记录服务失败"""
+    _circuit_breaker[service_name] = time.time()
+    logger.warning(f"Circuit breaker opened for {service_name}")
+
 
 def get_minute_provider():
     """获取 AkShare 分钟数据提供者（延迟初始化）- 保留用于向后兼容"""
     from ...infrastructure.data_providers.akshare_minute_provider import AkShareMinuteProvider
+
+    # 检查熔断器
+    if _is_circuit_open("akshare_minute"):
+        raise RuntimeError("AkShare minute provider is circuit-broken")
+
     if not hasattr(get_minute_provider, "_instance"):
-        get_minute_provider._instance = AkShareMinuteProvider()
-        get_minute_provider._instance.initialize()
+        try:
+            get_minute_provider._instance = AkShareMinuteProvider()
+            get_minute_provider._instance.initialize()
+        except Exception as e:
+            _record_failure("akshare_minute")
+            raise
     return get_minute_provider._instance
 
 
@@ -4433,6 +4519,15 @@ async def search_stocks(query: str = "", limit: int = 20) -> List[Dict[str, Any]
     if not query:
         return []
 
+    # 检查缓存
+    cache_key = f"search_{query}_{limit}"
+    cached = _get_cached_analysis(cache_key)
+    if cached:
+        logger.info(f"Search cache hit for {cache_key}")
+        return cached
+
+    logger.info(f"Search cache miss for {cache_key}")
+
     try:
         provider = get_minute_provider()
         results = provider.search_symbols(query)
@@ -4446,6 +4541,8 @@ async def search_stocks(query: str = "", limit: int = 20) -> List[Dict[str, Any]
                 "price": float(item.get("price", 0))
             })
 
+        # 缓存结果
+        _set_cached_analysis(cache_key, formatted)
         return formatted
     except Exception as e:
         logger.warning(f"AkShare search failed: {e}, using fallback")
@@ -4485,6 +4582,8 @@ async def search_stocks(query: str = "", limit: int = 20) -> List[Dict[str, Any]
                     "price": 0
                 })
 
+        # 缓存结果
+        _set_cached_analysis(cache_key, results[:limit])
         return results[:limit]
 
 

@@ -1,4 +1,5 @@
 // API 响应类型定义
+import type { Signal } from './stock';
 
 export interface ApiResponse<T> {
   success: boolean;
@@ -41,5 +42,3 @@ export interface ScanResult {
   signals: Signal[];
   score?: number;
 }
-
-export type { Signal } from './stock';

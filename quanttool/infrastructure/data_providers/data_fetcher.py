@@ -710,8 +710,8 @@ class EnhancedDataFetcher(IDataProvider):
 
             logger.debug(f"Fetching {symbol} from AkShare using base symbol {base_symbol}")
 
-            # Use AkShare's stock_zh_a_hist interface with retry
-            max_retries = 3
+            # Use AkShare's stock_zh_a_hist interface with minimal retry for speed
+            max_retries = 1  # Reduced from 3 to minimize latency
             df = pd.DataFrame()
             last_error = None
 

@@ -33,7 +33,7 @@ export default function MonitorPage() {
 
   // WebSocket connection
   const { isConnected } = useWebSocket(
-    process.env.NODE_ENV === 'production'
+    typeof window !== 'undefined' && process.env.NODE_ENV === 'production'
       ? `wss://${window.location.host}/ws`
       : 'ws://localhost:8000/ws',
     {

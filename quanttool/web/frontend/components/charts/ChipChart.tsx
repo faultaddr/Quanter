@@ -77,7 +77,7 @@ export default function ChipChart({ data, currentPrice, height = 300 }: ChipChar
         axisLine: { lineStyle: { color: '#334155' } },
         axisLabel: {
           color: '#94A3B8',
-          formatter: (value: number) => value.toFixed(2),
+          formatter: (value: string | number) => Number(value).toFixed(2),
         },
         splitLine: { show: false },
         inverse: true,

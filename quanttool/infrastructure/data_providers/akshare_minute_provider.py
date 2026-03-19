@@ -89,6 +89,12 @@ class AkShareMinuteProvider(IDataProvider):
         # 延迟控制器
         self._delay_controller = DelayController(min_delay=min_delay, max_delay=max_delay)
 
+        # 股票列表缓存 (用于快速搜索)
+        # 缓存 1 小时，因为股票列表变化不频繁
+        self._stock_list_cache: Optional[pd.DataFrame] = None
+        self._stock_list_timestamp: float = 0
+        self._stock_list_ttl: int = 3600  # 1 小时
+
     def initialize(self) -> None:
         """初始化数据提供者"""
         if self._initialized:
@@ -456,22 +462,50 @@ class AkShareMinuteProvider(IDataProvider):
 
         return []
 
-    def search_symbols(self, query: str) -> List[Dict[str, Any]]:
-        """搜索股票（带反爬虫防护）"""
-        if not self._initialized:
-            self.initialize()
+    def _get_stock_list(self) -> Optional[pd.DataFrame]:
+        """获取股票列表（带缓存）"""
+        now = time.time()
 
+        # 如果缓存有效，直接返回
+        if self._stock_list_cache is not None and (now - self._stock_list_timestamp) < self._stock_list_ttl:
+            logger.debug("Using cached stock list for search")
+            return self._stock_list_cache
+
+        # 缓存过期或不存在，重新获取
         try:
             # 延迟控制
             self._delay_controller.wait()
 
+            logger.info("Fetching fresh stock list from AkShare...")
             df = ak.stock_zh_a_spot_em()
+            if df is not None and not df.empty:
+                self._stock_list_cache = df
+                self._stock_list_timestamp = now
+                logger.info(f"Cached {len(df)} stocks for search")
+                return df
+        except Exception as e:
+            logger.error(f"Failed to fetch stock list: {e}")
+            # 如果有旧缓存，即使过期也继续使用
+            if self._stock_list_cache is not None:
+                logger.warning("Using stale stock list cache due to fetch error")
+                return self._stock_list_cache
+
+        return None
+
+    def search_symbols(self, query: str) -> List[Dict[str, Any]]:
+        """搜索股票（使用缓存的股票列表）"""
+        if not self._initialized:
+            self.initialize()
+
+        try:
+            # 使用缓存的股票列表
+            df = self._get_stock_list()
             if df is None or df.empty:
                 return []
 
             # 搜索代码或名称
-            mask = df['代码'].str.contains(query, na=False) | \
-                   df['名称'].str.contains(query, na=False)
+            mask = df['代码'].str.contains(query, na=False, case=False) | \
+                   df['名称'].str.contains(query, na=False, case=False)
 
             results = []
             for _, row in df[mask].head(20).iterrows():
