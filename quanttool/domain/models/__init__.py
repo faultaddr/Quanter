@@ -181,4 +181,4 @@ class FactorEvaluationResult(BaseModel):
     sharpe_ratio: float
     turnover: float
     max_exposure: float
-    data: str  # Store as string representation or path to data file
+    data: Any  # Can be DataFrame, string, or other data representation
