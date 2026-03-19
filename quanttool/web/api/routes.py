@@ -957,9 +957,10 @@ async def get_chip_distribution(symbol: str, days: int = 210) -> Dict[str, Any]:
         # 使用实时价格数据，避免 qlib 复权价格显示异常
         analyzer = StockAnalyzer(use_realtime_price=True)
         # 获取足够多的数据用于筹码计算
-        df = analyzer.get_stock_data(symbol, max(days, 365))
+        fetch_days = max(days, 365)
+        df = analyzer.get_stock_data(symbol, fetch_days)
 
-        if df.empty or len(df) < 20:
+        if df.empty or len(df) < 10:
             raise HTTPException(status_code=404, detail=f"数据不足，无法计算筹码分布")
 
         # 计算筹码分布
@@ -1048,10 +1049,12 @@ async def get_technical_signals(symbol: str, days: int = 60) -> Dict[str, Any]:
 
         # 使用实时价格数据，避免 qlib 复权价格显示异常
         analyzer = StockAnalyzer(use_realtime_price=True)
-        df = analyzer.get_stock_data(symbol, days)
+        # 增加获取天数以确保有足够数据
+        fetch_days = max(days, 60)
+        df = analyzer.get_stock_data(symbol, fetch_days)
 
-        if df.empty or len(df) < 20:
-            raise HTTPException(status_code=404, detail=f"数据不足")
+        if df.empty or len(df) < 10:
+            raise HTTPException(status_code=404, detail=f"数据不足，请稍后重试")
 
         # 计算技术指标
         df = analyzer.calculate_technical_indicators(df)
@@ -1371,10 +1374,12 @@ async def get_stock_analysis(symbol: str, days: int = 120) -> Dict[str, Any]:
 
         # 使用与 kline 接口相同的数据获取方式
         analyzer = StockAnalyzer(use_realtime_price=True)
-        df = analyzer.get_stock_data(symbol, days)
+        # 增加获取天数以确保有足够数据
+        fetch_days = max(days, 60)
+        df = analyzer.get_stock_data(symbol, fetch_days)
 
-        if df.empty or len(df) < 20:
-            raise HTTPException(status_code=404, detail=f"数据不足")
+        if df.empty or len(df) < 10:
+            raise HTTPException(status_code=404, detail=f"数据不足，请稍后重试")
 
         # 计算技术指标
         df = analyzer.calculate_technical_indicators(df)
