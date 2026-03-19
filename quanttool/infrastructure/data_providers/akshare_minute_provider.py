@@ -110,8 +110,10 @@ class AkShareMinuteProvider(IDataProvider):
             else:
                 raise RuntimeError("AkShare test query returned empty data")
         except Exception as e:
-            logger.error(f"Failed to initialize AkShareMinuteProvider: {e}")
-            raise
+            logger.warning(f"AkShare initialization failed: {e}, using fallback mode")
+            # 即使 AkShare 不可用，也允许初始化（使用本地股票列表）
+            self._initialized = True
+            logger.info("AkShareMinuteProvider initialized in fallback mode")
 
     def _get_cached(self, key: str) -> Optional[Any]:
         """从缓存获取数据"""
@@ -463,7 +465,7 @@ class AkShareMinuteProvider(IDataProvider):
         return []
 
     def _get_stock_list(self) -> Optional[pd.DataFrame]:
-        """获取股票列表（带缓存）"""
+        """获取股票列表（带缓存和本地回退）"""
         now = time.time()
 
         # 如果缓存有效，直接返回
@@ -484,13 +486,53 @@ class AkShareMinuteProvider(IDataProvider):
                 logger.info(f"Cached {len(df)} stocks for search")
                 return df
         except Exception as e:
-            logger.error(f"Failed to fetch stock list: {e}")
-            # 如果有旧缓存，即使过期也继续使用
-            if self._stock_list_cache is not None:
-                logger.warning("Using stale stock list cache due to fetch error")
-                return self._stock_list_cache
+            logger.warning(f"Failed to fetch stock list: {e}")
 
-        return None
+        # 如果有旧缓存，即使过期也继续使用
+        if self._stock_list_cache is not None:
+            logger.warning("Using stale stock list cache due to fetch error")
+            return self._stock_list_cache
+
+        # 最后回退：使用本地预设股票列表
+        logger.warning("Using fallback local stock list")
+        return self._get_fallback_stock_list()
+
+    def _get_fallback_stock_list(self) -> pd.DataFrame:
+        """获取本地预设股票列表（当网络不可用时）"""
+        # 常用股票列表
+        stocks = [
+            ('600519', '贵州茅台', 1800.0),
+            ('000858', '五粮液', 130.0),
+            ('000001', '平安银行', 10.0),
+            ('000002', '万科A', 7.0),
+            ('600036', '招商银行', 30.0),
+            ('601318', '中国平安', 45.0),
+            ('600000', '浦发银行', 8.0),
+            ('601166', '兴业银行', 15.0),
+            ('600030', '中信证券', 18.0),
+            ('600276', '恒瑞医药', 40.0),
+            ('000333', '美的集团', 55.0),
+            ('000651', '格力电器', 35.0),
+            ('002415', '海康威视', 30.0),
+            ('300750', '宁德时代', 180.0),
+            ('601012', '隆基绿能', 25.0),
+            ('002594', '比亚迪', 250.0),
+            ('600900', '长江电力', 25.0),
+            ('601899', '紫金矿业', 15.0),
+            ('600887', '伊利股份', 28.0),
+            ('000568', '泸州老窖', 180.0),
+            ('002304', '洋河股份', 100.0),
+            ('600309', '万华化学', 90.0),
+            ('601398', '工商银行', 5.0),
+            ('601288', '农业银行', 3.5),
+            ('600016', '民生银行', 4.0),
+            ('601988', '中国银行', 4.5),
+            ('601328', '交通银行', 5.5),
+            ('600048', '保利发展', 12.0),
+            ('001979', '招商蛇口', 15.0),
+            ('002352', '顺丰控股', 40.0),
+        ]
+        return pd.DataFrame(stocks, columns=['代码', '名称', '最新价'])
 
     def search_symbols(self, query: str) -> List[Dict[str, Any]]:
         """搜索股票（使用缓存的股票列表）"""
