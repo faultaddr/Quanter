@@ -122,10 +122,10 @@ class TestCandlestickPatternScreener:
 
         df = pd.DataFrame({
             'timestamp': dates,
-            'open': opens,
-            'high': highs,
-            'low': lows,
-            'close': closes,
+            'open': np.array(opens, dtype=np.float64),
+            'high': np.array(highs, dtype=np.float64),
+            'low': np.array(lows, dtype=np.float64),
+            'close': np.array(closes, dtype=np.float64),
         })
 
         return df

@@ -150,6 +150,7 @@ class CandlestickPatternScreener:
 
         for p in patterns:
             name = p.get("name", "")
+            name_cn = p.get("name_cn", "")  # 中文名称用于匹配
             p_type = p.get("type", "neutral")
             strength = p.get("strength", "中")
 
@@ -159,13 +160,14 @@ class CandlestickPatternScreener:
                 "strength": strength
             })
 
-            if name in self.STRONG_BULLISH:
+            # 使用中文名称匹配形态列表
+            if name_cn in self.STRONG_BULLISH:
                 has_strong_bullish = True
-            elif name in self.MEDIUM_BULLISH:
+            elif name_cn in self.MEDIUM_BULLISH:
                 has_medium_bullish = True
-            elif name in self.STRONG_BEARISH:
+            elif name_cn in self.STRONG_BEARISH:
                 has_strong_bearish = True
-            elif name in self.MEDIUM_BEARISH:
+            elif name_cn in self.MEDIUM_BEARISH:
                 has_medium_bearish = True
 
         # 根据位置和形态组合决定筛选结果

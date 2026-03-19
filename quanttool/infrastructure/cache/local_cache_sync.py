@@ -15,18 +15,18 @@ from .local_cache_async import AsyncLocalDataCache, get_async_local_cache
 from ..database.config import DatabaseConfig
 
 
-# Global event loop for synchronous operations
-_loop = None
+# Thread-local storage for event loops (safer for concurrent tests)
+import threading
+_loop_local = threading.local()
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 
 def _get_loop():
-    """Get or create the global event loop."""
-    global _loop
-    if _loop is None or _loop.is_closed():
-        _loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(_loop)
-    return _loop
+    """Get or create an event loop for the current thread."""
+    if not hasattr(_loop_local, 'loop') or _loop_local.loop is None or _loop_local.loop.is_closed():
+        _loop_local.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_loop_local.loop)
+    return _loop_local.loop
 
 
 class LocalDataCache:
