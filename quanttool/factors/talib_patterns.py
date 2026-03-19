@@ -352,7 +352,8 @@ class TalibPatternRecognizer:
             形态描述字典
         """
         if pattern_name in self.patterns_config:
-            _, name_cn, pattern_type, description = self.patterns_config[pattern_name]
+            pattern_info = self.patterns_config[pattern_name]
+            _, name_cn, pattern_type, description = pattern_info[:4]
             return {
                 'name': pattern_name,
                 'name_cn': name_cn,
