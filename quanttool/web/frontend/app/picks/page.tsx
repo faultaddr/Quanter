@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import PageContainer from '@/components/layout/PageContainer';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -36,18 +36,18 @@ export default function PicksPage() {
   const { loading: loadingModels, execute: fetchModels } = useApi(modelApi.getQrunModels);
   const { loading: loadingPredictions, execute: fetchPicks } = useApi(monitorApi.getPicks);
 
-  useEffect(() => {
-    setActivePage('picks');
-    loadModels();
-  }, [setActivePage]);
-
-  const loadModels = async () => {
+  const loadModels = useCallback(async () => {
     const data = await fetchModels();
     if (data && data.length > 0) {
       setModels(data);
       setSelectedModel(data[0].id);
     }
-  };
+  }, [fetchModels]);
+
+  useEffect(() => {
+    setActivePage('picks');
+    loadModels();
+  }, [setActivePage, loadModels]);
 
   const handlePredict = async () => {
     if (!selectedModel) {

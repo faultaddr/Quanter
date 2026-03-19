@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import PageContainer from '@/components/layout/PageContainer';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -28,19 +28,19 @@ export default function ModelPage() {
   const { loading: loadingModels, execute: fetchModels } = useApi(modelApi.getModels);
   const { loading: loadingQrunModels, execute: fetchQrunModels } = useApi(modelApi.getQrunModels);
 
-  useEffect(() => {
-    setActivePage('model');
-    loadModels();
-  }, [setActivePage]);
-
-  const loadModels = async () => {
+  const loadModels = useCallback(async () => {
     const [modelsData, qrunModelsData] = await Promise.all([
       fetchModels(),
       fetchQrunModels(),
     ]);
     if (modelsData) setModels(modelsData);
     if (qrunModelsData) setQrunModels(qrunModelsData);
-  };
+  }, [fetchModels, fetchQrunModels]);
+
+  useEffect(() => {
+    setActivePage('model');
+    loadModels();
+  }, [setActivePage, loadModels]);
 
   const handleTrain = async (params: TrainParams) => {
     setTraining(true);
