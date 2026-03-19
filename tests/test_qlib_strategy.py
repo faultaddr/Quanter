@@ -56,10 +56,10 @@ class TestQlibFeatureEngineer:
         # 检查特征数量 (Alpha158 应该有约 150+ 特征)
         assert len(features.columns) > 100, f"特征数量不足: {len(features.columns)}"
 
-        # 检查特征名
-        assert 'POS(20)' in features.columns
-        assert 'RSI(12)' in features.columns
-        assert 'MACD_DIF' in features.columns
+        # 检查特征名 - 使用实际生成的特征格式
+        assert 'KMID_5' in features.columns  # K线形态特征
+        assert 'ATR10' in features.columns   # 技术指标特征
+        assert 'OBV' in features.columns      # 成交量特征
 
         # 检查无 NaN
         assert not features.isna().any().any()
@@ -71,8 +71,12 @@ class TestQlibFeatureEngineer:
 
         features = engineer.generate_features(data)
 
-        # 检查包含更长周期特征
-        assert 'REF(360)' in features.columns
+        # 检查特征数量 (Alpha360 应该有 360 个特征)
+        assert len(features.columns) == 360, f"Alpha360 应有 360 个特征, 实际: {len(features.columns)}"
+
+        # 检查包含更长周期特征 - 使用实际生成的特征格式
+        assert 'RETURN60' in features.columns  # 60日收益率
+        assert 'HIGH60' in features.columns     # 60日最高价特征
 
     def test_feature_standardization(self):
         """测试特征标准化"""
