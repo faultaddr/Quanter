@@ -1,6 +1,6 @@
 """Prediction service for QuantTool."""
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import pandas as pd
 from datetime import datetime
 from sklearn.linear_model import LogisticRegression
@@ -11,6 +11,7 @@ from ..domain.interfaces.model import IModel
 from ..domain.interfaces.data_provider import IDataProvider
 from ..core.registry import registry, ComponentType
 from ..core.logging import get_logger
+from ..infrastructure.data_providers.incremental_data_manager import IncrementalDataManager, DataType
 
 
 logger = get_logger(__name__)
@@ -19,9 +20,52 @@ logger = get_logger(__name__)
 class PredictionService:
     """Service class for predictive modeling."""
 
-    def __init__(self):
-        """Initialize prediction service."""
+    def __init__(self, use_incremental: bool = True):
+        """Initialize prediction service.
+
+        Args:
+            use_incremental: 是否使用增量数据获取
+        """
         self.default_horizon = 6  # Default prediction horizon (6 x 10min = 60 minutes)
+        self.use_incremental = use_incremental
+        self._incremental_manager: Optional[IncrementalDataManager] = None
+        if use_incremental:
+            try:
+                self._incremental_manager = IncrementalDataManager()
+                logger.info("增量数据管理器初始化成功")
+            except Exception as e:
+                logger.warning(f"增量数据管理器初始化失败: {e}")
+                self._incremental_manager = None
+
+    def _get_data(
+        self,
+        symbol: str,
+        start_date: datetime,
+        end_date: datetime,
+        data_provider_instance,
+        timeframe: str = "1d",
+    ) -> pd.DataFrame:
+        """获取股票数据（优先使用增量数据管理器）"""
+        # 优先使用增量数据管理器
+        if self._incremental_manager:
+            try:
+                df = self._incremental_manager.get_data(
+                    symbol,
+                    start_date,
+                    end_date,
+                    data_provider_instance,
+                    data_type=DataType.STOCK_BAR,
+                )
+                if df is not None and not df.empty:
+                    return df
+            except Exception as e:
+                logger.warning(f"增量获取失败 {symbol}: {e}，回退到直接获取")
+
+        # 回退到直接获取
+        data = data_provider_instance.get_bars(
+            [symbol], start_date, end_date, timeframe
+        )
+        return data.get(symbol, pd.DataFrame())
 
     def prepare_features(self, bars: pd.DataFrame, horizon: int = 6) -> pd.DataFrame:
         """
@@ -133,15 +177,11 @@ class PredictionService:
         if hasattr(data_provider_instance, "initialize"):
             data_provider_instance.initialize()
 
-        # Get data
-        data = data_provider_instance.get_bars(
-            [symbol], start_date, end_date, timeframe
-        )
+        # Get data (使用增量数据管理器)
+        bars = self._get_data(symbol, start_date, end_date, data_provider_instance, timeframe)
 
-        if symbol not in data or data[symbol].empty:
+        if bars.empty:
             raise ValueError(f"No data available for symbol {symbol}")
-
-        bars = data[symbol]
 
         # Prepare features
         features_df = self.prepare_features(bars, horizon)
@@ -261,14 +301,11 @@ class PredictionService:
             # For 10min bars, 30 bars = 5 hours of data
             start_date = end_date - pd.Timedelta(hours=5)
 
-            data = data_provider_instance.get_bars(
-                [symbol], start_date, end_date, timeframe
-            )
+            # 使用增量数据管理器
+            bars = self._get_data(symbol, start_date, end_date, data_provider_instance, timeframe)
 
-            if symbol not in data or data[symbol].empty:
+            if bars.empty:
                 raise ValueError(f"No data available for prediction for {symbol}")
-
-            bars = data[symbol]
         else:
             bars = data
 

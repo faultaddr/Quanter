@@ -75,3 +75,8 @@ htmlcov/
 *.egg
 quanttool.log
 qlib_data/
+
+# Node.js
+node_modules/
+.npm/
+.next/

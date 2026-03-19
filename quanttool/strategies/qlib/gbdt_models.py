@@ -31,9 +31,14 @@ def _ensure_qlib_initialized():
             import qlib
             # 检查是否已初始化
             if not hasattr(qlib, '_initialized') or not qlib._initialized:
+                logger.info("初始化 Qlib...")
                 qlib.init()
-        except Exception:
-            pass
+                qlib._initialized = True
+                logger.info("Qlib 初始化完成")
+        except Exception as e:
+            logger.warning(f"Qlib 初始化失败: {e}")
+    else:
+        raise ImportError("Qlib 未安装")
 
 
 class CatBoostModelWrapper(QlibModelBase):
@@ -177,9 +182,12 @@ class LGBModelWrapper(QlibModelBase):
                     colsample_bytree=self.config.colsample_bytree,
                     random_state=self.config.random_state,
                     n_jobs=self.config.n_jobs,
+                    early_stopping_rounds=self.config.early_stopping_rounds,
+                    # LightGBM 原生参数，用于显示训练进度
+                    verbosity=1 if self.config.verbose > 0 else -1,
                 )
                 self._use_qlib = True
-                logger.info("使用 Qlib 原生 LGBModel")
+                logger.info(f"使用 Qlib 原生 LGBModel (n_estimators={self.config.n_estimators})")
                 return
             except Exception as e:
                 logger.warning(f"Qlib LGBModel 初始化失败: {e}")
@@ -222,17 +230,70 @@ class LGBModelWrapper(QlibModelBase):
             try:
                 # 确保 qlib 已初始化
                 _ensure_qlib_initialized()
-                self._qlib_model.fit(dataset)
-                self.model = self._qlib_model
-                logger.info(f"Qlib 原生 LGBModel 训练完成，特征数: {len(self.feature_names_)}")
+                import time
+                logger.info(f"开始训练 Qlib LGBModel...")
+                logger.info(f"  - 特征数: {len(self.feature_names_)}")
+                logger.info(f"  - n_estimators: {self.config.n_estimators}")
+                logger.info(f"  - learning_rate: {self.config.learning_rate}")
+                logger.info(f"  - max_depth: {self.config.max_depth}")
+
+                # 检查数据集类型
+                logger.info(f"  - 数据集类型: {type(dataset).__name__}")
+
+                # 如果是 SimpleDatasetH，获取训练数据形状
+                if hasattr(dataset, 'features'):
+                    logger.info(f"  - 训练数据形状: {dataset.features.shape}")
+
+                # 检查是否是 Qlib 原生 DatasetH
+                try:
+                    from qlib.data.dataset import DatasetH
+                    if isinstance(dataset, DatasetH):
+                        logger.info("  - 使用 Qlib 原生 DatasetH")
+                    else:
+                        logger.info("  - 使用 SimpleDatasetH，可能需要转换")
+                except ImportError:
+                    pass
+
+                train_start = time.time()
+                logger.info("调用 Qlib LGBModel.fit()...")
+
+                try:
+                    self._qlib_model.fit(dataset)
+                except TypeError as te:
+                    # 可能是数据类型不兼容
+                    logger.warning(f"Qlib LGBModel.fit() 类型错误: {te}")
+                    logger.info("尝试从数据集提取数据后训练...")
+                    # 从数据集提取数据
+                    df_train = dataset.prepare("train", col_set=["feature", "label"])
+                    if isinstance(df_train, dict):
+                        X_train = df_train["feature"]
+                        y_train = df_train["label"].values.ravel()
+                    else:
+                        X_train = df_train.xs('feature', axis=1, level=0)
+                        y_train = df_train.xs('label', axis=1, level=0).values.ravel()
+
+                    # 使用 sklearn 接口训练
+                    self._use_qlib = False
+                    self._init_sklearn_fallback()
+                    self.model.fit(X_train, y_train)
+                    logger.info("使用 sklearn 接口训练完成")
+
+                self.model = self._qlib_model if self._use_qlib else self.model
+
+                train_elapsed = time.time() - train_start
+                logger.info(f"模型训练完成 (耗时 {train_elapsed:.1f}s)")
             except Exception as e:
-                logger.warning(f"Qlib 原生模型训练失败: {e}，使用 sklearn 接口")
+                import traceback
+                logger.warning(f"Qlib 原生模型训练失败: {e}")
+                traceback.print_exc()
+                logger.info("回退到 sklearn 接口...")
                 self._use_qlib = False
                 self._init_sklearn_fallback()
                 df_train, df_valid = dataset.prepare(["train", "valid"], col_set=["feature", "label"])
                 X_train = df_train["feature"]
                 y_train = df_train["label"].values.ravel()
                 self.model.fit(X_train, y_train)
+                logger.info("sklearn 接口训练完成")
         else:
             df_train, df_valid = dataset.prepare(["train", "valid"], col_set=["feature", "label"])
             X_train = df_train["feature"]

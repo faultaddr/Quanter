@@ -2,7 +2,7 @@
 
 from typing import Dict, Any, List
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from ..domain.interfaces.strategy import IStrategy
 from ..domain.models import Trade, Order, Position, Portfolio, Metric, BacktestResult
 from ..core.timeutils import get_next_trading_bar_timestamp
@@ -190,7 +190,9 @@ class BacktestEngine:
         direction = signal["direction"]
 
         # Calculate position size based on risk management rules
-        max_position_value = self.current_portfolio.cash * self.max_position_size
+        # 预留手续费和滑点空间（约 0.1%）
+        available_cash = self.current_portfolio.cash * 0.999
+        max_position_value = available_cash * self.max_position_size
         position_value = min(
             max_position_value,
             self.current_portfolio.total_value * self.max_position_size,
@@ -369,16 +371,25 @@ class BacktestEngine:
         if not signal or not signal.get("direction"):
             return
 
-        # Execute the signal at the next bar's close (next_close execution model)
-        next_timestamp = get_next_trading_bar_timestamp(timestamp)
+        # 跳过 hold 信号
+        if signal.get("direction") == "hold":
+            return
 
-        # Convert next_timestamp to the same timezone-naive format as the dataframe
-        if hasattr(next_timestamp, 'tz') and next_timestamp.tz is not None:
-            next_timestamp_naive = next_timestamp.replace(tzinfo=None)
+        # 对于日线数据，直接查找下一个交易日
+        # 使用 >= 而不是 == 来处理日期格式的时间戳
+        if hasattr(timestamp, 'date'):
+            # timestamp 是 datetime 对象
+            next_date = timestamp + timedelta(days=1)
+            next_bar_data = df[df["timestamp"] >= next_date]
         else:
-            next_timestamp_naive = next_timestamp
+            # 使用原始方法
+            next_timestamp = get_next_trading_bar_timestamp(timestamp)
+            if hasattr(next_timestamp, 'tz') and next_timestamp.tz is not None:
+                next_timestamp_naive = next_timestamp.replace(tzinfo=None)
+            else:
+                next_timestamp_naive = next_timestamp
+            next_bar_data = df[df["timestamp"] >= next_timestamp_naive]
 
-        next_bar_data = df[df["timestamp"] >= next_timestamp_naive]
         if not next_bar_data.empty:
             execution_bar = next_bar_data.iloc[0]
             execution_price = execution_bar["close"]

@@ -115,9 +115,28 @@ class AkShareMinuteProvider(IDataProvider):
                 return data
         return None
 
+    def _convert_to_native(self, obj: Any) -> Any:
+        """将 numpy 类型转换为 Python 原生类型"""
+        if obj is None:
+            return None
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {k: self._convert_to_native(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self._convert_to_native(item) for item in obj]
+        return obj
+
     def _set_cache(self, key: str, data: Any) -> None:
-        """设置缓存"""
-        self._cache[key] = (data, time.time())
+        """设置缓存（自动转换 numpy 类型）"""
+        converted_data = self._convert_to_native(data)
+        self._cache[key] = (converted_data, time.time())
 
     def get_bars(
         self,
@@ -400,16 +419,16 @@ class AkShareMinuteProvider(IDataProvider):
 
             quote = {
                 'symbol': symbol,
-                'name': row.get('名称', ''),
-                'price': float(row.get('最新价', 0)),
-                'open': float(row.get('今开', 0)),
-                'high': float(row.get('最高', 0)),
-                'low': float(row.get('最低', 0)),
-                'volume': float(row.get('成交量', 0)),
-                'amount': float(row.get('成交额', 0)),
-                'pct_change': float(row.get('涨跌幅', 0)),
-                'change': float(row.get('涨跌额', 0)),
-                'turnover': float(row.get('换手率', 0)),
+                'name': str(row.get('名称', '')),
+                'price': float(row.get('最新价', 0) or 0),
+                'open': float(row.get('今开', 0) or 0),
+                'high': float(row.get('最高', 0) or 0),
+                'low': float(row.get('最低', 0) or 0),
+                'volume': float(row.get('成交量', 0) or 0),
+                'amount': float(row.get('成交额', 0) or 0),
+                'pct_change': float(row.get('涨跌幅', 0) or 0),
+                'change': float(row.get('涨跌额', 0) or 0),
+                'turnover': float(row.get('换手率', 0) or 0),
                 'timestamp': datetime.now()
             }
 
@@ -457,9 +476,9 @@ class AkShareMinuteProvider(IDataProvider):
             results = []
             for _, row in df[mask].head(20).iterrows():
                 results.append({
-                    'symbol': row['代码'],
-                    'name': row['名称'],
-                    'price': row.get('最新价', 0)
+                    'symbol': str(row['代码']),
+                    'name': str(row['名称']),
+                    'price': float(row.get('最新价', 0) or 0)
                 })
 
             return results

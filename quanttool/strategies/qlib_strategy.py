@@ -44,6 +44,14 @@ except ImportError:
     MODEL_FACTORY_AVAILABLE = False
     logger.warning("Qlib 模型工厂不可用")
 
+# 导入完整版特征工程
+try:
+    from ..infrastructure.data_providers.qlib_data_converter import Alpha158Features, Alpha360Features
+    FULL_ALPHA_FEATURES_AVAILABLE = True
+except ImportError:
+    FULL_ALPHA_FEATURES_AVAILABLE = False
+    logger.warning("完整版 Alpha 特征不可用，使用简化版")
+
 
 @dataclass
 class QlibConfig:
@@ -111,6 +119,18 @@ class QlibFeatureEngineer:
         """
         if len(df) < 120:
             raise ValueError(f"数据不足，需要至少120条数据，当前只有{len(df)}条")
+
+        # 使用完整版 Alpha158/Alpha360 特征
+        if FULL_ALPHA_FEATURES_AVAILABLE:
+            if self.feature_set == "Alpha158":
+                logger.debug("使用完整版 Alpha158 特征 (158个)")
+                return Alpha158Features.generate(df)
+            elif self.feature_set == "Alpha360":
+                logger.debug("使用完整版 Alpha360 特征 (300个)")
+                return Alpha360Features.generate(df)
+
+        # 回退到简化版实现
+        logger.debug(f"使用简化版 {self.feature_set} 特征")
 
         features = {}
         close = df['close']

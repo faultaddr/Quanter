@@ -375,11 +375,16 @@ def create_qlib_compatible_dataset(
     # 尝试使用 Qlib 原生 DatasetH
     if use_native and QLIB_AVAILABLE and has_valid_dates:
         try:
-            return create_qlib_dataset_from_dataframe(
+            logger.info("尝试创建 Qlib 原生 DatasetH...")
+            dataset = create_qlib_dataset_from_dataframe(
                 features, labels, "stock", train_ratio, valid_ratio
             )
+            logger.info(f"Qlib 原生 DatasetH 创建成功: {type(dataset).__name__}")
+            return dataset
         except Exception as e:
             logger.warning(f"创建 Qlib 原生 DatasetH 失败: {e}，使用 SimpleDatasetH")
+            import traceback
+            traceback.print_exc()
 
     # 回退到 SimpleDatasetH
     return SimpleDatasetH(features, labels, segments)

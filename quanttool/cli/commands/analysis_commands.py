@@ -1634,29 +1634,13 @@ def analyze_trend(
     typer.echo("-" * 60)
 
     try:
-        # 获取数据
-        fetcher = create_data_fetcher_with_credentials()
-        fetcher.initialize()
+        # 使用 StockAnalyzer 获取数据（自动使用增量数据管理器）
+        analyzer = StockAnalyzer()
+        df = analyzer.get_stock_data(symbol, days=days)
 
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-
-        # 标准化股票代码
-        normalized_symbol = symbol.upper().strip()
-        if not (normalized_symbol.endswith('.SH') or normalized_symbol.endswith('.SZ')):
-            if len(normalized_symbol) == 6:
-                if normalized_symbol.startswith(('5', '6', '9')):
-                    normalized_symbol = f"{normalized_symbol}.SH"
-                else:
-                    normalized_symbol = f"{normalized_symbol}.SZ"
-
-        data = fetcher.get_bars([normalized_symbol], start_date, end_date)
-
-        if normalized_symbol not in data or data[normalized_symbol].empty:
-            typer.echo(f"无法获取 {normalized_symbol} 的数据")
+        if df.empty:
+            typer.echo(f"无法获取 {symbol} 的数据")
             return
-
-        df = data[normalized_symbol]
 
         # 计算趋势评分
         trend_system = TrendScoringSystem()

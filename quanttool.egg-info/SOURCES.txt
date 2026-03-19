@@ -43,6 +43,7 @@ tests/test_optimized_params.py
 tests/test_parallel_fetch.py
 tests/test_param_optimization.py
 tests/test_portfolio_optimize.py
+tests/test_postgres_db.py
 tests/test_prediction_service.py
 tests/test_pytorch_models_backtest.py
 tests/test_pytorch_simple.py

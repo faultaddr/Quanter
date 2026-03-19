@@ -79,21 +79,26 @@ class Alpha158Features:
 
     参考: https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/handler.py
 
-    包含:
+    包含 158 个特征:
     - KBAR: K线特征 (30个)
     - KDJ: KDJ指标 (18个)
-    - RSI: RSI指标 (6个)
+    - RSI: RSI指标 (12个)
     - MACD: MACD指标 (3个)
     - BOLL: 布林带 (6个)
     - MA: 均线 (20个)
     - EMA: 指数均线 (10个)
-    - PSY: 心理线 (6个)
-    - BIAS: 乖离率 (6个)
-    - ROC: 变动率 (6个)
+    - PSY: 心理线 (4个)
+    - BIAS: 乖离率 (3个)
+    - ROC: 变动率 (4个)
     - MAVOL: 成交量均线 (10个)
-    - 其他: (37个)
+    - CCI: 商品通道指数 (6个)
+    - DX: 方向性运动指数 (6个)
+    - MTM: 动量指标 (6个)
+    - TRIX: 三重指数平滑 (3个)
+    - CR: 能量潮 (6个)
+    - 其他: (11个)
 
-    共计约 158 个特征
+    共计 158 个特征
     """
 
     @staticmethod
@@ -153,15 +158,20 @@ class Alpha158Features:
         features['MACD_DEA'] = dea
         features['MACD_HIST'] = 2 * (dif - dea)
 
-        # ==================== RSI 特征 (6个) ====================
+        # ==================== RSI 特征 (12个) ====================
+        # 扩展 RSI 参数组合
         for w in [6, 12, 24]:
             delta = close.diff()
             gain = delta.where(delta > 0, 0).rolling(w).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(w).mean()
             rs = gain / (loss + 1e-12)
-            features[f'RSI{w}'] = 100 - (100 / (1 + rs))
+            rsi = 100 - (100 / (1 + rs))
+            features[f'RSI{w}'] = rsi
             # RSI 变化
-            features[f'RSI{w}_DIFF'] = features[f'RSI{w}'].diff()
+            features[f'RSI{w}_DIFF'] = rsi.diff()
+            # RSI 移动平均
+            features[f'RSI{w}_MA'] = rsi.rolling(w).mean()
+            features[f'RSI{w}_DIFF_MA'] = features[f'RSI{w}_DIFF'].rolling(w).mean()
 
         # ==================== KDJ 特征 (18个) ====================
         for n in [9, 14, 21]:
@@ -174,6 +184,10 @@ class Alpha158Features:
             features[f'K{n}'] = k
             features[f'D{n}'] = d
             features[f'J{n}'] = j
+            # KDJ 变化
+            features[f'K{n}_DIFF'] = k.diff()
+            features[f'D{n}_DIFF'] = d.diff()
+            features[f'J{n}_DIFF'] = j.diff()
 
         # ==================== 布林带特征 (6个) ====================
         for w in [10, 20]:
@@ -185,18 +199,18 @@ class Alpha158Features:
             features[f'BOLL_LOW_{w}'] = (close - lower) / close
             features[f'BOLL_W_{w}'] = (upper - lower) / mid
 
-        # ==================== PSY 心理线 (6个) ====================
+        # ==================== PSY 心理线 (4个) ====================
         for w in [6, 12]:
             up_days = (close > close.shift(1)).rolling(w).sum()
             features[f'PSY{w}'] = up_days / w
             features[f'PSY{w}_MA'] = features[f'PSY{w}'].rolling(w).mean()
 
-        # ==================== BIAS 乖离率 (6个) ====================
+        # ==================== BIAS 乖离率 (3个) ====================
         for w in [6, 12, 24]:
             ma = close.rolling(w).mean()
             features[f'BIAS{w}'] = (close - ma) / (ma + 1e-12) * 100
 
-        # ==================== ROC 变动率 (6个) ====================
+        # ==================== ROC 变动率 (4个) ====================
         for w in [6, 12]:
             features[f'ROC{w}'] = close / close.shift(w) - 1
             features[f'ROC{w}_MA'] = features[f'ROC{w}'].rolling(w).mean()
@@ -207,7 +221,62 @@ class Alpha158Features:
             features[f'VMA{w}'] = volume / (vol_ma + 1e-12)
             features[f'VSTD{w}'] = volume.rolling(w).std() / (vol_ma + 1e-12)
 
-        # ==================== 其他技术指标 (20+个) ====================
+        # ==================== CCI 商品通道指数 (6个) ====================
+        for w in [10, 14, 20]:
+            tp = (high + low + close) / 3
+            ma_tp = tp.rolling(w).mean()
+            md = tp.rolling(w).apply(lambda x: np.abs(x - x.mean()).mean())
+            features[f'CCI{w}'] = (tp - ma_tp) / (0.015 * md + 1e-12)
+            features[f'CCI{w}_DIFF'] = features[f'CCI{w}'].diff()
+
+        # ==================== DX 方向性运动指数 (6个) ====================
+        for w in [10, 14, 20]:
+            # +DM 和 -DM
+            plus_dm = high.diff()
+            minus_dm = -low.diff()
+            plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0)
+            minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0)
+
+            # TR
+            tr = pd.concat([
+                high - low,
+                abs(high - close.shift(1)),
+                abs(low - close.shift(1))
+            ], axis=1).max(axis=1)
+
+            # +DI 和 -DI
+            atr = tr.rolling(w).mean()
+            plus_di = 100 * plus_dm.rolling(w).mean() / (atr + 1e-12)
+            minus_di = 100 * minus_dm.rolling(w).mean() / (atr + 1e-12)
+
+            # DX
+            features[f'DX{w}'] = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-12)
+            features[f'PDI{w}'] = plus_di
+            features[f'MDI{w}'] = minus_di
+
+        # ==================== MTM 动量指标 (6个) ====================
+        for w in [6, 10, 20]:
+            features[f'MTM{w}'] = close - close.shift(w)
+            features[f'MTM{w}_MA'] = features[f'MTM{w}'].rolling(w).mean()
+
+        # ==================== TRIX 三重指数平滑 (3个) ====================
+        for w in [10, 14, 20]:
+            ema1 = close.ewm(span=w, adjust=False).mean()
+            ema2 = ema1.ewm(span=w, adjust=False).mean()
+            ema3 = ema2.ewm(span=w, adjust=False).mean()
+            features[f'TRIX{w}'] = (ema3 - ema3.shift(1)) / (ema3 + 1e-12) * 100
+
+        # ==================== CR 能量潮 (6个) ====================
+        for w in [10, 14, 20]:
+            # 中间价
+            mid_price = (high + low + close) / 3
+            # 上涨和下跌成交量
+            up_vol = volume.where(mid_price > mid_price.shift(1), 0).rolling(w).sum()
+            down_vol = volume.where(mid_price < mid_price.shift(1), 0).rolling(w).sum()
+            features[f'CR{w}'] = up_vol / (down_vol + 1e-12)
+            features[f'CR{w}_MA'] = features[f'CR{w}'].rolling(w).mean()
+
+        # ==================== 其他技术指标 (12个) ====================
         # ATR
         tr = pd.concat([
             high - low,
@@ -232,6 +301,15 @@ class Alpha158Features:
 
         # OBV
         features['OBV'] = (np.sign(close.diff()) * volume).cumsum()
+
+        # VHF (垂直水平滤波器)
+        # 用于判断市场是趋势还是震荡
+        for w in [20]:
+            highest_close = close.rolling(w).max()
+            lowest_close = close.rolling(w).min()
+            denom = (highest_close - lowest_close).abs()
+            numer = close.diff().abs().rolling(w).sum()
+            features[f'VHF{w}'] = denom / (numer + 1e-12)
 
         # 构建特征 DataFrame
         feature_df = pd.DataFrame(features, index=df.index)

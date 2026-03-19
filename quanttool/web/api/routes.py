@@ -1,11 +1,16 @@
 """API routes for QuantTool web application."""
 
-from fastapi import APIRouter, HTTPException
+import os
+# 解决 OpenMP 库版本冲突问题 (必须在所有 import 之前)
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from typing import List, Dict, Any, Optional, Generator
 from datetime import datetime, timedelta
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer, field_validator
 import pandas as pd
+import numpy as np
 import json
 import threading
 import queue
@@ -15,10 +20,32 @@ from quanttool.application.factor_service import FactorService
 from quanttool.application.data_service import DataService
 from ...core.logging import get_logger
 
+# 导入策略模块以触发注册
+import quanttool.strategies
+
 logger = get_logger(__name__)
 
 
 router = APIRouter()
+
+
+def to_python_types(obj: Any) -> Any:
+    """将 numpy 类型转换为 Python 原生类型"""
+    if obj is None:
+        return None
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: to_python_types(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [to_python_types(item) for item in obj]
+    return obj
 
 
 # ==================== Pydantic Models ====================
@@ -62,6 +89,7 @@ class BacktestRequest(BaseModel):
     """回测请求
 
     默认回测时间为最近一年（从今天往前推一年）
+    数据来源：使用 qlib 数据（完整数据集）
     """
     strategy_name: str = "ma_cross"
     symbols: List[str] = []
@@ -70,7 +98,6 @@ class BacktestRequest(BaseModel):
     initial_cash: float = 100000.0
     commission_rate: float = 0.0003
     strategy_params: Dict[str, Any] = {}
-    data_provider: str = "incremental_data_fetcher"  # 增量数据提供者（优先使用缓存）
 
     def get_start_date(self) -> str:
         """获取开始日期，默认为一年前"""
@@ -351,7 +378,8 @@ async def analyze_stock(request: AnalyzeRequest) -> Dict[str, Any]:
     try:
         from quanttool.factors.stock_analyzer import StockAnalyzer
 
-        analyzer = StockAnalyzer()
+        # 使用实时价格数据，避免 qlib 复权价格显示异常
+        analyzer = StockAnalyzer(use_realtime_price=True)
         report = analyzer.analyze_stock(request.symbol, request.days)
 
         return {
@@ -369,11 +397,229 @@ async def analyze_stock_enhanced(request: EnhancedAnalyzeRequest) -> Dict[str, A
     增强版股票分析 - 对应 CLI: quanttool analysis enhanced <symbol>
 
     整合筹码分布、K线形态、策略信号
+    返回完整的数据结构供前端展示
     """
     try:
         from quanttool.factors.stock_analyzer import StockAnalyzer
+        from quanttool.factors.chip_distribution import ChipDistributionCalculator
 
-        analyzer = StockAnalyzer()
+        # 使用实时数据源（优先备用数据源获取实时股价）
+        analyzer = StockAnalyzer(use_realtime_price=True)
+
+        # 标准化股票代码并显示
+        normalized_symbol = analyzer._normalize_symbol(request.symbol)
+        logger.info(f"分析股票: {request.symbol} -> {normalized_symbol}")
+
+        # 获取股票数据（实时股价）
+        df = analyzer.get_stock_data(request.symbol, request.days)
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"无法获取 {request.symbol} 的数据")
+
+        # 计算技术指标
+        df_with_indicators = analyzer.calculate_technical_indicators(df)
+
+        # 1. 生成 K 线数据和技术指标
+        kline_data = []
+        macd_data = []
+        kdj_data = []
+        rsi_data = []
+        volume_data = []
+        amount_data = []  # 成交额数据
+        ma_data = {"ma5": [], "ma10": [], "ma20": [], "ma60": []}
+
+        for _, row in df_with_indicators.iterrows():
+            timestamp = row.get('trade_date', row.get('timestamp', None))
+            if timestamp is None:
+                continue
+
+            if hasattr(timestamp, 'timestamp'):
+                ts = int(timestamp.timestamp())
+            elif isinstance(timestamp, str):
+                ts = int(datetime.fromisoformat(timestamp.replace('Z', '')).timestamp())
+            else:
+                continue
+
+            # K线数据
+            kline_data.append({
+                "time": ts,
+                "open": float(row.get('open', 0)),
+                "high": float(row.get('high', 0)),
+                "low": float(row.get('low', 0)),
+                "close": float(row.get('close', 0)),
+            })
+
+            # 成交量
+            volume = int(row.get('volume', 0))
+            volume_data.append({
+                "time": ts,
+                "value": volume,
+                "color": "#ef4444" if row.get('close', 0) >= row.get('open', 0) else "#10b981"
+            })
+
+            # 成交额 = 成交量 * 成交均价 (vwap 或 close)
+            vwap = row.get('vwap', row.get('close', 0))
+            amount = volume * float(vwap) if vwap else 0
+            amount_data.append({
+                "time": ts,
+                "value": amount,
+                "color": "#3b82f6"  # 蓝色
+            })
+
+            # 均线数据
+            for ma_key, col_name in [("ma5", "ma_5"), ("ma10", "ma_10"), ("ma20", "ma_20"), ("ma60", "ma_60")]:
+                val = row.get(col_name)
+                if val is not None and not pd.isna(val):
+                    ma_data[ma_key].append({"time": ts, "value": float(val)})
+
+            # MACD 数据
+            macd_dif = row.get('macd_dif', row.get('macd', None))
+            macd_dea = row.get('macd_dea', row.get('macd_signal', None))
+            if macd_dif is not None and macd_dea is not None:
+                macd_hist = float(macd_dif) - float(macd_dea)
+                macd_data.append({
+                    "time": ts,
+                    "dif": float(macd_dif) if macd_dif else 0,
+                    "dea": float(macd_dea) if macd_dea else 0,
+                    "hist": macd_hist,
+                })
+
+            # KDJ 数据
+            k_val = row.get('kdj_k', row.get('k_value', None))
+            d_val = row.get('kdj_d', row.get('d_value', None))
+            j_val = row.get('kdj_j', row.get('j_value', None))
+            if k_val is not None and d_val is not None:
+                kdj_data.append({
+                    "time": ts,
+                    "k": float(k_val) if k_val else 0,
+                    "d": float(d_val) if d_val else 0,
+                    "j": float(j_val) if j_val else 0,
+                })
+
+            # RSI 数据
+            rsi_val = row.get('rsi_14', row.get('rsi_12', row.get('rsi_6', None)))
+            if rsi_val is not None:
+                rsi_data.append({
+                    "time": ts,
+                    "value": float(rsi_val) if rsi_val else 50,
+                })
+
+        # 2. 获取行情数据
+        latest = df_with_indicators.iloc[-1] if len(df_with_indicators) > 0 else {}
+        prev_close = df_with_indicators.iloc[-2]['close'] if len(df_with_indicators) > 1 else latest.get('close', 0)
+        current_price = float(latest.get('close', 0))
+        change = current_price - float(prev_close) if prev_close else 0
+        change_pct = (change / float(prev_close) * 100) if prev_close else 0
+
+        quote = {
+            "symbol": request.symbol,
+            "close": current_price,
+            "open": float(latest.get('open', 0)),
+            "high": float(latest.get('high', 0)),
+            "low": float(latest.get('low', 0)),
+            "volume": int(latest.get('volume', 0)),
+            "change": change,
+            "change_pct": change_pct,
+            "date": str(latest.get('trade_date', latest.get('timestamp', ''))),
+        }
+
+        # 3. 生成信号
+        signals = {"bullish": [], "bearish": []}
+
+        # 均线信号
+        ma_5 = latest.get('ma_5', 0)
+        ma_10 = latest.get('ma_10', 0)
+        ma_20 = latest.get('ma_20', 0)
+        if ma_5 and ma_10 and ma_20:
+            if ma_5 > ma_10 > ma_20:
+                signals["bullish"].append({"name": "均线多头排列", "description": f"MA5({ma_5:.2f}) > MA10({ma_10:.2f}) > MA20({ma_20:.2f})"})
+            elif ma_5 < ma_10 < ma_20:
+                signals["bearish"].append({"name": "均线空头排列", "description": f"MA5({ma_5:.2f}) < MA10({ma_10:.2f}) < MA20({ma_20:.2f})"})
+            # 金叉/死叉信号
+            prev_ma_5 = df_with_indicators.iloc[-2].get('ma_5', 0)
+            prev_ma_10 = df_with_indicators.iloc[-2].get('ma_10', 0)
+            if prev_ma_5 and prev_ma_10:
+                if prev_ma_5 <= prev_ma_10 and ma_5 > ma_10:
+                    signals["bullish"].append({"name": "MA5金叉MA10", "description": f"MA5({ma_5:.2f}) 上穿 MA10({ma_10:.2f})"})
+                elif prev_ma_5 >= prev_ma_10 and ma_5 < ma_10:
+                    signals["bearish"].append({"name": "MA5死叉MA10", "description": f"MA5({ma_5:.2f}) 下穿 MA10({ma_10:.2f})"})
+
+        # MACD 信号
+        macd_dif = latest.get('macd_dif', latest.get('macd', 0))
+        macd_dea = latest.get('macd_dea', latest.get('macd_signal', 0))
+        macd_hist = macd_dif - macd_dea if macd_dif and macd_dea else 0
+
+        if macd_hist > 0:
+            signals["bullish"].append({"name": "MACD多头", "description": f"MACD柱状图为正 ({macd_hist:.4f})"})
+        elif macd_hist < 0:
+            signals["bearish"].append({"name": "MACD空头", "description": f"MACD柱状图为负 ({macd_hist:.4f})"})
+
+        # RSI 信号
+        rsi = latest.get('rsi_14', latest.get('rsi_12', latest.get('rsi_6', 50)))
+        if rsi:
+            if rsi > 70:
+                signals["bearish"].append({"name": "RSI超买", "description": f"RSI = {rsi:.1f}，超买区域"})
+            elif rsi < 30:
+                signals["bullish"].append({"name": "RSI超卖", "description": f"RSI = {rsi:.1f}，超卖区域"})
+            elif rsi > 50:
+                signals["bullish"].append({"name": "RSI偏强", "description": f"RSI = {rsi:.1f}，位于强势区域"})
+
+        # 布林带信号
+        boll_upper = latest.get('boll_upper', 0)
+        boll_lower = latest.get('boll_lower', 0)
+        boll_mid = latest.get('boll_mid', latest.get('ma_20', 0))
+        if boll_upper and boll_lower:
+            if current_price > boll_upper:
+                signals["bearish"].append({"name": "突破布林上轨", "description": f"价格 {current_price:.2f} > 上轨 {boll_upper:.2f}"})
+            elif current_price < boll_lower:
+                signals["bullish"].append({"name": "跌破布林下轨", "description": f"价格 {current_price:.2f} < 下轨 {boll_lower:.2f}"})
+            elif current_price > boll_mid:
+                signals["bullish"].append({"name": "价格在中轨上方", "description": f"价格 {current_price:.2f} > 中轨 {boll_mid:.2f}"})
+
+        # 4. 计算筹码分布
+        chip_data = None
+        chip_metrics = None
+        if request.include_chip and len(df) >= 60:
+            try:
+                chip_calc = ChipDistributionCalculator()
+                chip_result = chip_calc.calculate(df)
+                if chip_result:
+                    chip_data = []
+                    for price, chip in zip(chip_result.price_levels, chip_result.chip_distribution):
+                        if chip > 0.01:
+                            chip_data.append({
+                                "price": round(float(price), 2),
+                                "chip": round(float(chip), 4)
+                            })
+
+                    # 计算90%成本区间
+                    import numpy as np
+                    sorted_indices = np.argsort(chip_result.chip_distribution)[::-1]
+                    cumulative = 0
+                    cost_90_low = float(chip_result.price_levels[0])
+                    cost_90_high = float(chip_result.price_levels[-1])
+
+                    for idx in sorted_indices:
+                        cumulative += chip_result.chip_distribution[idx]
+                        if cumulative >= 90:
+                            involved_indices = sorted_indices[:list(sorted_indices).index(idx)+1]
+                            cost_90_low = float(chip_result.price_levels[min(involved_indices)])
+                            cost_90_high = float(chip_result.price_levels[max(involved_indices)])
+                            break
+
+                    chip_metrics = {
+                        "profit_ratio": float(chip_result.profit_ratio) / 100 if chip_result.profit_ratio > 1 else float(chip_result.profit_ratio),
+                        "avg_cost": float(chip_result.avg_cost) if hasattr(chip_result, 'avg_cost') else current_price,
+                        "concentration": float(chip_result.concentration_ratio) / 100 if hasattr(chip_result, 'concentration_ratio') else 0.5,
+                        "score": float(chip_result.score) if hasattr(chip_result, 'score') else 50,
+                        "cost_90_low": round(cost_90_low, 2),
+                        "cost_90_high": round(cost_90_high, 2),
+                        "upper_pressure": float(chip_result.upper_pressure) if hasattr(chip_result, 'upper_pressure') else 0,
+                        "lower_support": float(chip_result.lower_support) if hasattr(chip_result, 'lower_support') else 0,
+                    }
+            except Exception as e:
+                logger.warning(f"筹码分布计算失败: {e}")
+
+        # 5. 生成分析报告
         report = analyzer.analyze_stock_enhanced(
             request.symbol,
             request.days,
@@ -384,14 +630,32 @@ async def analyze_stock_enhanced(request: EnhancedAnalyzeRequest) -> Dict[str, A
 
         return {
             "symbol": request.symbol,
+            "normalized_symbol": normalized_symbol,
+            "name": "",  # 可以从数据中获取
             "days": request.days,
+            "kline": kline_data,
+            "volume": volume_data,
+            "amount": amount_data,
+            "ma": ma_data,
+            "macd": macd_data,
+            "kdj": kdj_data,
+            "rsi": rsi_data,
+            "quote": quote,
+            "signals": signals,
+            "chip": chip_data,
+            "chip_metrics": chip_metrics,
             "report": report
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"增强分析失败: {str(e)}")
 
 
 @router.post("/scan")
+@router.post("/scan/market")
 async def scan_stocks(request: ScanRequest) -> Dict[str, Any]:
     """
     股票扫描筛选 - 对应 CLI: quanttool analysis scan
@@ -417,9 +681,15 @@ async def scan_stocks(request: ScanRequest) -> Dict[str, Any]:
         else:
             raise HTTPException(status_code=400, detail=f"不支持的市场: {request.market}")
 
-        analyzer = StockAnalyzer()
+        # 使用实时价格数据，避免 qlib 复权价格显示异常
+        analyzer = StockAnalyzer(use_realtime_price=True)
         end_date = datetime.now()
         start_date = end_date - timedelta(days=request.days)
+
+        # 先并发预加载所有股票数据（显著提升性能）
+        print(f"正在预加载 {len(stock_list)} 只股票数据...")
+        loaded_count = analyzer.preload_data_for_scan(stock_list, request.days)
+        print(f"成功预加载 {loaded_count} 只股票数据")
 
         results = []
         for stock_info in stock_list:
@@ -454,7 +724,7 @@ async def scan_stocks(request: ScanRequest) -> Dict[str, Any]:
             "total_stocks": len(stock_list),
             "analyzed_stocks": len(results),
             "top_n": request.top_n,
-            "results": top_results
+            "results": to_python_types(top_results)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"扫描失败: {str(e)}")
@@ -475,7 +745,8 @@ async def get_stock_info(symbol: str) -> Dict[str, Any]:
     try:
         from quanttool.factors.stock_analyzer import StockAnalyzer
 
-        analyzer = StockAnalyzer()
+        # 使用实时价格数据，避免 qlib 复权价格显示异常
+        analyzer = StockAnalyzer(use_realtime_price=True)
         df = analyzer.get_stock_data(symbol, 30)
 
         if df.empty:
@@ -513,7 +784,8 @@ async def get_stock_kline(symbol: str, days: int = 60) -> Dict[str, Any]:
     try:
         from quanttool.factors.stock_analyzer import StockAnalyzer
 
-        analyzer = StockAnalyzer()
+        # 使用实时价格数据，避免 qlib 复权价格显示异常
+        analyzer = StockAnalyzer(use_realtime_price=True)
         df = analyzer.get_stock_data(symbol, days)
 
         if df.empty:
@@ -524,7 +796,9 @@ async def get_stock_kline(symbol: str, days: int = 60) -> Dict[str, Any]:
 
         # 转换为前端可用的格式
         kline_data = []
-        for _, row in df_with_indicators.iterrows():
+        volume_data = []
+        prev_close = None
+        for idx, row in df_with_indicators.iterrows():
             timestamp = row.get('trade_date', row.get('timestamp', None))
             if timestamp is None:
                 continue
@@ -537,14 +811,29 @@ async def get_stock_kline(symbol: str, days: int = 60) -> Dict[str, Any]:
             else:
                 continue
 
+            close_price = float(row.get('close', 0))
+            open_price = float(row.get('open', 0))
+            volume = int(row.get('volume', 0))
+
             kline_data.append({
                 "time": ts,
-                "open": float(row.get('open', 0)),
+                "open": open_price,
                 "high": float(row.get('high', 0)),
                 "low": float(row.get('low', 0)),
-                "close": float(row.get('close', 0)),
-                "volume": int(row.get('volume', 0)),
+                "close": close_price,
             })
+
+            # 成交量数据（单独数组，根据涨跌着色）
+            if prev_close is None:
+                color = '#ef4444' if close_price >= open_price else '#10b981'
+            else:
+                color = '#ef4444' if close_price >= prev_close else '#10b981'
+            volume_data.append({
+                "time": ts,
+                "value": volume,
+                "color": color
+            })
+            prev_close = close_price
 
         # 提取均线数据
         ma_data = {
@@ -590,6 +879,7 @@ async def get_stock_kline(symbol: str, days: int = 60) -> Dict[str, Any]:
             "symbol": symbol,
             "days": days,
             "kline": kline_data,
+            "volume": volume_data,
             "ma": ma_data,
             "count": len(kline_data),
             # 实时价格信息
@@ -629,7 +919,8 @@ async def get_chip_distribution(symbol: str, days: int = 210) -> Dict[str, Any]:
         from quanttool.factors.chip_distribution import ChipDistributionCalculator
         import numpy as np
 
-        analyzer = StockAnalyzer()
+        # 使用实时价格数据，避免 qlib 复权价格显示异常
+        analyzer = StockAnalyzer(use_realtime_price=True)
         # 获取足够多的数据用于筹码计算
         df = analyzer.get_stock_data(symbol, max(days, 365))
 
@@ -714,7 +1005,8 @@ async def get_technical_signals(symbol: str, days: int = 60) -> Dict[str, Any]:
     try:
         from quanttool.factors.stock_analyzer import StockAnalyzer
 
-        analyzer = StockAnalyzer()
+        # 使用实时价格数据，避免 qlib 复权价格显示异常
+        analyzer = StockAnalyzer(use_realtime_price=True)
         df = analyzer.get_stock_data(symbol, days)
 
         if df.empty or len(df) < 20:
@@ -1016,6 +1308,191 @@ async def get_technical_signals(symbol: str, days: int = 60) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"获取信号失败: {str(e)}")
 
 
+@router.get("/stock/{symbol}/analysis")
+async def get_stock_analysis(symbol: str, days: int = 120) -> Dict[str, Any]:
+    """
+    获取股票完整分析数据（组合接口）
+
+    一次性返回 K线、筹码、信号等所有分析数据
+    """
+    try:
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+
+        # 使用与 kline 接口相同的数据获取方式
+        analyzer = StockAnalyzer(use_realtime_price=True)
+        df = analyzer.get_stock_data(symbol, days)
+
+        if df.empty or len(df) < 20:
+            raise HTTPException(status_code=404, detail=f"数据不足")
+
+        # 计算技术指标
+        df = analyzer.calculate_technical_indicators(df)
+
+        # K线数据
+        kline = []
+        for _, row in df.iterrows():
+            ts = row.get('trade_date', row.get('timestamp', None))
+            if ts is not None:
+                if hasattr(ts, 'strftime'):
+                    date_str = ts.strftime('%Y-%m-%d')
+                else:
+                    date_str = str(ts)[:10]
+            else:
+                date_str = ""
+
+            kline.append({
+                "date": date_str,
+                "open": float(row.get('open', 0)),
+                "high": float(row.get('high', 0)),
+                "low": float(row.get('low', 0)),
+                "close": float(row.get('close', 0)),
+                "volume": float(row.get('volume', 0)),
+                "amount": float(row.get('amount', 0)),
+            })
+
+        # 获取股票名称
+        name = symbol
+        try:
+            info = analyzer.get_stock_info(symbol)
+            if info:
+                name = info.get('name', symbol)
+        except Exception:
+            pass
+
+        # 筹码分布（简化版本 - 基于价格区间）
+        chip = []
+        try:
+            import numpy as np
+            prices = df['close'].dropna().values
+            if len(prices) > 0:
+                min_price = prices.min()
+                max_price = prices.max()
+                price_range = max_price - min_price
+                if price_range > 0:
+                    # 分成20个价格区间
+                    bins = np.linspace(min_price, max_price, 21)
+                    hist, _ = np.histogram(prices, bins=bins)
+                    total = hist.sum()
+                    if total > 0:
+                        for i, count in enumerate(hist):
+                            chip.append({
+                                "price": float((bins[i] + bins[i+1]) / 2),
+                                "percent": float(count / total),
+                            })
+        except Exception as e:
+            logger.warning(f"计算筹码分布失败: {e}")
+
+        # 技术指标
+        indicators = {
+            "macd": {
+                "dif": df['macd'].dropna().tolist()[-60:] if 'macd' in df.columns else [],
+                "dea": df['macd_signal'].dropna().tolist()[-60:] if 'macd_signal' in df.columns else [],
+                "macd": df['macd_hist'].dropna().tolist()[-60:] if 'macd_hist' in df.columns else [],
+            },
+            "kdj": {
+                "k": df['kdj_k'].dropna().tolist()[-60:] if 'kdj_k' in df.columns else [],
+                "d": df['kdj_d'].dropna().tolist()[-60:] if 'kdj_d' in df.columns else [],
+                "j": df['kdj_j'].dropna().tolist()[-60:] if 'kdj_j' in df.columns else [],
+            },
+            "rsi": {
+                "rsi6": df['rsi_6'].dropna().tolist()[-60:] if 'rsi_6' in df.columns else [],
+                "rsi12": df['rsi_12'].dropna().tolist()[-60:] if 'rsi_12' in df.columns else [],
+                "rsi24": df['rsi_24'].dropna().tolist()[-60:] if 'rsi_24' in df.columns else [],
+            },
+            "ma": {
+                "ma5": df['ma_5'].dropna().tolist()[-60:] if 'ma_5' in df.columns else [],
+                "ma10": df['ma_10'].dropna().tolist()[-60:] if 'ma_10' in df.columns else [],
+                "ma20": df['ma_20'].dropna().tolist()[-60:] if 'ma_20' in df.columns else [],
+                "ma60": df['ma_60'].dropna().tolist()[-60:] if 'ma_60' in df.columns else [],
+            },
+        }
+
+        # 简单信号检测
+        signals = []
+        latest = df.iloc[-1]
+        macd = latest.get('macd', 0)
+        macd_signal_val = latest.get('macd_signal', 0)
+        if macd is not None and macd_signal_val is not None:
+            if macd > macd_signal_val and df.iloc[-2].get('macd', 0) <= df.iloc[-2].get('macd_signal', 0):
+                signals.append({"name": "MACD金叉", "type": "buy", "description": "MACD金叉买入信号"})
+            elif macd < macd_signal_val and df.iloc[-2].get('macd', 0) >= df.iloc[-2].get('macd_signal', 0):
+                signals.append({"name": "MACD死叉", "type": "sell", "description": "MACD死叉卖出信号"})
+
+        rsi = latest.get('rsi_14', latest.get('rsi_6', 0))
+        if rsi is not None:
+            if rsi < 30:
+                signals.append({"name": "RSI超卖", "type": "buy", "description": f"RSI={rsi:.1f}，超卖区间"})
+            elif rsi > 70:
+                signals.append({"name": "RSI超买", "type": "sell", "description": f"RSI={rsi:.1f}，超买区间"})
+
+        return {
+            "symbol": symbol,
+            "name": name,
+            "kline": kline,
+            "chip": chip,
+            "signals": signals,
+            "indicators": indicators,
+            "latest_price": float(latest.get('close', 0)),
+            "latest_change_pct": float(latest.get('pct_chg', 0)),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取分析数据失败: {str(e)}")
+
+
+@router.get("/index/{index_code}/data")
+async def get_index_data(index_code: str, days: int = 120) -> List[Dict[str, Any]]:
+    """
+    获取指数历史数据
+
+    Args:
+        index_code: 指数代码 (如 000001=上证指数, 399001=深证成指)
+        days: 获取天数
+    """
+    try:
+        from quanttool.infrastructure.data_providers.data_fetcher import DataFetcher
+
+        fetcher = DataFetcher()
+        end_date = datetime.now().strftime('%Y%m%d')
+        start_date = (datetime.now() - timedelta(days=days * 2)).strftime('%Y%m%d')
+
+        df = fetcher.fetch_index_daily(index_code, start_date=start_date, end_date=end_date)
+
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"无法获取指数 {index_code} 数据")
+
+        # 只取最近 days 天
+        df = df.tail(days)
+
+        result = []
+        for _, row in df.iterrows():
+            ts = row.get('trade_date', row.index if hasattr(row, 'index') else None)
+            if ts is not None:
+                if hasattr(ts, 'strftime'):
+                    date_str = ts.strftime('%Y-%m-%d')
+                else:
+                    date_str = str(ts)[:10]
+            else:
+                date_str = ""
+
+            result.append({
+                "date": date_str,
+                "value": float(row.get('close', 0)),
+            })
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get index data: {e}")
+        raise HTTPException(status_code=500, detail=f"获取指数数据失败: {str(e)}")
+
+
 # ==================== 回测 API ====================
 
 @router.get("/backtest/strategies")
@@ -1125,8 +1602,33 @@ async def list_backtest_strategies() -> List[Dict[str, Any]]:
                 "entry_period": {"type": "int", "default": 20, "description": "入场周期"},
                 "exit_period": {"type": "int", "default": 10, "description": "出场周期"}
             }
+        },
+        {
+            "name": "gbm",
+            "display_name": "GBM机器学习策略",
+            "description": "基于LightGBM的机器学习策略，使用Alpha158特征和百分位排名信号",
+            "category": "ml",
+            "params": {
+                "buy_threshold": {"type": "float", "default": 0.35, "description": "买入百分位阈值（前65%触发买入）"},
+                "sell_threshold": {"type": "float", "default": 0.35, "description": "卖出百分位阈值（后35%触发卖出）"},
+                "stop_loss_pct": {"type": "float", "default": 0.05, "description": "止损比例"},
+                "take_profit_pct": {"type": "float", "default": 0.10, "description": "止盈比例"}
+            }
         }
     ]
+
+
+@router.get("/backtest/history")
+async def get_backtest_history(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    获取历史回测记录
+
+    Args:
+        symbol: 可选，筛选特定股票的记录
+    """
+    # 这里返回空列表，实际项目中可以从数据库读取
+    # 或者从文件系统读取保存的回测结果
+    return []
 
 
 # ==================== Qlib ML 模型 API ====================
@@ -1136,10 +1638,8 @@ async def list_qlib_models() -> List[Dict[str, Any]]:
     """
     列出可用的 Qlib ML 模型
 
-    包括 21 种 Qlib 原生模型：
-    - GBDT 系列: LightGBM, XGBoost, CatBoost, DoubleEnsemble
-    - PyTorch 序列: LSTM, GRU, ALSTM, Transformer, TCN, Localformer
-    - PyTorch 高级: GATs, SFM, TabNet, ADARNN, ADD, HIST, IGMTF, KRNN, TRA, TCTS, Sandwich
+    支持 GBDT 系列模型：
+    - LightGBM, XGBoost, CatBoost, DoubleEnsemble
     """
     try:
         from quanttool.strategies.qlib import list_available_models
@@ -1153,19 +1653,6 @@ async def list_qlib_models() -> List[Dict[str, Any]]:
                 'max_depth': {'type': 'int', 'default': 6, 'description': '最大深度'},
                 'learning_rate': {'type': 'float', 'default': 0.01, 'description': '学习率'},
             },
-            'pytorch_sequence': {
-                'hidden_size': {'type': 'int', 'default': 64, 'description': '隐藏层大小'},
-                'num_layers': {'type': 'int', 'default': 2, 'description': '层数'},
-                'dropout': {'type': 'float', 'default': 0.1, 'description': 'Dropout率'},
-                'epochs': {'type': 'int', 'default': 100, 'description': '训练轮数'},
-                'batch_size': {'type': 'int', 'default': 256, 'description': '批大小'},
-            },
-            'pytorch_advanced': {
-                'hidden_size': {'type': 'int', 'default': 64, 'description': '隐藏层大小'},
-                'num_layers': {'type': 'int', 'default': 2, 'description': '层数'},
-                'dropout': {'type': 'float', 'default': 0.1, 'description': 'Dropout率'},
-                'epochs': {'type': 'int', 'default': 100, 'description': '训练轮数'},
-            }
         }
 
         for model in models:
@@ -1227,11 +1714,11 @@ async def list_saved_models() -> List[Dict[str, Any]]:
             # 模型类型显示名称
             display_names = {
                 'lgb': 'LightGBM',
+                'lightgbm': 'LightGBM',
                 'xgboost': 'XGBoost',
+                'xgb': 'XGBoost',
                 'catboost': 'CatBoost',
-                'lstm': 'LSTM',
-                'gru': 'GRU',
-                'transformer': 'Transformer',
+                'double_ensemble': 'DoubleEnsemble',
             }
 
             models.append({
@@ -1244,6 +1731,7 @@ async def list_saved_models() -> List[Dict[str, Any]]:
                 "size_kb": round(stat.st_size / 1024, 2),
                 "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
                 "created_date": datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d"),
+                "source": "trained",
             })
         except Exception as e:
             logger.warning(f"Failed to read model file {model_file}: {e}")
@@ -1251,6 +1739,189 @@ async def list_saved_models() -> List[Dict[str, Any]]:
     # 按修改时间降序排列
     models.sort(key=lambda x: x["modified_at"], reverse=True)
     return models
+
+
+@router.get("/qlib/pretrained-models")
+async def list_pretrained_models() -> List[Dict[str, Any]]:
+    """
+    列出本地预训练模型
+
+    扫描 qlib_data/cn_data/ 目录下的预训练模型文件 (model_*.pkl)
+    返回模型列表，包含模型类型、大小、修改时间等信息
+    """
+    import joblib
+    from pathlib import Path
+
+    models = []
+
+    # 预训练模型目录
+    pretrained_dirs = [
+        Path("qlib_data/cn_data"),
+        Path("models/qlib"),
+    ]
+
+    # 模型类型显示名称
+    display_names = {
+        'lgb': 'LightGBM',
+        'lightgbm': 'LightGBM',
+        'xgboost': 'XGBoost',
+        'xgb': 'XGBoost',
+        'catboost': 'CatBoost',
+        'lstm': 'LSTM',
+        'gru': 'GRU',
+        'transformer': 'Transformer',
+        'mlp': 'MLP',
+        'gbdt': 'GBDT',
+    }
+
+    for model_dir in pretrained_dirs:
+        if not model_dir.exists():
+            continue
+
+        for model_file in model_dir.glob("model_*.pkl"):
+            try:
+                stat = model_file.stat()
+
+                # 解析模型类型: model_lgb.pkl -> lgb
+                model_type = model_file.stem.replace("model_", "").lower()
+
+                # 尝试加载模型元数据
+                feature_count = None
+                ic_score = None
+                train_info = {}
+
+                try:
+                    saved_data = joblib.load(model_file)
+                    if isinstance(saved_data, dict):
+                        model = saved_data.get('model')
+                        feature_names = saved_data.get('feature_names', [])
+                        feature_count = len(feature_names) if feature_names else None
+
+                        # 尝试获取训练信息
+                        if 'config' in saved_data:
+                            train_info['config'] = saved_data['config']
+                        if 'metrics' in saved_data:
+                            train_info['metrics'] = saved_data['metrics']
+                            ic_score = saved_data['metrics'].get('ic')
+
+                        # 从模型对象获取特征数量
+                        if hasattr(model, 'feature_names_') and feature_count is None:
+                            feature_count = len(model.feature_names_)
+                except Exception as e:
+                    logger.debug(f"Could not load model metadata: {e}")
+
+                models.append({
+                    "name": model_file.name,
+                    "path": str(model_file),
+                    "model_type": model_type,
+                    "display_name": display_names.get(model_type, model_type.upper()),
+                    "feature_count": feature_count,
+                    "ic_score": ic_score,
+                    "size_kb": round(stat.st_size / 1024, 2),
+                    "size_mb": round(stat.st_size / 1024 / 1024, 2),
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "created_date": datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d"),
+                    "source": "pretrained" if "qlib_data" in str(model_dir) else "trained",
+                    "train_info": train_info,
+                })
+            except Exception as e:
+                logger.warning(f"Failed to read pretrained model {model_file}: {e}")
+
+    # 按修改时间降序排列
+    models.sort(key=lambda x: x["modified_at"], reverse=True)
+    return models
+
+
+@router.get("/qlib/all-models")
+async def list_all_models() -> Dict[str, Any]:
+    """
+    列出所有模型（预训练 + 训练后的模型）
+
+    返回分组展示的模型列表
+    """
+    import joblib
+    from pathlib import Path
+
+    # 模型类型显示名称
+    display_names = {
+        'lgb': 'LightGBM',
+        'lightgbm': 'LightGBM',
+        'xgboost': 'XGBoost',
+        'xgb': 'XGBoost',
+        'catboost': 'CatBoost',
+        'lstm': 'LSTM',
+        'gru': 'GRU',
+        'transformer': 'Transformer',
+        'mlp': 'MLP',
+        'gbdt': 'GBDT',
+    }
+
+    def scan_model_dir(model_dir: Path, source: str) -> List[Dict[str, Any]]:
+        """扫描模型目录"""
+        models = []
+        if not model_dir.exists():
+            return models
+
+        for model_file in model_dir.glob("*.pkl"):
+            try:
+                stat = model_file.stat()
+
+                # 解析模型类型
+                stem = model_file.stem
+                if stem.startswith("model_"):
+                    model_type = stem.replace("model_", "").lower()
+                else:
+                    # 格式: {model_type}_{id}
+                    name_parts = stem.split('_')
+                    model_type = name_parts[0] if name_parts else "unknown"
+
+                # 尝试加载模型元数据
+                feature_count = None
+                ic_score = None
+
+                try:
+                    saved_data = joblib.load(model_file)
+                    if isinstance(saved_data, dict):
+                        feature_names = saved_data.get('feature_names', [])
+                        feature_count = len(feature_names) if feature_names else None
+
+                        if 'metrics' in saved_data:
+                            ic_score = saved_data['metrics'].get('ic')
+
+                        model = saved_data.get('model')
+                        if hasattr(model, 'feature_names_') and feature_count is None:
+                            feature_count = len(model.feature_names_)
+                except Exception:
+                    pass
+
+                models.append({
+                    "name": model_file.name,
+                    "path": str(model_file),
+                    "model_type": model_type,
+                    "display_name": display_names.get(model_type, model_type.upper()),
+                    "feature_count": feature_count,
+                    "ic_score": ic_score,
+                    "size_kb": round(stat.st_size / 1024, 2),
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "created_date": datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d"),
+                    "source": source,
+                })
+            except Exception as e:
+                logger.warning(f"Failed to read model file {model_file}: {e}")
+
+        return models
+
+    # 扫描预训练模型目录
+    pretrained_models = scan_model_dir(Path("qlib_data/cn_data"), "pretrained")
+
+    # 扫描训练后的模型目录
+    trained_models = scan_model_dir(Path("models/qlib"), "trained")
+
+    return {
+        "pretrained": sorted(pretrained_models, key=lambda x: x["modified_at"], reverse=True),
+        "trained": sorted(trained_models, key=lambda x: x["modified_at"], reverse=True),
+        "total_count": len(pretrained_models) + len(trained_models),
+    }
 
 
 @router.get("/qlib/saved-models/{model_id}")
@@ -1346,6 +2017,8 @@ class QlibTrainRequest(BaseModel):
     dropout: float = 0.1
     epochs: int = 100
     batch_size: int = 256
+    early_stopping_rounds: int = 20
+    n_head: int = 4  # Transformer attention heads
     # 训练配置
     max_train_stocks: int = 0  # 0表示使用全部沪深300股票
     # 回测参数
@@ -1383,6 +2056,324 @@ class QlibPredictRequest(BaseModel):
         if self.predict_end_date:
             return self.predict_end_date
         return datetime.now().strftime('%Y-%m-%d')
+
+
+class GBMTrainRequest(BaseModel):
+    """GBM 策略训练请求（使用固定优化参数）"""
+    # 股票代码（使用沪深300成分股训练，此参数仅用于预测）
+    symbols: List[str] = []
+    # 训练配置
+    max_train_stocks: int = 0  # 0表示使用全部沪深300股票
+
+
+# 预制的优化参数（基于超参数搜索结果）
+GBM_OPTIMAL_PARAMS = {
+    "feature_type": "alpha158",
+    "n_estimators": 500,
+    "max_depth": 8,
+    "learning_rate": 0.2,
+    "num_leaves": 210,
+    "subsample": 0.8789,
+    "colsample_bytree": 0.8879,
+    "reg_alpha": 205.6999,  # lambda_l1
+    "reg_lambda": 580.9768,  # lambda_l2
+    "n_jobs": 20,
+    "label_horizon": 10,
+    "buy_threshold": 0.50,  # 降低买入阈值，增加交易机会
+    "sell_threshold": 0.50,  # 卖出阈值
+}
+
+
+@router.post("/gbm/train")
+async def train_gbm_model(request: GBMTrainRequest) -> Dict[str, Any]:
+    """
+    训练 GBM 策略
+
+    使用 LightGBM (sklearn 接口) 和 Alpha158 特征
+    使用预制的优化参数，忽略用户输入
+
+    数据划分（按年份固定）:
+    - 训练集: 2017-01-01 ~ 2022-12-31
+    - 验证集: 2023-01-01 ~ 2024-06-30
+    - 测试集: 2024-07-01 ~ 当前
+    """
+    try:
+        from quanttool.strategies.gbm_strategy import GBMStrategy, GBMConfig
+        from quanttool.cli.commands.analysis_commands import get_csi300_constituents
+        import uuid
+
+        # 获取沪深300成分股作为训练数据
+        csi300_stocks = get_csi300_constituents()
+        train_symbols = [s['code'] if isinstance(s, dict) else s for s in csi300_stocks]
+
+        # 限制训练股票数量
+        if request.max_train_stocks > 0:
+            train_symbols = train_symbols[:request.max_train_stocks]
+
+        logger.info(f"GBM 训练: 使用 {len(train_symbols)} 只沪深300成分股")
+
+        # 使用固定优化参数（忽略用户输入）
+        config = GBMConfig(**GBM_OPTIMAL_PARAMS)
+
+        # 创建策略
+        strategy = GBMStrategy(config)
+
+        # 训练模型
+        result = strategy.train(
+            instruments=train_symbols,
+            start_date="2017-01-01",
+            end_date="2026-12-31",
+        )
+
+        # 保存模型
+        model_dir = "models/gbm"
+        os.makedirs(model_dir, exist_ok=True)
+        model_id = str(uuid.uuid4())[:8]
+        model_path = f"{model_dir}/lgbm_{model_id}.pkl"
+        strategy.save_model(model_path)
+
+        return {
+            "success": True,
+            "model_id": model_id,
+            "model_path": model_path,
+            "train_samples": to_python_types(result.get("train_samples", 0)),
+            "valid_samples": to_python_types(result.get("valid_samples", 0)),
+            "test_samples": to_python_types(result.get("test_samples", 0)),
+            "feature_count": to_python_types(result.get("feature_count", 0)),
+            "train_ic": to_python_types(result.get("train_ic", 0)),
+            "valid_ic": to_python_types(result.get("valid_ic", 0)),
+            "test_ic": to_python_types(result.get("test_ic", 0)),
+            "best_iteration": to_python_types(result.get("best_iteration", 0)),
+        }
+
+    except Exception as e:
+        logger.error(f"GBM 训练失败: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"训练失败: {str(e)}")
+
+
+class GBMPredictRequest(BaseModel):
+    """GBM 策略预测请求"""
+    model_path: str = ""  # 模型路径，为空则自动使用最新模型
+    symbols: List[str] = []  # 预测的股票代码
+
+
+@router.post("/gbm/predict")
+async def predict_gbm_model(request: GBMPredictRequest) -> Dict[str, Any]:
+    """
+    使用 GBM 策略预测
+
+    返回每只股票的预测收益率和交易信号
+    """
+    try:
+        from quanttool.strategies.gbm_strategy import GBMStrategy, GBMConfig
+        import glob
+
+        # 查找模型
+        model_path = request.model_path
+        if not model_path:
+            model_files = glob.glob("models/gbm/lgbm_*.pkl")
+            if not model_files:
+                raise HTTPException(status_code=404, detail="未找到训练好的模型")
+            model_path = max(model_files, key=os.path.getmtime)
+            logger.info(f"使用最新模型: {model_path}")
+
+        # 加载模型
+        config = GBMConfig()
+        strategy = GBMStrategy(config)
+        strategy.load_model(model_path)
+
+        # 预测
+        predictions = []
+        for symbol in request.symbols:
+            try:
+                pred = strategy.predict(symbol)
+                predictions.append(to_python_types(pred))
+            except Exception as e:
+                logger.warning(f"预测失败 [{symbol}]: {e}")
+                predictions.append({
+                    "instrument": symbol,
+                    "error": str(e),
+                })
+
+        return {
+            "success": True,
+            "model_path": model_path,
+            "predictions": predictions,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"GBM 预测失败: {e}")
+        raise HTTPException(status_code=500, detail=f"预测失败: {str(e)}")
+
+
+@router.get("/gbm/models")
+async def list_gbm_models() -> List[Dict[str, Any]]:
+    """列出所有 GBM 模型"""
+    import glob
+
+    model_files = glob.glob("models/gbm/lgbm_*.pkl")
+
+    result = []
+    for path in model_files:
+        stat = os.stat(path)
+        result.append({
+            "path": path,
+            "filename": os.path.basename(path),
+            "size_mb": round(stat.st_size / 1024 / 1024, 2),
+            "modified": datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
+        })
+
+    return sorted(result, key=lambda x: x["modified"], reverse=True)
+
+
+@router.delete("/gbm/models/{model_id}")
+async def delete_gbm_model(model_id: str) -> Dict[str, Any]:
+    """删除指定的 GBM 模型"""
+    import glob
+
+    # 查找匹配的模型文件
+    model_files = glob.glob(f"models/gbm/*{model_id}*.pkl")
+
+    if not model_files:
+        # 也可能是 qrun 模型
+        import shutil
+        qrun_dirs = glob.glob(f"mlruns/0/*{model_id}*")
+        if qrun_dirs:
+            for dir_path in qrun_dirs:
+                shutil.rmtree(dir_path)
+            return {"success": True, "message": f"已删除模型目录: {model_id}"}
+        raise HTTPException(status_code=404, detail=f"模型 {model_id} 不存在")
+
+    deleted = []
+    for path in model_files:
+        try:
+            os.remove(path)
+            deleted.append(path)
+        except Exception as e:
+            logger.warning(f"删除模型文件失败 {path}: {e}")
+
+    return {"success": True, "deleted": deleted}
+
+
+@router.get("/gbm/train/{task_id}/progress")
+async def get_training_progress(task_id: str) -> Dict[str, Any]:
+    """获取训练任务进度"""
+    # 检查任务状态（从全局任务存储）
+    if task_id in _training_tasks:
+        task_info = _training_tasks[task_id]
+        return {
+            "status": task_info.get("status", "unknown"),
+            "progress": task_info.get("progress", 0),
+            "message": task_info.get("message", ""),
+        }
+
+    # 检查 mlruns 是否有对应的结果
+    import glob
+    result_dirs = glob.glob(f"mlruns/0/{task_id}")
+    if result_dirs:
+        return {
+            "status": "completed",
+            "progress": 100,
+            "message": "训练已完成",
+        }
+
+    return {
+        "status": "not_found",
+        "progress": 0,
+        "message": f"任务 {task_id} 不存在",
+    }
+
+
+# 训练任务存储
+_training_tasks: Dict[str, Dict[str, Any]] = {}
+
+
+@router.get("/gbm/qrun-models")
+async def list_qrun_models() -> List[Dict[str, Any]]:
+    """
+    列出所有 qrun 训练的模型
+
+    返回 mlruns 目录中所有可用的模型信息
+    """
+    try:
+        from quanttool.application.gbm_picker_service import list_all_qrun_models
+
+        models = list_all_qrun_models()
+
+        # 移除不需要返回的字段
+        for model in models:
+            model.pop('modified_timestamp', None)
+
+        return models
+
+    except Exception as e:
+        logger.error(f"获取 qrun 模型列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取模型列表失败: {str(e)}")
+
+
+class GBMPicksRequest(BaseModel):
+    """GBM 荐股请求"""
+    top_n: int = 10  # 返回前 N 只推荐股票
+    force_train: bool = False  # 是否强制重新训练
+    model_path: Optional[str] = None  # 指定模型路径（qrun 模型）
+
+
+@router.post("/gbm/picks")
+async def get_gbm_picks(request: GBMPicksRequest) -> Dict[str, Any]:
+    """
+    GBM 模型智能荐股
+
+    使用已训练的 GBM 模型对沪深300成分股进行预测，返回 top N 推荐股票。
+    如果没有可用模型，会自动训练一个新模型。
+
+    支持使用 qrun 训练的模型，通过 model_path 参数指定。
+    """
+    try:
+        from quanttool.application.gbm_picker_service import GBMCsi300Picker
+
+        # 创建荐股器
+        picker = GBMCsi300Picker(
+            top_n=request.top_n,
+            model_path=request.model_path
+        )
+
+        # 获取推荐
+        result = picker.get_daily_picks(force_train=request.force_train)
+
+        # 转换为响应格式 (确保所有数值都是 Python 原生类型)
+        top_stocks = []
+        for rec in result.top_stocks:
+            top_stocks.append({
+                "code": rec.code,
+                "name": rec.name,
+                "pred_return": float(round(rec.pred_return, 4)) if rec.pred_return else 0.0,
+                "percentile": float(round(rec.percentile, 4)) if rec.percentile else 0.0,
+                "confidence": float(round(rec.confidence, 4)) if rec.confidence else 0.0,
+                "probability": float(round(rec.probability, 4)) if rec.probability else 0.0,
+                "signal": rec.signal,
+                "close": float(round(rec.close, 2)) if rec.close else None,
+                "stop_loss": float(round(rec.stop_loss, 2)) if rec.stop_loss else None,
+                "take_profit": float(round(rec.take_profit, 2)) if rec.take_profit else None,
+            })
+
+        return {
+            "success": True,
+            "date": result.date,
+            "total_stocks": int(result.total_stocks),
+            "valid_stocks": int(result.valid_stocks),
+            "top_stocks": top_stocks,
+            "model_info": result.model_info,
+        }
+
+    except Exception as e:
+        logger.error(f"GBM 荐股失败: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"荐股失败: {str(e)}")
 
 
 @router.post("/qlib/train")
@@ -1741,196 +2732,321 @@ async def train_qlib_model_stream(request: QlibTrainRequest):
             from quanttool.strategies.qlib_strategy import QlibFeatureEngineer
             feature_engineer = QlibFeatureEngineer(feature_set=request.feature_set)
 
-            for i, symbol in enumerate(train_symbols):
-                try:
-                    send_event("progress", {
-                        "stage": "data_collection",
-                        "progress": 5 + int((i / total_stocks) * 55),
-                        "current": symbol,
-                        "processed": i + 1,
-                        "total": total_stocks,
-                        "cache_hits": cache_hits,
-                        "message": f"正在获取数据: {symbol} ({i + 1}/{total_stocks}) [缓存命中: {cache_hits}]"
-                    })
+            # 计算实际需要的日期范围
+            train_end_date = datetime.fromisoformat(request.train_end)
+            start_date = train_end_date - timedelta(days=2500)  # 约 7 年
 
-                    # 获取数据：优先使用缓存
-                    # 计算实际需要的日期范围
-                    train_end_date = datetime.fromisoformat(request.train_end)
-                    start_date = train_end_date - timedelta(days=2500)  # 约 7 年
-
-                    df = analyzer.get_stock_data(
-                        symbol,
-                        start_date=start_date,
-                        end_date=datetime.now(),
-                        force_refresh=False  # 优先使用缓存
-                    )
-
-                    # 检测是否命中缓存（数据量大且获取快）
-                    if len(df) >= 500:  # 约2年数据，通常来自缓存
-                        cache_hits += 1
-
-                    if df.empty or len(df) < 120:  # Alpha158 需要至少 120 条数据
-                        continue
-
-                    # 确定日期列
-                    date_column = None
-                    if 'trade_date' in df.columns:
-                        date_column = 'trade_date'
-                    elif 'timestamp' in df.columns:
-                        date_column = 'timestamp'
-
-                    if not date_column:
-                        send_event("log", {"message": f"警告: {symbol} 无日期列"})
-                        continue
-
-                    df['_date'] = pd.to_datetime(df[date_column])
-
-                    if request.use_rich_features:
-                        # 使用 Alpha158 特征工程 (150+ 特征)
-                        try:
-                            feature_df = feature_engineer.generate_features(df)
-                            available_features = list(feature_df.columns)
-                            df = pd.concat([df, feature_df], axis=1)
-                        except Exception as e:
-                            send_event("log", {"message": f"警告: {symbol} 特征工程失败: {str(e)}"})
-                            continue
-                    else:
-                        df = analyzer.calculate_technical_indicators(df)
-                        if request.features:
-                            available_features = [f for f in request.features if f in df.columns]
-                        else:
-                            available_features = ['close', 'volume', 'ma_5', 'ma_10', 'ma_20']
-
-                    if not available_features:
-                        send_event("log", {"message": f"警告: {symbol} 无可用特征"})
-                        continue
-
-                    # 确保所有股票使用相同的特征列
-                    if first_symbol_features is None:
-                        first_symbol_features = available_features
-                    else:
-                        available_features = [f for f in first_symbol_features if f in df.columns]
-                        if len(available_features) != len(first_symbol_features):
-                            continue
-
-                    # 计算标签：未来5天收益率（连续值，用于回归任务）
-                    # Alpha158 特征用于预测连续收益率
-                    df['return_5d'] = df['close'].pct_change(5).shift(-5)
-                    df['label'] = df['return_5d']  # 连续收益率标签
-
-                    for idx, row in df.iterrows():
-                        date_val = row['_date']
-                        if pd.isna(date_val):
-                            continue
-
-                        feature_vals = [row.get(f) for f in available_features]
-                        label_val = row.get('label')  # 连续收益率标签
-
-                        if any(pd.isna(v) for v in feature_vals) or pd.isna(label_val):
-                            continue
-
-                        row_data = {
-                            'features': feature_vals,
-                            'label': label_val,
-                            'symbol': symbol,
-                            'date': date_val,
-                            'return_5d': row.get('return_5d', 0)  # 保留实际收益率用于评估
-                        }
-
-                        if train_start_dt <= date_val <= train_end_dt:
-                            train_data.append(row_data)
-                        elif valid_start_dt <= date_val <= valid_end_dt:
-                            valid_data.append(row_data)
-                        elif test_start_dt <= date_val <= test_end_dt:
-                            test_data.append(row_data)
-
-                    success_count += 1
-
-                except Exception as e:
-                    send_event("log", {"message": f"警告: {symbol} 数据获取失败: {str(e)}"})
-                    continue
-
-            # 阶段3: 数据准备
+            # 先并发预加载所有股票数据（显著提升性能）
             send_event("progress", {
-                "stage": "preparation",
-                "progress": 65,
-                "message": f"数据获取完成，成功 {success_count} 只股票 (缓存命中: {cache_hits})，准备训练数据..."
+                "stage": "data_preload",
+                "progress": 5,
+                "message": f"并发预加载 {total_stocks} 只股票数据..."
             })
 
-            if not train_data:
-                send_event("error", {
-                    "message": f"无法获取足够的训练数据。成功 {success_count} 只股票，训练集 {len(train_data)} 条"
+            loaded_count = analyzer.preload_data_for_scan(train_symbols, days=2500)
+            send_event("progress", {
+                "stage": "data_preload",
+                "progress": 10,
+                "message": f"预加载完成，成功获取 {loaded_count} 只股票数据"
+            })
+
+            # 使用 qlib 原生训练流程
+            send_event("progress", {
+                "stage": "qlib_setup",
+                "progress": 15,
+                "message": "初始化 Qlib 训练环境..."
+            })
+
+            try:
+                from quanttool.infrastructure.data_providers.qlib_data_converter import (
+                    QlibDataConverter,
+                    QlibTrainingPipeline,
+                    QlibDataConfig
+                )
+
+                # 配置 Qlib 数据转换器
+                qlib_config = QlibDataConfig(
+                    cache_dir=".cache/incremental_data",
+                    output_dir="qlib_data/cn_data",
+                    feature_type="alpha158" if request.use_rich_features else "alpha360",
+                    start_date=request.train_start,
+                    end_date=request.train_end,
+                )
+
+                converter = QlibDataConverter(qlib_config)
+                pipeline = QlibTrainingPipeline(converter)
+
+                send_event("log", {"message": f"使用 Qlib 原生训练流程 (特征: {qlib_config.feature_type})"})
+
+                # 阶段3: 转换数据为 qlib 格式
+                send_event("progress", {
+                    "stage": "data_conversion",
+                    "progress": 20,
+                    "message": "转换数据为 Qlib 原生格式..."
                 })
-                return
 
-            feature_cols = available_features
-            X_train = np.array([d['features'] for d in train_data])
-            y_train = np.array([d['label'] for d in train_data])
+                # 转换股票代码格式 (000001.SZ -> 000001_SZ)
+                qlib_symbols = [s.replace('.', '_') for s in train_symbols]
 
-            send_event("progress", {
-                "stage": "preparation",
-                "progress": 70,
-                "message": f"训练样本: {len(train_data)}, 验证样本: {len(valid_data)}, 测试样本: {len(test_data)}, 特征数: {len(feature_cols)}"
-            })
+                # 创建 qlib DatasetH
+                dataset = converter.create_qlib_dataset(
+                    symbols=qlib_symbols,
+                    start_date=request.train_start,
+                    end_date=request.test_end,
+                    feature_type=qlib_config.feature_type,
+                    label_type="return_10"
+                )
+
+                send_event("log", {"message": f"Qlib DatasetH 创建成功"})
+
+            except Exception as e:
+                send_event("log", {"message": f"Qlib 原生流程失败，回退到 sklearn: {e}"})
+                import traceback
+                traceback.print_exc()
+
+                # 回退到传统流程
+                for i, symbol in enumerate(train_symbols):
+                    try:
+                        send_event("progress", {
+                            "stage": "data_collection",
+                            "progress": 10 + int((i / total_stocks) * 50),
+                            "current": symbol,
+                            "processed": i + 1,
+                            "total": total_stocks,
+                            "cache_hits": cache_hits,
+                            "message": f"正在处理数据: {symbol} ({i + 1}/{total_stocks})"
+                        })
+
+                        df = analyzer.get_stock_data(
+                            symbol,
+                            start_date=start_date,
+                            end_date=datetime.now(),
+                            force_refresh=False
+                        )
+
+                        if len(df) >= 500:
+                            cache_hits += 1
+
+                        if df.empty or len(df) < 120:
+                            continue
+
+                        date_column = None
+                        if 'trade_date' in df.columns:
+                            date_column = 'trade_date'
+                        elif 'timestamp' in df.columns:
+                            date_column = 'timestamp'
+
+                        if not date_column:
+                            continue
+
+                        df['_date'] = pd.to_datetime(df[date_column])
+
+                        if request.use_rich_features:
+                            try:
+                                feature_df = feature_engineer.generate_features(df)
+                                available_features = list(feature_df.columns)
+                                df = pd.concat([df, feature_df], axis=1)
+                            except Exception as e:
+                                continue
+                        else:
+                            df = analyzer.calculate_technical_indicators(df)
+                            if request.features:
+                                available_features = [f for f in request.features if f in df.columns]
+                            else:
+                                available_features = ['close', 'volume', 'ma_5', 'ma_10', 'ma_20']
+
+                        if not available_features:
+                            continue
+
+                        if first_symbol_features is None:
+                            first_symbol_features = available_features
+                        else:
+                            available_features = [f for f in first_symbol_features if f in df.columns]
+                            if len(available_features) != len(first_symbol_features):
+                                continue
+
+                        df['return_5d'] = df['close'].pct_change(5).shift(-5)
+                        df['label'] = df['return_5d']
+
+                        for idx, row in df.iterrows():
+                            date_val = row['_date']
+                            if pd.isna(date_val):
+                                continue
+
+                            feature_vals = [row.get(f) for f in available_features]
+                            label_val = row.get('label')
+
+                            if any(pd.isna(v) for v in feature_vals) or pd.isna(label_val):
+                                continue
+
+                            row_data = {
+                                'features': feature_vals,
+                                'label': label_val,
+                                'symbol': symbol,
+                                'date': date_val,
+                            }
+
+                            if train_start_dt <= date_val <= train_end_dt:
+                                train_data.append(row_data)
+                            elif valid_start_dt <= date_val <= valid_end_dt:
+                                valid_data.append(row_data)
+                            elif test_start_dt <= date_val <= test_end_dt:
+                                test_data.append(row_data)
+
+                        success_count += 1
+
+                    except Exception as e:
+                        continue
+
+                # 传统流程：准备数据
+                if train_data:
+                    feature_cols = available_features
+                    X_train = np.array([d['features'] for d in train_data])
+                    y_train = np.array([d['label'] for d in train_data])
+                    dataset = None  # 标记使用传统流程
 
             # 阶段4: 模型训练
-            send_event("progress", {
-                "stage": "training",
-                "progress": 75,
-                "message": f"创建 {request.model_type.upper()} 模型..."
-            })
+            n_estimators = request.n_estimators or 100
 
-            config_kwargs = {
-                'n_estimators': request.n_estimators,
-                'max_depth': request.max_depth,
-                'learning_rate': request.learning_rate,
-                'hidden_size': request.hidden_size,
-                'num_layers': request.num_layers,
-                'dropout': request.dropout,
-                'epochs': request.epochs,
-                'batch_size': request.batch_size,
-            }
-
-            model = create_model(request.model_type, **config_kwargs)
-
-            send_event("progress", {
-                "stage": "training",
-                "progress": 80,
-                "message": "开始模型训练..."
-            })
-
-            X_train_df = pd.DataFrame(X_train, columns=feature_cols)
-            y_train_series = pd.Series(y_train)
-
-            # 检查数据有效性
-            send_event("log", {"message": f"数据形状: X={X_train_df.shape}, y={y_train_series.shape}"})
-            if X_train_df.empty or len(X_train_df) == 0:
-                send_event("error", {
-                    "message": f"训练数据为空，请检查数据获取和特征工程"
+            if dataset is not None:
+                # 使用 Qlib 原生训练流程
+                send_event("progress", {
+                    "stage": "training",
+                    "progress": 75,
+                    "message": f"使用 Qlib 原生 {request.model_type.upper()} 模型训练..."
                 })
-                return
 
-            # 处理 NaN 和 Inf 值
-            X_train_df = X_train_df.fillna(0).replace([np.inf, -np.inf], 0)
-            y_train_series = y_train_series.fillna(0).replace([np.inf, -np.inf], 0)
+                try:
+                    # 初始化 Qlib
+                    import qlib
+                    if not hasattr(qlib, '_initialized') or not qlib._initialized:
+                        qlib.init(provider_uri="qlib_data/cn_data")
+                        qlib._initialized = True
 
-            # 直接使用 LightGBM sklearn 接口训练
-            try:
-                import lightgbm as lgb
-                lgb_model = lgb.LGBMRegressor(
-                    n_estimators=request.n_estimators or 100,
-                    max_depth=request.max_depth or 5,
-                    learning_rate=request.learning_rate or 0.1,
-                    random_state=42,
-                    verbose=-1
-                )
-                lgb_model.fit(X_train_df, y_train_series)
-                model = lgb_model
-                model.feature_names_ = feature_cols
-                send_event("log", {"message": "LightGBM 模型训练成功"})
-            except Exception as e:
-                send_event("error", {"message": f"模型训练失败: {str(e)}"})
-                return
+                    # Qlib 内置模型映射表: (模块名, 类名, 模型类型)
+                    QLIB_MODELS = {
+                        # GBDT 系列
+                        'lgb': ('gbdt', 'LGBModel', 'gbdt'),
+                        'lightgbm': ('gbdt', 'LGBModel', 'gbdt'),
+                        'xgboost': ('xgboost', 'XGBModel', 'gbdt'),
+                        'xgb': ('xgboost', 'XGBModel', 'gbdt'),
+                        'catboost': ('catboost_model', 'CatBoostModel', 'gbdt'),
+                        'double_ensemble': ('double_ensemble', 'DEnsembleModel', 'gbdt'),
+                    }
+
+                    model_type_lower = request.model_type.lower()
+
+                    if model_type_lower not in QLIB_MODELS:
+                        supported = ', '.join(sorted(QLIB_MODELS.keys()))
+                        raise ValueError(f"不支持的模型类型: {request.model_type}。支持: {supported}")
+
+                    module_name, class_name, model_category = QLIB_MODELS[model_type_lower]
+                    ModelClass = getattr(__import__(f'qlib.contrib.model.{module_name}', fromlist=[class_name]), class_name)
+
+                    # 创建 GBDT 模型
+                    model = ModelClass(
+                        loss='mse',
+                        n_estimators=n_estimators,
+                        max_depth=request.max_depth or 6,
+                        learning_rate=request.learning_rate or 0.01,
+                        subsample=0.8,
+                        colsample_bytree=0.8,
+                        random_state=42,
+                        n_jobs=-1,
+                    )
+
+                    send_event("log", {"message": f"创建 Qlib 原生 {request.model_type.upper()} 模型成功"})
+
+                    import time
+                    train_start_time = time.time()
+
+                    train_msg = f"Qlib {request.model_type.upper()} 训练中 ({n_estimators} 棵树)..."
+
+                    send_event("progress", {
+                        "stage": "training",
+                        "progress": 80,
+                        "message": train_msg
+                    })
+
+                    model.fit(dataset)
+
+                    train_elapsed = time.time() - train_start_time
+                    send_event("log", {"message": f"Qlib 原生训练完成 (耗时 {train_elapsed:.1f}s)"})
+
+                    # 获取特征数
+                    feature_cols = []
+                    try:
+                        df_sample = dataset.prepare("train", col_set=["feature"])
+                        if isinstance(df_sample, dict):
+                            feature_cols = list(df_sample["feature"].columns)
+                        else:
+                            feature_cols = list(df_sample.xs('feature', axis=1, level=0).columns)
+                    except Exception:
+                        feature_cols = ["alpha158_features"]
+
+                    # 保存模型到指定目录
+                    model_dir = "models/qlib"
+                    os.makedirs(model_dir, exist_ok=True)
+                    model_id = str(uuid.uuid4())[:8]
+                    model_path = f"{model_dir}/{request.model_type}_{model_id}.pkl"
+
+                    # 使用 Qlib 的 to_pickle 方法保存模型
+                    model.to_pickle(model_path)
+                    send_event("log", {"message": f"模型已保存: {model_path}"})
+
+                except Exception as e:
+                    send_event("error", {"message": f"Qlib 原生训练失败: {str(e)}"})
+                    import traceback
+                    traceback.print_exc()
+                    return
+
+            else:
+                # 传统 sklearn 流程
+                config_kwargs = {
+                    'n_estimators': request.n_estimators,
+                    'max_depth': request.max_depth,
+                    'learning_rate': request.learning_rate,
+                    'hidden_size': request.hidden_size,
+                    'num_layers': request.num_layers,
+                    'dropout': request.dropout,
+                    'epochs': request.epochs,
+                    'batch_size': request.batch_size,
+                }
+
+                model = create_model(request.model_type, **config_kwargs)
+
+                X_train_df = pd.DataFrame(X_train, columns=feature_cols)
+                y_train_series = pd.Series(y_train)
+
+                # 检查数据有效性
+                send_event("log", {"message": f"数据形状: X={X_train_df.shape}, y={y_train_series.shape}"})
+                if X_train_df.empty or len(X_train_df) == 0:
+                    send_event("error", {
+                        "message": f"训练数据为空，请检查数据获取和特征工程"
+                    })
+                    return
+
+                # 处理 NaN 和 Inf 值
+                X_train_df = X_train_df.fillna(0).replace([np.inf, -np.inf], 0)
+                y_train_series = y_train_series.fillna(0).replace([np.inf, -np.inf], 0)
+
+                send_event("progress", {
+                    "stage": "training",
+                    "progress": 80,
+                    "message": f"开始训练 {request.model_type.upper()} 模型 ({n_estimators} 棵树)..."
+                })
+
+                try:
+                    import time
+                    train_start_time = time.time()
+                    model.fit(X_train_df, y_train_series)
+                    train_elapsed = time.time() - train_start_time
+
+                    model.feature_names_ = feature_cols
+                    send_event("log", {"message": f"模型训练完成 (耗时 {train_elapsed:.1f}s)"})
+                except Exception as e:
+                    send_event("error", {"message": f"模型训练失败: {str(e)}"})
+                    return
 
             # 阶段5: 模型评估
             send_event("progress", {
@@ -1939,76 +3055,192 @@ async def train_qlib_model_stream(request: QlibTrainRequest):
                 "message": "评估模型性能..."
             })
 
-            # 保存模型
-            import joblib
-            model_dir = "models/qlib"
-            os.makedirs(model_dir, exist_ok=True)
-            model_id = str(uuid.uuid4())[:8]
-            model_path = f"{model_dir}/{request.model_type}_{model_id}.pkl"
-            joblib.dump(model, model_path)
+            # 保存模型（如果还没有保存）
+            if dataset is None:
+                # 传统 sklearn 流程需要在这里保存
+                import joblib
+                model_dir = "models/qlib"
+                os.makedirs(model_dir, exist_ok=True)
+                model_id = str(uuid.uuid4())[:8]
+                model_path = f"{model_dir}/{request.model_type}_{model_id}.pkl"
+                joblib.dump(model, model_path)
+                send_event("log", {"message": f"模型已保存: {model_path}"})
 
             # 评估
-            train_pred = model.predict(X_train_df)
-            # 回归指标：MSE, MAE
-            train_mse = np.mean((train_pred - y_train) ** 2)
-            train_mae = np.mean(np.abs(train_pred - y_train))
+            if dataset is not None:
+                # Qlib 原生模型评估
+                try:
+                    send_event("log", {"message": f"开始评估，数据集类型: {type(dataset).__name__}"})
 
-            # 正确的 IC 计算：按日期分组计算横截面 IC (Rank IC)
-            def calculate_ic(predictions, data_list):
-                from scipy.stats import spearmanr
-                date_data = {}
-                for i, d in enumerate(data_list):
-                    date_val = d['date']
-                    if date_val not in date_data:
-                        date_data[date_val] = {'pred': [], 'return': []}
-                    date_data[date_val]['pred'].append(predictions[i])
-                    date_data[date_val]['return'].append(d.get('return_5d', 0))
+                    # 从数据集获取训练数据进行评估
+                    send_event("log", {"message": "准备获取训练集数据..."})
+                    train_df = dataset.prepare("train", col_set=["feature", "label"])
+                    send_event("log", {"message": f"训练集数据获取完成，类型: {type(train_df).__name__}"})
+                    if isinstance(train_df, dict):
+                        send_event("log", {"message": f"训练集是 dict，keys: {list(train_df.keys())}"})
+                        X_train_eval = train_df["feature"]
+                        y_train_eval = train_df["label"].values.ravel()
+                    else:
+                        send_event("log", {"message": f"训练集是 DataFrame，shape: {train_df.shape}"})
+                        X_train_eval = train_df.xs('feature', axis=1, level=0)
+                        y_train_eval = train_df.xs('label', axis=1, level=0).values.ravel()
 
-                ics = []
-                for date_val, data in date_data.items():
-                    preds = np.array(data['pred'])
-                    returns = np.array(data['return'])
-                    if len(preds) >= 5:
-                        if np.std(preds) > 1e-10 and np.std(returns) > 1e-10:
-                            try:
-                                ic, _ = spearmanr(preds, returns)
-                                if not np.isnan(ic):
-                                    ics.append(ic)
-                            except:
-                                pass
-                return np.mean(ics) if ics else 0.0
+                    send_event("log", {"message": f"训练集特征形状: {X_train_eval.shape}, 标签形状: {y_train_eval.shape}"})
 
-            train_ic = calculate_ic(train_pred, train_data)
+                    # 使用 Qlib 模型预测
+                    send_event("log", {"message": "开始训练集预测..."})
+                    if hasattr(model, 'model') and model.model is not None:
+                        train_pred = model.model.predict(X_train_eval.values)
+                    else:
+                        train_pred = model.predict(X_train_eval)
+                    send_event("log", {"message": f"训练集预测完成，预测形状: {train_pred.shape}"} )
 
-            valid_metrics = {}
-            if valid_data:
-                X_valid = np.array([d['features'] for d in valid_data])
-                y_valid = np.array([d['label'] for d in valid_data])
-                X_valid_df = pd.DataFrame(X_valid, columns=feature_cols)
-                valid_pred = model.predict(X_valid_df)
-                valid_mse = np.mean((valid_pred - y_valid) ** 2)
-                valid_mae = np.mean(np.abs(valid_pred - y_valid))
-                valid_metrics = {
-                    "samples": len(valid_data),
-                    "mse": round(float(valid_mse), 6),
-                    "mae": round(float(valid_mae), 6),
-                    "ic": round(float(calculate_ic(valid_pred, valid_data)), 4),
-                }
+                    train_pred = train_pred.ravel() if len(train_pred.shape) > 1 else train_pred
 
-            test_metrics = {}
-            if test_data:
-                X_test = np.array([d['features'] for d in test_data])
-                y_test = np.array([d['label'] for d in test_data])
-                X_test_df = pd.DataFrame(X_test, columns=feature_cols)
-                test_pred = model.predict(X_test_df)
-                test_mse = np.mean((test_pred - y_test) ** 2)
-                test_mae = np.mean(np.abs(test_pred - y_test))
-                test_metrics = {
-                    "samples": len(test_data),
-                    "mse": round(float(test_mse), 6),
-                    "mae": round(float(test_mae), 6),
-                    "ic": round(float(calculate_ic(test_pred, test_data)), 4),
-                }
+                    train_mse = np.mean((train_pred - y_train_eval) ** 2)
+                    train_mae = np.mean(np.abs(train_pred - y_train_eval))
+                    train_ic = np.corrcoef(train_pred, y_train_eval)[0, 1] if len(train_pred) > 1 else 0
+
+                    send_event("log", {"message": f"训练集评估: MSE={train_mse:.6f}, MAE={train_mae:.6f}, IC={train_ic:.4f}"})
+
+                    valid_metrics = {}
+                    test_metrics = {}
+
+                    # 验证集评估
+                    send_event("log", {"message": "开始验证集评估..."})
+                    try:
+                        valid_df = dataset.prepare("valid", col_set=["feature", "label"])
+                        send_event("log", {"message": f"验证集数据获取完成，类型: {type(valid_df).__name__}"})
+                        if isinstance(valid_df, dict):
+                            X_valid_eval = valid_df["feature"]
+                            y_valid_eval = valid_df["label"].values.ravel()
+                        else:
+                            X_valid_eval = valid_df.xs('feature', axis=1, level=0)
+                            y_valid_eval = valid_df.xs('label', axis=1, level=0).values.ravel()
+
+                        if hasattr(model, 'model') and model.model is not None:
+                            valid_pred = model.model.predict(X_valid_eval.values)
+                        else:
+                            valid_pred = model.predict(X_valid_eval)
+
+                        valid_pred = valid_pred.ravel() if len(valid_pred.shape) > 1 else valid_pred
+                        valid_mse = np.mean((valid_pred - y_valid_eval) ** 2)
+                        valid_mae = np.mean(np.abs(valid_pred - y_valid_eval))
+                        valid_ic = np.corrcoef(valid_pred, y_valid_eval)[0, 1] if len(valid_pred) > 1 else 0
+
+                        valid_metrics = {
+                            "samples": len(y_valid_eval),
+                            "mse": round(float(valid_mse), 6),
+                            "mae": round(float(valid_mae), 6),
+                            "ic": round(float(valid_ic), 4),
+                        }
+                    except Exception as ve:
+                        send_event("log", {"message": f"验证集评估失败: {ve}"})
+                        pass
+
+                    # 测试集评估
+                    send_event("log", {"message": "开始测试集评估..."})
+                    try:
+                        test_df = dataset.prepare("test", col_set=["feature", "label"])
+                        send_event("log", {"message": f"测试集数据获取完成，类型: {type(test_df).__name__}"})
+                        if isinstance(test_df, dict):
+                            X_test_eval = test_df["feature"]
+                            y_test_eval = test_df["label"].values.ravel()
+                        else:
+                            X_test_eval = test_df.xs('feature', axis=1, level=0)
+                            y_test_eval = test_df.xs('label', axis=1, level=0).values.ravel()
+
+                        if hasattr(model, 'model') and model.model is not None:
+                            test_pred = model.model.predict(X_test_eval.values)
+                        else:
+                            test_pred = model.predict(X_test_eval)
+
+                        test_pred = test_pred.ravel() if len(test_pred.shape) > 1 else test_pred
+                        test_mse = np.mean((test_pred - y_test_eval) ** 2)
+                        test_mae = np.mean(np.abs(test_pred - y_test_eval))
+                        test_ic = np.corrcoef(test_pred, y_test_eval)[0, 1] if len(test_pred) > 1 else 0
+
+                        test_metrics = {
+                            "samples": len(y_test_eval),
+                            "mse": round(float(test_mse), 6),
+                            "mae": round(float(test_mae), 6),
+                            "ic": round(float(test_ic), 4),
+                        }
+                    except Exception as te:
+                        send_event("log", {"message": f"测试集评估失败: {te}"})
+                        pass
+
+                    send_event("log", {"message": "模型评估完成"})
+
+                except Exception as e:
+                    send_event("log", {"message": f"评估警告: {e}"})
+                    train_mse = 0
+                    train_mae = 0
+                    train_ic = 0
+                    valid_metrics = {}
+                    test_metrics = {}
+
+            else:
+                # 传统 sklearn 流程评估
+                train_pred = model.predict(X_train_df)
+                train_mse = np.mean((train_pred - y_train) ** 2)
+                train_mae = np.mean(np.abs(train_pred - y_train))
+
+                def calculate_ic(predictions, data_list):
+                    from scipy.stats import spearmanr
+                    date_data = {}
+                    for i, d in enumerate(data_list):
+                        date_val = d['date']
+                        if date_val not in date_data:
+                            date_data[date_val] = {'pred': [], 'return': []}
+                        date_data[date_val]['pred'].append(predictions[i])
+                        date_data[date_val]['return'].append(d.get('return_5d', 0))
+
+                    ics = []
+                    for date_val, data in date_data.items():
+                        preds = np.array(data['pred'])
+                        returns = np.array(data['return'])
+                        if len(preds) >= 5:
+                            if np.std(preds) > 1e-10 and np.std(returns) > 1e-10:
+                                try:
+                                    ic, _ = spearmanr(preds, returns)
+                                    if not np.isnan(ic):
+                                        ics.append(ic)
+                                except:
+                                    pass
+                    return np.mean(ics) if ics else 0.0
+
+                train_ic = calculate_ic(train_pred, train_data)
+
+                valid_metrics = {}
+                if valid_data:
+                    X_valid = np.array([d['features'] for d in valid_data])
+                    y_valid = np.array([d['label'] for d in valid_data])
+                    X_valid_df = pd.DataFrame(X_valid, columns=feature_cols)
+                    valid_pred = model.predict(X_valid_df)
+                    valid_mse = np.mean((valid_pred - y_valid) ** 2)
+                    valid_mae = np.mean(np.abs(valid_pred - y_valid))
+                    valid_metrics = {
+                        "samples": len(valid_data),
+                        "mse": round(float(valid_mse), 6),
+                        "mae": round(float(valid_mae), 6),
+                        "ic": round(float(calculate_ic(valid_pred, valid_data)), 4),
+                    }
+
+                test_metrics = {}
+                if test_data:
+                    X_test = np.array([d['features'] for d in test_data])
+                    y_test = np.array([d['label'] for d in test_data])
+                    X_test_df = pd.DataFrame(X_test, columns=feature_cols)
+                    test_pred = model.predict(X_test_df)
+                    test_mse = np.mean((test_pred - y_test) ** 2)
+                    test_mae = np.mean(np.abs(test_pred - y_test))
+                    test_metrics = {
+                        "samples": len(test_data),
+                        "mse": round(float(test_mse), 6),
+                        "mae": round(float(test_mae), 6),
+                        "ic": round(float(calculate_ic(test_pred, test_data)), 4),
+                    }
 
             # 阶段6: 完成
             send_event("progress", {
@@ -2017,22 +3249,39 @@ async def train_qlib_model_stream(request: QlibTrainRequest):
                 "message": "训练完成！"
             })
 
+            # 统计样本数
+            train_samples = len(train_data) if train_data else 0
+            valid_samples = len(valid_data) if valid_data else 0
+            test_samples = len(test_data) if test_data else 0
+
+            # 如果使用 Qlib 原生流程，从 dataset 获取样本数
+            if dataset is not None:
+                try:
+                    train_df = dataset.prepare("train", col_set=["feature"])
+                    train_samples = len(train_df) if hasattr(train_df, '__len__') else 0
+                    valid_df = dataset.prepare("valid", col_set=["feature"])
+                    valid_samples = len(valid_df) if hasattr(valid_df, '__len__') else 0
+                    test_df = dataset.prepare("test", col_set=["feature"])
+                    test_samples = len(test_df) if hasattr(test_df, '__len__') else 0
+                except Exception:
+                    pass
+
             result = {
                 "model_id": model_id,
                 "model_type": request.model_type,
                 "model_path": model_path,
                 "train_symbols_count": len(train_symbols),
                 "predict_symbols": request.symbols,
-                "train_samples": len(train_data),
-                "features": feature_cols,
+                "train_samples": train_samples,
+                "features": list(feature_cols) if feature_cols else [],
                 "data_split": {
-                    "train": {"period": f"{request.train_start} ~ {request.train_end}", "samples": len(train_data)},
-                    "valid": {"period": f"{request.valid_start} ~ {request.valid_end}", "samples": len(valid_data)},
-                    "test": {"period": f"{request.test_start} ~ {request.test_end}", "samples": len(test_data)},
+                    "train": {"period": f"{request.train_start} ~ {request.train_end}", "samples": train_samples},
+                    "valid": {"period": f"{request.valid_start} ~ {request.valid_end}", "samples": valid_samples},
+                    "test": {"period": f"{request.test_start} ~ {request.test_end}", "samples": test_samples},
                 },
                 "metrics": {
                     "train": {
-                        "samples": len(train_data),
+                        "samples": train_samples,
                         "mse": round(float(train_mse), 6),
                         "mae": round(float(train_mae), 6),
                         "ic": round(float(train_ic), 4) if not np.isnan(train_ic) else 0,
@@ -2169,8 +3418,8 @@ async def predict_with_qlib_model(request: QlibPredictRequest) -> Dict[str, Any]
         else:
             inner_model = model
 
-        # 获取预测数据
-        analyzer = StockAnalyzer()
+        # 获取预测数据（使用实时价格数据，避免 qlib 复权价格显示异常）
+        analyzer = StockAnalyzer(use_realtime_price=True)
         predictions = {}
 
         # 解析回测日期（使用动态默认值：最近一年）
@@ -2519,20 +3768,6 @@ async def get_qlib_model_categories() -> List[Dict[str, Any]]:
             "description": "梯度提升决策树，适合表格数据，训练快",
             "models": ["lgb", "lightgbm", "xgboost", "xgb", "catboost", "double_ensemble"],
             "recommended": "lgb"
-        },
-        {
-            "category": "pytorch_sequence",
-            "display_name": "PyTorch 序列模型",
-            "description": "深度学习序列模型，适合时间序列预测",
-            "models": ["lstm", "gru", "alstm", "transformer", "tcn", "localformer"],
-            "recommended": "lstm"
-        },
-        {
-            "category": "pytorch_advanced",
-            "display_name": "PyTorch 高级模型",
-            "description": "前沿深度学习模型，适合复杂市场模式",
-            "models": ["gats", "sfm", "tabnet", "adarnn", "add", "hist", "igmtf", "krnn", "tra", "tcts", "sandwich"],
-            "recommended": "gats"
         }
     ]
 
@@ -2559,11 +3794,8 @@ async def run_backtest(request: BacktestRequest) -> Dict[str, Any]:
         start_date = datetime.fromisoformat(request.get_start_date())
         end_date = datetime.fromisoformat(request.get_end_date())
 
-        # 初始化回测服务
-        backtest_service = BacktestService()
-
-        # 选择数据提供者（优先使用增量数据提供者）
-        data_provider = getattr(request, 'data_provider', 'incremental_data_fetcher')
+        # 初始化回测服务（使用实时价格数据，避免复权价格显示异常）
+        backtest_service = BacktestService(use_qlib=True, use_realtime_price=True)
 
         # 运行回测
         result = backtest_service.run_backtest(
@@ -2575,7 +3807,6 @@ async def run_backtest(request: BacktestRequest) -> Dict[str, Any]:
             timeframe="1d",
             initial_cash=request.initial_cash,
             commission_rate=request.commission_rate,
-            data_provider=data_provider,
         )
 
         # 转换结果
@@ -2588,22 +3819,33 @@ async def run_backtest(request: BacktestRequest) -> Dict[str, Any]:
             "final_capital": result.final_capital,
             "total_return": result.total_return,
             "annual_return": result.annual_return,
+            "excess_return": result.annual_return - 0.05 if result.annual_return else 0,  # 假设基准5%
             "max_drawdown": getattr(result, 'max_drawdown', 0),
             "sharpe_ratio": getattr(result, 'sharpe_ratio', 0),
             "total_trades": result.total_trades,
             "win_rate": result.win_rate,
+            "profit_factor": getattr(result, 'profit_factor', 0),
             "trades": []
         }
 
         # 添加交易记录（如果有）
         if hasattr(result, 'trades') and result.trades:
             for trade in result.trades[:50]:  # 限制返回数量
+                # Trade 对象使用 side 字段 (OrderSide 枚举)
+                side = getattr(trade, 'side', None)
+                if side is None:
+                    side = getattr(trade, 'action', 'sell')
+                action = side.value if hasattr(side, 'value') else str(side)
+
                 result_dict["trades"].append({
+                    "strategy": request.strategy_name,
                     "symbol": getattr(trade, 'symbol', ''),
-                    "action": getattr(trade, 'action', ''),
+                    "action": action,
+                    "type": action,
                     "price": getattr(trade, 'price', 0),
-                    "shares": getattr(trade, 'shares', 0),
-                    "timestamp": str(getattr(trade, 'timestamp', ''))
+                    "shares": getattr(trade, 'quantity', getattr(trade, 'shares', 0)),
+                    "timestamp": str(getattr(trade, 'timestamp', '')),
+                    "profit": getattr(trade, 'pnl', getattr(trade, 'profit', None)),
                 })
 
         return result_dict
@@ -2614,6 +3856,209 @@ async def run_backtest(request: BacktestRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"回测失败: {str(e)}")
 
 
+@router.post("/backtest/run-all")
+async def run_all_strategies_backtest(request: BacktestRequest) -> Dict[str, Any]:
+    """
+    运行所有策略的回测
+
+    返回所有策略的回测结果对比
+    """
+    # 所有可用策略
+    all_strategies = [
+        "score", "ma_cross", "dual_ma",
+        "breakout", "macd", "rsi", "kdj", "bollinger", "turtle", "gbm"
+    ]
+
+    results = []
+    start_date = datetime.fromisoformat(request.get_start_date())
+    end_date = datetime.fromisoformat(request.get_end_date())
+
+    from quanttool.application.backtest_service import BacktestService
+
+    # 获取沪深300基准收益
+    benchmark_return = 0
+    benchmark_annual_return = 0
+    benchmark_curve = []  # 基准收益曲线
+    try:
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+        # 使用实时价格数据，避免 qlib 复权价格显示异常
+        analyzer = StockAnalyzer(use_realtime_price=True)
+
+        # 尝试获取沪深300 ETF (510300) 作为基准
+        # qlib 中没有 ETF 数据，会自动回退到备用数据源
+        benchmark_df = analyzer.get_stock_data('510300.SH', 365)
+        if benchmark_df.empty:
+            # 如果 ETF 数据不可用，使用浦发银行（SH600000）作为沪深300参考
+            logger.info("ETF 数据不可用，使用 SH600000 作为市场参考")
+            benchmark_df = analyzer.get_stock_data('SH600000', 365)
+
+        if not benchmark_df.empty:
+            # 处理不同的日期列名
+            if 'trade_date' in benchmark_df.columns:
+                benchmark_df = benchmark_df.set_index('trade_date')
+            elif 'timestamp' in benchmark_df.columns:
+                benchmark_df = benchmark_df.set_index('timestamp')
+            elif 'date' in benchmark_df.columns:
+                benchmark_df = benchmark_df.set_index('date')
+
+            # 确保索引是 datetime 类型
+            benchmark_df.index = pd.to_datetime(benchmark_df.index)
+
+            # 过滤日期范围 - 统一转换为 datetime 比较
+            start_dt = pd.to_datetime(start_date)
+            end_dt = pd.to_datetime(end_date)
+            start_mask = benchmark_df.index >= start_dt
+            end_mask = benchmark_df.index <= end_dt
+
+            benchmark_period = benchmark_df[start_mask & end_mask]
+            if len(benchmark_period) >= 2:
+                start_price = benchmark_period.iloc[0]['close']
+                end_price = benchmark_period.iloc[-1]['close']
+                benchmark_return = (end_price - start_price) / start_price
+
+                # 计算基准收益曲线
+                initial_cash = request.initial_cash
+                for idx, (date, row) in enumerate(benchmark_period.iterrows()):
+                    cumulative_return = (row['close'] - start_price) / start_price
+                    benchmark_curve.append({
+                        'timestamp': date.strftime('%Y-%m-%d'),
+                        'value': initial_cash * (1 + cumulative_return)
+                    })
+
+                # 计算年化收益
+                days = (end_date - start_date).days
+                if days > 0:
+                    benchmark_annual_return = (1 + benchmark_return) ** (365 / days) - 1
+    except Exception as e:
+        logger.warning(f"获取基准收益失败: {e}")
+
+    for strategy_name in all_strategies:
+        try:
+            # 使用实时价格数据，避免复权价格显示异常
+            backtest_service = BacktestService(use_qlib=True, use_realtime_price=True)
+            result = backtest_service.run_backtest(
+                strategy_name=strategy_name,
+                strategy_params={},
+                symbols=request.symbols,
+                start_date=start_date,
+                end_date=end_date,
+                timeframe="1d",
+                initial_cash=request.initial_cash,
+                commission_rate=request.commission_rate,
+            )
+
+            # 计算相对于基准的超额收益
+            strategy_return = result.annual_return or 0
+            excess_vs_benchmark = strategy_return - benchmark_annual_return
+
+            # 收集结果
+            # 转换 equity_curve 为可序列化格式
+            equity_curve_serializable = []
+            if hasattr(result, 'equity_curve') and result.equity_curve:
+                for point in result.equity_curve:
+                    ts = point.get('timestamp')
+                    if hasattr(ts, 'timestamp'):
+                        # pandas Timestamp 或 datetime
+                        ts_str = ts.strftime('%Y-%m-%d') if hasattr(ts, 'strftime') else str(ts)
+                    else:
+                        ts_str = str(ts) if ts else ''
+                    equity_curve_serializable.append({
+                        "timestamp": ts_str,
+                        "portfolio_value": float(point.get('portfolio_value', 0) or 0)
+                    })
+
+            # 转换 trades 为可序列化格式
+            trades_serializable = []
+            if result.trades:
+                for t in result.trades:
+                    ts = t.timestamp if hasattr(t, 'timestamp') else None
+                    if hasattr(ts, 'strftime'):
+                        ts_str = ts.strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        ts_str = str(ts) if ts else ''
+                    # 获取 side/action
+                    side = getattr(t, 'side', None)
+                    if side is None:
+                        side = getattr(t, 'action', 'sell')
+                    action = side.value if hasattr(side, 'value') else str(side)
+
+                    trades_serializable.append({
+                        "timestamp": ts_str,
+                        "action": action,
+                        "type": action,
+                        "price": float(t.price) if t.price else 0,
+                        "shares": float(t.quantity) if t.quantity else 0,
+                        "pnl": float(t.pnl) if hasattr(t, 'pnl') and t.pnl else None
+                    })
+
+            result_dict = {
+                "strategy": strategy_name,
+                "strategy_display": {
+                    "score": "评分策略",
+                    "ma_cross": "均线交叉",
+                    "dual_ma": "双均线策略",
+                    "breakout": "突破策略",
+                    "macd": "MACD策略",
+                    "rsi": "RSI策略",
+                    "kdj": "KDJ策略",
+                    "bollinger": "布林带策略",
+                    "turtle": "海龟交易",
+                    "gbm": "GBM机器学习",
+                }.get(strategy_name, strategy_name),
+                "total_return": float(result.total_return or 0),
+                "annual_return": float(result.annual_return or 0),
+                "excess_return": float(excess_vs_benchmark),  # 相对沪深300的超额收益
+                "benchmark_return": float(benchmark_return),  # 基准收益
+                "max_drawdown": float(getattr(result, 'max_drawdown', 0) or 0),
+                "sharpe_ratio": float(getattr(result, 'sharpe_ratio', 0) or 0),
+                "win_rate": float(result.win_rate or 0),
+                "total_trades": int(result.total_trades or 0),
+                "profit_factor": float(getattr(result, 'profit_factor', 0) or 0),
+                "final_capital": float(result.final_capital or request.initial_cash),
+                "trades_count": len(result.trades) if hasattr(result, 'trades') and result.trades else 0,
+                "equity_curve": equity_curve_serializable,
+                "trades": trades_serializable,
+            }
+            results.append(result_dict)
+
+        except Exception as e:
+            logger.warning(f"策略 {strategy_name} 回测失败: {e}")
+            results.append({
+                "strategy": strategy_name,
+                "strategy_display": {
+                    "score": "评分策略",
+                    "ma_cross": "均线交叉",
+                    "dual_ma": "双均线策略",
+                    "breakout": "突破策略",
+                    "macd": "MACD策略",
+                    "rsi": "RSI策略",
+                    "kdj": "KDJ策略",
+                    "bollinger": "布林带策略",
+                    "turtle": "海龟交易",
+                    "gbm": "GBM机器学习",
+                }.get(strategy_name, strategy_name),
+                "error": str(e),
+                "total_return": 0,
+                "annual_return": 0,
+            })
+
+    # 按年化收益排序
+    results.sort(key=lambda x: x.get('annual_return', 0), reverse=True)
+
+    return {
+        "symbols": request.symbols,
+        "start_date": request.get_start_date(),
+        "end_date": request.get_end_date(),
+        "initial_cash": request.initial_cash,
+        "benchmark_return": float(benchmark_return) if benchmark_return else 0,
+        "benchmark_annual_return": float(benchmark_annual_return) if benchmark_annual_return else 0,
+        "benchmark_curve": benchmark_curve,
+        "results": to_python_types(results),
+        "total_strategies": len(all_strategies),
+        "successful_strategies": len([r for r in results if not r.get('error')]),
+    }
+
+
 # ==================== 原有 API ====================
 
 @router.get("/experiments")
@@ -2621,10 +4066,10 @@ async def list_experiments(
     run_type: str = None, status: str = None
 ) -> List[Dict[str, Any]]:
     """List experiment runs with optional filtering."""
-    from ..infrastructure.stores.meta_db import MetaDB
+    from ..infrastructure.stores.meta_db_async import get_async_meta_db
 
-    db = MetaDB()
-    runs = db.get_experiment_runs(run_type=run_type, status=status)
+    db = get_async_meta_db()
+    runs = await db.get_experiment_runs(run_type=run_type, status=status)
 
     return runs
 
@@ -2632,10 +4077,10 @@ async def list_experiments(
 @router.get("/backtest/runs/{run_id}")
 async def get_backtest_result(run_id: str) -> Dict[str, Any]:
     """Get results for a specific backtest run."""
-    from ..infrastructure.stores.meta_db import MetaDB
+    from ..infrastructure.stores.meta_db_async import get_async_meta_db
 
-    db = MetaDB()
-    run = db.get_experiment_run(run_id)
+    db = get_async_meta_db()
+    run = await db.get_experiment_run(run_id)
 
     if not run:
         raise HTTPException(status_code=404, detail=f"Backtest run {run_id} not found")
@@ -2683,12 +4128,12 @@ async def mine_factors(request_data: Dict[str, Any]) -> Dict[str, Any]:
             }
 
         # Save to metadata DB
-        from ..infrastructure.stores.meta_db import MetaDB
+        from ..infrastructure.stores.meta_db_async import get_async_meta_db
         import uuid
 
-        db = MetaDB()
+        db = get_async_meta_db()
         run_id = str(uuid.uuid4())
-        db.save_experiment_run(
+        await db.save_experiment_run(
             {
                 "id": run_id,
                 "type": "factor_mining",
@@ -2712,7 +4157,7 @@ async def mine_factors(request_data: Dict[str, Any]) -> Dict[str, Any]:
 @router.get("/data/providers")
 async def list_data_providers() -> List[str]:
     """List available data providers."""
-    from ..core.registry import registry, ComponentType
+    from ...core.registry import registry, ComponentType
 
     providers = registry.list_available(ComponentType.DATA_PROVIDER)
     return providers
@@ -2721,7 +4166,7 @@ async def list_data_providers() -> List[str]:
 @router.get("/strategies")
 async def list_strategies() -> List[str]:
     """List available strategies."""
-    from ..core.registry import registry, ComponentType
+    from ...core.registry import registry, ComponentType
 
     strategies = registry.list_available(ComponentType.STRATEGY)
     return strategies
@@ -2730,7 +4175,7 @@ async def list_strategies() -> List[str]:
 @router.get("/factors")
 async def list_factors() -> List[str]:
     """List available factors."""
-    from ..core.registry import registry, ComponentType
+    from ...core.registry import registry, ComponentType
 
     factors = registry.list_available(ComponentType.FACTOR)
     return factors
@@ -2743,12 +4188,24 @@ _monitor_services: Dict[str, Any] = {}
 
 
 def get_minute_provider():
-    """获取 AkShare 分钟数据提供者（延迟初始化）"""
+    """获取 AkShare 分钟数据提供者（延迟初始化）- 保留用于向后兼容"""
     from ...infrastructure.data_providers.akshare_minute_provider import AkShareMinuteProvider
     if not hasattr(get_minute_provider, "_instance"):
         get_minute_provider._instance = AkShareMinuteProvider()
         get_minute_provider._instance.initialize()
     return get_minute_provider._instance
+
+
+def get_realtime_provider():
+    """获取统一实时数据提供者（延迟初始化）- 推荐"""
+    from ...infrastructure.data_providers.realtime_data_provider import get_realtime_provider as _get_provider
+    return _get_provider()
+
+
+def get_incremental_minute_provider():
+    """获取增量分钟数据提供者（延迟初始化）- 推荐"""
+    from ...infrastructure.data_providers.incremental_minute_provider import get_incremental_minute_provider as _get_provider
+    return _get_provider()
 
 
 class RealtimeQuoteResponse(BaseModel):
@@ -2765,6 +4222,14 @@ class RealtimeQuoteResponse(BaseModel):
     change: float = 0
     turnover: float = 0
     timestamp: str = ""
+
+    @field_validator('price', 'open', 'high', 'low', 'volume', 'amount', 'pct_change', 'change', 'turnover', mode='before')
+    @classmethod
+    def convert_numpy_types(cls, v):
+        """将 numpy 类型转换为 Python 原生类型"""
+        if isinstance(v, (np.integer, np.floating)):
+            return float(v)
+        return v
 
 
 class MonitorStartRequest(BaseModel):
@@ -2789,34 +4254,130 @@ class MonitorStatusResponse(BaseModel):
 
 
 @router.get("/realtime/quote/{symbol}")
-async def get_realtime_quote(symbol: str) -> RealtimeQuoteResponse:
-    """获取实时行情"""
+async def get_realtime_quote(symbol: str) -> Dict[str, Any]:
+    """获取实时行情（使用新的实时数据通路）"""
     try:
-        provider = get_minute_provider()
+        # 使用新的统一实时数据提供者
+        provider = get_realtime_provider()
         quote = provider.get_realtime_quote(symbol)
 
         if not quote:
             raise HTTPException(status_code=404, detail=f"无法获取 {symbol} 的实时行情")
 
-        return RealtimeQuoteResponse(
-            symbol=quote.get("symbol", symbol),
-            name=quote.get("name", ""),
-            price=quote.get("price", 0),
-            open=quote.get("open", 0),
-            high=quote.get("high", 0),
-            low=quote.get("low", 0),
-            volume=quote.get("volume", 0),
-            amount=quote.get("amount", 0),
-            pct_change=quote.get("pct_change", 0),
-            change=quote.get("change", 0),
-            turnover=quote.get("turnover", 0),
-            timestamp=quote.get("timestamp", datetime.now()).strftime("%Y-%m-%d %H:%M:%S") if quote.get("timestamp") else ""
-        )
+        # 转换为字典
+        quote_dict = quote.to_dict()
+
+        # 处理 timestamp
+        ts = quote_dict.get("timestamp")
+        if ts:
+            if isinstance(ts, datetime):
+                ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                ts_str = str(ts)
+        else:
+            ts_str = ""
+
+        return {
+            "symbol": quote_dict.get("symbol", symbol),
+            "name": quote_dict.get("name", ""),
+            "price": float(quote_dict.get("price", 0) or 0),
+            "open": float(quote_dict.get("open", 0) or 0),
+            "high": float(quote_dict.get("high", 0) or 0),
+            "low": float(quote_dict.get("low", 0) or 0),
+            "volume": float(quote_dict.get("volume", 0) or 0),
+            "amount": float(quote_dict.get("amount", 0) or 0),
+            "pct_change": float(quote_dict.get("change_pct", 0) or 0),
+            "change": float(quote_dict.get("change_amount", 0) or 0),
+            "turnover": float(quote_dict.get("turnover_rate", 0) or 0),
+            "timestamp": ts_str,
+            "source": quote_dict.get("source", ""),
+            "bid_prices": quote_dict.get("bid_prices", []),
+            "ask_prices": quote_dict.get("ask_prices", []),
+        }
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to get realtime quote for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=f"获取实时行情失败: {str(e)}")
+
+
+@router.post("/realtime/batch")
+async def get_realtime_quotes_batch(request: Request) -> List[Dict[str, Any]]:
+    """批量获取实时行情"""
+    try:
+        body = await request.json()
+        symbols = body.get("symbols", [])
+
+        if not symbols:
+            return []
+
+        provider = get_realtime_provider()
+        results = []
+
+        for symbol in symbols:
+            try:
+                quote = provider.get_realtime_quote(symbol)
+                if quote:
+                    quote_dict = quote.to_dict()
+                    ts = quote_dict.get("timestamp")
+                    if ts:
+                        if isinstance(ts, datetime):
+                            ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
+                        else:
+                            ts_str = str(ts)
+                    else:
+                        ts_str = ""
+
+                    # 计算涨跌幅（如果没有提供）
+                    price = float(quote_dict.get("price", 0) or 0)
+                    pre_close = float(quote_dict.get("pre_close", 0) or 0)
+                    change_pct = float(quote_dict.get("change_pct", 0) or 0)
+                    change_amount = float(quote_dict.get("change_amount", 0) or 0)
+
+                    # 如果涨跌幅为0但有昨收价，则计算
+                    if change_pct == 0 and pre_close > 0 and price > 0:
+                        change_amount = price - pre_close
+                        change_pct = change_amount / pre_close
+
+                    results.append({
+                        "symbol": quote_dict.get("symbol", symbol),
+                        "name": quote_dict.get("name", ""),
+                        "price": price,
+                        "open": float(quote_dict.get("open", 0) or 0),
+                        "high": float(quote_dict.get("high", 0) or 0),
+                        "low": float(quote_dict.get("low", 0) or 0),
+                        "volume": float(quote_dict.get("volume", 0) or 0),
+                        "amount": float(quote_dict.get("amount", 0) or 0),
+                        "pct_change": change_pct,
+                        "change": change_amount,
+                        "turnover": float(quote_dict.get("turnover_rate", 0) or 0),
+                        "timestamp": ts_str,
+                        "source": quote_dict.get("source", ""),
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get quote for {symbol}: {e}")
+                # 添加一个空记录表示失败
+                results.append({
+                    "symbol": symbol,
+                    "name": "",
+                    "price": 0,
+                    "open": 0,
+                    "high": 0,
+                    "low": 0,
+                    "volume": 0,
+                    "amount": 0,
+                    "pct_change": 0,
+                    "change": 0,
+                    "turnover": 0,
+                    "timestamp": "",
+                    "source": "",
+                    "error": str(e),
+                })
+
+        return results
+    except Exception as e:
+        logger.error(f"Failed to get batch realtime quotes: {e}")
+        raise HTTPException(status_code=500, detail=f"批量获取行情失败: {str(e)}")
 
 
 @router.get("/realtime/kline/{symbol}")
@@ -2825,10 +4386,16 @@ async def get_realtime_kline(
     timeframe: str = "5m",
     count: int = 60
 ) -> Dict[str, Any]:
-    """获取分钟K线数据"""
+    """获取分钟K线数据（使用增量分钟数据通路）"""
     try:
-        provider = get_minute_provider()
-        df = provider.get_latest_bars(symbol, count, timeframe)
+        # 使用新的增量分钟数据提供者
+        provider = get_incremental_minute_provider()
+        df = provider.get_minute_bars(symbol, timeframe, count=count)
+
+        if df.empty:
+            # 回退到旧的 AkShare 提供者
+            old_provider = get_minute_provider()
+            df = old_provider.get_latest_bars(symbol, count, timeframe)
 
         if df.empty:
             raise HTTPException(status_code=404, detail=f"无法获取 {symbol} 的K线数据")
@@ -2881,8 +4448,44 @@ async def search_stocks(query: str = "", limit: int = 20) -> List[Dict[str, Any]
 
         return formatted
     except Exception as e:
-        logger.error(f"Failed to search stocks: {e}")
-        raise HTTPException(status_code=500, detail=f"搜索股票失败: {str(e)}")
+        logger.warning(f"AkShare search failed: {e}, using fallback")
+
+        # 降级策略：使用本地静态数据
+        static_stocks = [
+            {"symbol": "600519", "name": "贵州茅台"},
+            {"symbol": "000001", "name": "平安银行"},
+            {"symbol": "000002", "name": "万科A"},
+            {"symbol": "000333", "name": "美的集团"},
+            {"symbol": "000651", "name": "格力电器"},
+            {"symbol": "000858", "name": "五粮液"},
+            {"symbol": "002415", "name": "海康威视"},
+            {"symbol": "002594", "name": "比亚迪"},
+            {"symbol": "300750", "name": "宁德时代"},
+            {"symbol": "601318", "name": "中国平安"},
+            {"symbol": "601398", "name": "工商银行"},
+            {"symbol": "601939", "name": "建设银行"},
+            {"symbol": "600036", "name": "招商银行"},
+            {"symbol": "600276", "name": "恒瑞医药"},
+            {"symbol": "600887", "name": "伊利股份"},
+            {"symbol": "603259", "name": "药明康德"},
+            {"symbol": "600309", "name": "万华化学"},
+            {"symbol": "002304", "name": "洋河股份"},
+            {"symbol": "000568", "name": "泸州老窖"},
+            {"symbol": "002352", "name": "顺丰控股"},
+        ]
+
+        # 简单匹配
+        query_lower = query.lower()
+        results = []
+        for stock in static_stocks:
+            if query_lower in stock["symbol"].lower() or query_lower in stock["name"].lower():
+                results.append({
+                    "symbol": stock["symbol"],
+                    "name": stock["name"],
+                    "price": 0
+                })
+
+        return results[:limit]
 
 
 @router.post("/monitor/start")
@@ -2972,7 +4575,7 @@ async def stop_monitor(monitor_id: str) -> Dict[str, Any]:
 
 
 @router.get("/monitor/status/{monitor_id}")
-async def get_monitor_status(monitor_id: str) -> MonitorStatusResponse:
+async def get_monitor_status(monitor_id: str) -> Dict[str, Any]:
     """获取监控状态"""
     if monitor_id not in _monitor_services:
         raise HTTPException(status_code=404, detail=f"监控 {monitor_id} 不存在")
@@ -2982,15 +4585,18 @@ async def get_monitor_status(monitor_id: str) -> MonitorStatusResponse:
         service = monitor["service"]
         status = service.get_status()
 
-        return MonitorStatusResponse(
-            running=status.get("running", False),
-            symbols=status.get("symbols", []),
-            strategy=status.get("strategy", ""),
-            interval_minutes=status.get("interval_minutes", 5),
-            check_count=status.get("check_count", 0),
-            signal_count=status.get("signal_count", 0),
-            last_check=status.get("last_check")
-        )
+        # 转换 numpy 类型
+        status = to_python_types(status)
+
+        return {
+            "running": status.get("running", False),
+            "symbols": status.get("symbols", []),
+            "strategy": status.get("strategy", ""),
+            "interval_minutes": status.get("interval_minutes", 5),
+            "check_count": status.get("check_count", 0),
+            "signal_count": status.get("signal_count", 0),
+            "last_check": status.get("last_check")
+        }
 
     except Exception as e:
         logger.error(f"Failed to get monitor status: {e}")
@@ -3052,3 +4658,412 @@ async def get_monitor_signals(monitor_id: str, limit: int = 20) -> List[Dict[str
     except Exception as e:
         logger.error(f"Failed to get monitor signals: {e}")
         raise HTTPException(status_code=500, detail=f"获取信号失败: {str(e)}")
+
+
+# ==================== ML 模型策略 API ====================
+
+class MLBacktestRequest(BaseModel):
+    """ML 模型回测请求"""
+    model_path: str = ""  # 模型路径，为空则自动使用最新模型
+    symbols: List[str] = []  # 回测股票列表
+    start_date: str = ""  # 开始日期，默认一年前
+    end_date: str = ""  # 结束日期，默认今天
+    initial_cash: float = 100000.0
+    commission_rate: float = 0.0003
+    # 使用与训练一致的阈值
+    buy_threshold: float = 0.50
+    sell_threshold: float = 0.50
+
+
+@router.post("/ml/backtest")
+async def run_ml_backtest(request: MLBacktestRequest) -> Dict[str, Any]:
+    """
+    使用 ML 模型进行回测
+
+    使用训练好的 GBM 模型对指定股票进行回测
+    """
+    try:
+        from quanttool.strategies.gbm_strategy import GBMStrategy, GBMConfig
+        from quanttool.infrastructure.data_providers.qlib_data_loader import QlibDataLoader
+        import glob
+
+        # 查找模型
+        model_path = request.model_path
+        if not model_path:
+            model_files = glob.glob("models/gbm/lgbm_*.pkl")
+            if not model_files:
+                raise HTTPException(status_code=404, detail="未找到训练好的模型，请先训练模型")
+            model_path = max(model_files, key=os.path.getmtime)
+            logger.info(f"使用最新模型: {model_path}")
+
+        # 解析日期
+        end_date = datetime.now() if not request.end_date else datetime.fromisoformat(request.end_date)
+        start_date = end_date - timedelta(days=365) if not request.start_date else datetime.fromisoformat(request.start_date)
+
+        # 加载模型
+        config = GBMConfig(
+            buy_threshold=request.buy_threshold,
+            sell_threshold=request.sell_threshold,
+        )
+        strategy = GBMStrategy(config)
+        strategy.load_model(model_path)
+
+        # 初始化数据加载器
+        data_loader = QlibDataLoader()
+        if not data_loader.init_qlib():
+            raise HTTPException(status_code=500, detail="Qlib 初始化失败")
+
+        # 回测逻辑
+        start_str = start_date.strftime('%Y-%m-%d')
+        end_str = end_date.strftime('%Y-%m-%d')
+
+        # 加载所有股票数据
+        # 注意：使用 StockAnalyzer 获取真实价格数据，而非 qlib 数据
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+        stock_analyzer = StockAnalyzer(use_realtime_price=True)
+
+        all_data = {}
+        for symbol in request.symbols:
+            df = stock_analyzer.get_stock_data(symbol, days=365)
+            if df.empty:
+                # 回退到 qlib
+                df = data_loader.load_stock_data(symbol, start_str, end_str, use_adjclose=False)
+            if not df.empty:
+                df = df.reset_index()
+                if 'date' in df.columns:
+                    df = df.rename(columns={'date': 'timestamp'})
+                all_data[symbol] = df
+
+        if not all_data:
+            raise HTTPException(status_code=400, detail="没有获取到任何数据")
+
+        # 模拟回测
+        cash = request.initial_cash
+        position = {}  # 持仓 {symbol: shares}
+        trades = []
+        portfolio_values = []
+
+        # 获取所有交易日
+        all_dates = set()
+        for symbol, df in all_data.items():
+            for t in df['timestamp']:
+                all_dates.add(t)
+        sorted_dates = sorted(all_dates)
+
+        for current_date in sorted_dates:
+            # 计算当前组合价值
+            position_value = 0
+            for symbol, shares in position.items():
+                if symbol in all_data:
+                    df = all_data[symbol]
+                    row = df[df['timestamp'] == current_date]
+                    if not row.empty:
+                        position_value += row['close'].values[0] * shares
+
+            portfolio_value = cash + position_value
+            portfolio_values.append({
+                'date': current_date,
+                'value': portfolio_value
+            })
+
+            # 对每只股票生成信号
+            for symbol in request.symbols:
+                if symbol not in all_data:
+                    continue
+
+                df = all_data[symbol]
+                historical = df[df['timestamp'] <= current_date]
+
+                if len(historical) < 120:  # 需要足够的历史数据
+                    continue
+
+                current_bar = historical.iloc[-1]
+
+                try:
+                    signal = strategy.get_signal(current_bar, historical)
+                except Exception as e:
+                    continue
+
+                # 执行交易
+                close = current_bar['close']
+                signal_type = signal.get('signal', 'hold')
+
+                if signal_type == 'buy' and symbol not in position:
+                    # 买入
+                    shares = int(cash * 0.2 / close)  # 每次20%仓位
+                    if shares > 0:
+                        cost = shares * close * (1 + request.commission_rate)
+                        if cost <= cash:
+                            cash -= cost
+                            position[symbol] = shares
+                            trades.append({
+                                'symbol': symbol,
+                                'action': 'buy',
+                                'price': close,
+                                'shares': shares,
+                                'timestamp': current_date,
+                                'reason': f"ML预测概率: {signal.get('probability', 0):.2%}"
+                            })
+
+                elif signal_type == 'sell' and symbol in position:
+                    # 卖出
+                    shares = position[symbol]
+                    revenue = shares * close * (1 - request.commission_rate)
+                    cash += revenue
+                    del position[symbol]
+                    trades.append({
+                        'symbol': symbol,
+                        'action': 'sell',
+                        'price': close,
+                        'shares': shares,
+                        'timestamp': current_date,
+                        'reason': f"ML预测概率: {signal.get('probability', 0):.2%}"
+                    })
+
+        # 最终价值
+        final_position_value = 0
+        for symbol, shares in position.items():
+            if symbol in all_data:
+                df = all_data[symbol]
+                if not df.empty:
+                    final_position_value += df['close'].iloc[-1] * shares
+
+        final_value = cash + final_position_value
+        total_return = (final_value - request.initial_cash) / request.initial_cash
+
+        # 计算最大回撤
+        values = [p['value'] for p in portfolio_values]
+        max_drawdown = 0
+        peak = values[0] if values else 0
+        for v in values:
+            if v > peak:
+                peak = v
+            drawdown = (peak - v) / peak if peak > 0 else 0
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+
+        # 计算年化收益
+        days = (end_date - start_date).days if isinstance(end_date, datetime) else 365
+        annual_return = total_return * (365 / max(days, 1)) if total_return else 0
+
+        # 计算胜率：盈利的卖出次数 / 总卖出次数
+        sell_trades = [t for t in trades if t['action'] == 'sell']
+        # 计算每笔卖出的盈亏
+        buy_prices = {}
+        for t in trades:
+            if t['action'] == 'buy':
+                buy_prices[t['symbol']] = t['price']
+            elif t['action'] == 'sell' and t['symbol'] in buy_prices:
+                t['profit'] = (t['price'] - buy_prices[t['symbol']]) * t['shares']
+
+        win_count = sum(1 for t in sell_trades if t.get('profit', 0) > 0)
+        win_rate = win_count / max(len(sell_trades), 1)
+
+        return to_python_types({
+            "success": True,
+            "strategy": "ML-GBM",
+            "model_path": model_path,
+            "symbols": request.symbols,
+            "start_date": start_str,
+            "end_date": end_str,
+            "initial_capital": request.initial_cash,
+            "final_capital": final_value,
+            "total_return": total_return,
+            "annual_return": annual_return,
+            "excess_return": annual_return - 0.05,
+            "max_drawdown": max_drawdown,
+            "sharpe_ratio": annual_return / max(0.15, max_drawdown) if max_drawdown > 0 else 0,
+            "total_trades": len(trades),
+            "win_rate": win_rate,
+            "trades": trades[-50:],  # 最近50笔交易
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"ML 回测失败: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"回测失败: {str(e)}")
+
+
+class MLScanRequest(BaseModel):
+    """ML 模型选股请求"""
+    model_path: str = ""
+    symbols: List[str] = []  # 候选股票列表
+    top_n: int = 20  # 返回前N只
+    min_probability: float = 0.50  # 使用与训练一致的买入阈值
+
+
+@router.post("/ml/scan")
+async def scan_with_ml_model(request: MLScanRequest) -> Dict[str, Any]:
+    """
+    使用 ML 模型进行智能选股
+
+    对候选股票进行预测，返回得分最高的股票
+    """
+    try:
+        from quanttool.strategies.gbm_strategy import GBMStrategy, GBMConfig
+        from quanttool.infrastructure.data_providers.qlib_data_loader import QlibDataLoader
+        from quanttool.cli.commands.analysis_commands import get_csi300_constituents
+        import glob
+
+        # 查找模型
+        model_path = request.model_path
+        if not model_path:
+            model_files = glob.glob("models/gbm/lgbm_*.pkl")
+            if not model_files:
+                raise HTTPException(status_code=404, detail="未找到训练好的模型，请先训练模型")
+            model_path = max(model_files, key=os.path.getmtime)
+            logger.info(f"使用最新模型: {model_path}")
+
+        # 获取候选股票
+        symbols = request.symbols
+        if not symbols:
+            # 默认使用沪深300成分股
+            csi300 = get_csi300_constituents()
+            symbols = [s['code'] if isinstance(s, dict) else s for s in csi300]
+
+        # 加载模型
+        config = GBMConfig()
+        strategy = GBMStrategy(config)
+        strategy.load_model(model_path)
+
+        # 初始化数据加载器
+        data_loader = QlibDataLoader()
+        if not data_loader.init_qlib():
+            raise HTTPException(status_code=500, detail="Qlib 初始化失败")
+
+        # 预测所有股票
+        results = []
+        for symbol in symbols:
+            try:
+                pred = strategy.predict(symbol)
+                if pred.get('probability', 0) >= request.min_probability:
+                    results.append({
+                        'symbol': symbol,
+                        'probability': pred['probability'],
+                        'pred_return': pred.get('return_pred', 0),
+                        'signal': pred.get('signal', 'hold'),
+                        'close': pred.get('close', 0),
+                    })
+            except Exception as e:
+                logger.debug(f"预测失败 {symbol}: {e}")
+                continue
+
+        # 按概率排序
+        results.sort(key=lambda x: x['probability'], reverse=True)
+        top_results = results[:request.top_n]
+
+        return {
+            "success": True,
+            "model_path": model_path,
+            "total_scanned": len(symbols),
+            "qualified_count": len(results),
+            "min_probability": request.min_probability,
+            "results": to_python_types(top_results),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"ML 选股失败: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"选股失败: {str(e)}")
+
+
+class MLMonitorRequest(BaseModel):
+    """ML 模型监控请求"""
+    model_path: str = ""
+    symbols: List[str] = []
+    interval_seconds: int = 60
+
+
+@router.post("/ml/monitor/start")
+async def start_ml_monitor(request: MLMonitorRequest) -> Dict[str, Any]:
+    """
+    启动 ML 模型实时监控
+
+    定时对指定股票进行预测并生成信号
+    """
+    try:
+        from quanttool.strategies.gbm_strategy import GBMStrategy, GBMConfig
+        import glob
+
+        # 查找模型
+        model_path = request.model_path
+        if not model_path:
+            model_files = glob.glob("models/gbm/lgbm_*.pkl")
+            if not model_files:
+                raise HTTPException(status_code=404, detail="未找到训练好的模型")
+            model_path = max(model_files, key=os.path.getmtime)
+
+        # 加载模型
+        config = GBMConfig()
+        strategy = GBMStrategy(config)
+        strategy.load_model(model_path)
+
+        monitor_id = str(uuid.uuid4())[:8]
+
+        # 存储监控信息
+        _monitor_services[monitor_id] = {
+            "service": strategy,
+            "model_path": model_path,
+            "symbols": request.symbols,
+            "signals": [],
+            "started_at": datetime.now(),
+            "task": None,
+        }
+
+        async def run_ml_monitor():
+            while True:
+                try:
+                    for symbol in request.symbols:
+                        try:
+                            pred = strategy.predict(symbol)
+                            signal = {
+                                "symbol": symbol,
+                                "probability": pred.get('probability', 0),
+                                "signal": pred.get('signal', 'hold'),
+                                "timestamp": datetime.now().isoformat(),
+                            }
+                            _monitor_services[monitor_id]["signals"].insert(0, signal)
+                            # 保留最近100条信号
+                            _monitor_services[monitor_id]["signals"] = _monitor_services[monitor_id]["signals"][:100]
+                        except Exception as e:
+                            logger.debug(f"监控预测失败 {symbol}: {e}")
+
+                    await asyncio.sleep(request.interval_seconds)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"ML 监控错误: {e}")
+                    await asyncio.sleep(5)
+
+        task = asyncio.create_task(run_ml_monitor())
+        _monitor_services[monitor_id]["task"] = task
+
+        return {
+            "monitor_id": monitor_id,
+            "model_path": model_path,
+            "symbols": request.symbols,
+            "interval_seconds": request.interval_seconds,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"启动 ML 监控失败: {e}")
+        raise HTTPException(status_code=500, detail=f"启动失败: {str(e)}")
+
+
+@router.get("/ml/monitor/{monitor_id}/signals")
+async def get_ml_monitor_signals(monitor_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+    """获取 ML 监控信号"""
+    if monitor_id not in _monitor_services:
+        raise HTTPException(status_code=404, detail=f"监控 {monitor_id} 不存在")
+
+    monitor = _monitor_services[monitor_id]
+    signals = monitor.get("signals", [])[:limit]
+    return to_python_types(signals)

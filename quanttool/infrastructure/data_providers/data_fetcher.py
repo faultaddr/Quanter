@@ -1981,6 +1981,128 @@ class EnhancedDataFetcher(IDataProvider):
 
         return result
 
+    # ==========================================
+    # 实时行情接口（秒级更新）
+    # ==========================================
+
+    @property
+    def realtime_provider(self):
+        """获取实时数据提供者（延迟初始化）"""
+        if not hasattr(self, '_realtime_provider') or self._realtime_provider is None:
+            from .realtime_data_provider import get_realtime_provider
+            self._realtime_provider = get_realtime_provider()
+        return self._realtime_provider
+
+    @property
+    def minute_provider(self):
+        """获取分钟数据提供者（延迟初始化）"""
+        if not hasattr(self, '_minute_provider') or self._minute_provider is None:
+            from .incremental_minute_provider import get_incremental_minute_provider
+            self._minute_provider = get_incremental_minute_provider()
+        return self._minute_provider
+
+    def get_realtime_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        获取单只股票实时行情
+
+        使用 Pytdx（通达信）或 Sina（新浪）数据源，
+        支持秒级更新。
+
+        Args:
+            symbol: 股票代码
+
+        Returns:
+            实时行情字典，包含 price, open, high, low, volume 等
+        """
+        try:
+            quote = self.realtime_provider.get_realtime_quote(symbol)
+            if quote:
+                return quote.to_dict()
+        except Exception as e:
+            logger.warning(f"获取实时行情失败 {symbol}: {e}")
+        return None
+
+    def get_realtime_quotes(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        批量获取实时行情（推荐使用）
+
+        一次请求获取多只股票，效率更高。
+
+        Args:
+            symbols: 股票代码列表
+
+        Returns:
+            {symbol: quote_dict} 字典
+        """
+        try:
+            quotes = self.realtime_provider.get_realtime_quotes(symbols)
+            return {symbol: quote.to_dict() for symbol, quote in quotes.items()}
+        except Exception as e:
+            logger.warning(f"批量获取实时行情失败: {e}")
+            return {}
+
+    def get_minute_bars(
+        self,
+        symbol: str,
+        period: str = '5m',
+        count: int = 100,
+        start_time: datetime = None,
+        end_time: datetime = None
+    ) -> pd.DataFrame:
+        """
+        获取分钟K线数据（支持增量更新）
+
+        Args:
+            symbol: 股票代码
+            period: 周期 (1m, 5m, 15m, 30m, 60m)
+            count: 获取数量
+            start_time: 开始时间
+            end_time: 结束时间
+
+        Returns:
+            DataFrame，包含 open/high/low/close/volume/amount 列
+        """
+        try:
+            return self.minute_provider.get_minute_bars(
+                symbol, period, start_time, end_time, count
+            )
+        except Exception as e:
+            logger.warning(f"获取分钟数据失败 {symbol}: {e}")
+            return pd.DataFrame()
+
+    def get_latest_bars(
+        self,
+        symbol: str,
+        period: str = '5m',
+        count: int = 60
+    ) -> pd.DataFrame:
+        """
+        获取最近N根分钟K线
+
+        Args:
+            symbol: 股票代码
+            period: 周期
+            count: 数量
+
+        Returns:
+            DataFrame
+        """
+        return self.get_minute_bars(symbol, period, count=count)
+
+    def get_realtime_price(self, symbol: str) -> Optional[float]:
+        """获取最新价格"""
+        quote = self.get_realtime_quote(symbol)
+        return quote.get('price') if quote else None
+
+    def get_realtime_prices(self, symbols: List[str]) -> Dict[str, float]:
+        """批量获取最新价格"""
+        quotes = self.get_realtime_quotes(symbols)
+        return {
+            symbol: quote.get('price')
+            for symbol, quote in quotes.items()
+            if quote and quote.get('price') is not None
+        }
+
 
 def create_data_fetcher_with_credentials():
     """

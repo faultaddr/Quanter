@@ -1,10 +1,8 @@
 """
 Qlib 模型工厂和基类
 
-统一管理 21 种 Qlib 原生模型:
-- GBDT 系列: LightGBM, XGBoost, CatBoost, DoubleEnsemble
-- PyTorch 序列: LSTM, GRU, ALSTM, Transformer, TCN, Localformer
-- PyTorch 高级: GATs, SFM, TabNet, ADARNN, ADD, HIST, IGMTF, KRNN, TRA, TCTS, Sandwich
+简化版：只支持 GBDT 系列 (LightGBM, XGBoost, CatBoost, DoubleEnsemble)
+推荐使用 GBMStrategy 进行训练
 """
 
 import warnings
@@ -44,21 +42,21 @@ class QlibModelConfig:
     subsample: float = 0.8
     colsample_bytree: float = 0.8
 
-    # PyTorch 参数
+    # PyTorch 参数（保留用于向后兼容，但不推荐使用）
     hidden_size: int = 64
     num_layers: int = 2
     dropout: float = 0.1
     batch_size: int = 256
     epochs: int = 100
     early_stopping_rounds: int = 20
-    lr_scheduler: str = "cosine"  # cosine, step, exponential
+    lr_scheduler: str = "cosine"
 
     # Transformer 特定参数
     n_head: int = 4
     d_model: int = 64
 
     # 设备配置
-    device: str = "auto"  # auto, cpu, cuda, mps
+    device: str = "auto"
 
     # 其他
     random_state: int = 42
@@ -69,7 +67,6 @@ class QlibModelConfig:
         """自动检测并返回设备"""
         if self.device != "auto":
             return self.device
-
         try:
             import torch
             if torch.cuda.is_available():
@@ -136,7 +133,6 @@ class QlibModelBase(ABC):
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """预测概率 (分类模型)"""
-        # 默认实现：返回预测值作为概率
         return self.predict(X)
 
     def save(self, filepath: str):
@@ -179,43 +175,19 @@ class QlibModelBase(ABC):
         }
 
 
-# 模型注册表
+# GBDT 模型注册表（简化版）
 MODEL_REGISTRY: Dict[str, Tuple[str, str]] = {
-    # GBDT 系列
     'lgb': ('gbdt', 'LGBModel', 'LightGBM 梯度提升模型'),
     'lightgbm': ('gbdt', 'LGBModel', 'LightGBM 梯度提升模型'),
     'xgboost': ('xgboost', 'XGBModel', 'XGBoost 梯度提升模型'),
     'xgb': ('xgboost', 'XGBModel', 'XGBoost 梯度提升模型'),
     'catboost': ('catboost_model', 'CatBoostModel', 'CatBoost 梯度提升模型'),
     'double_ensemble': ('double_ensemble', 'DEnsembleModel', 'Double Ensemble 模型'),
-
-    # PyTorch 序列模型
-    'lstm': ('pytorch_lstm', 'LSTM', 'LSTM 长短期记忆网络'),
-    'gru': ('pytorch_gru', 'GRU', 'GRU 门控循环单元'),
-    'alstm': ('pytorch_alstm', 'ALSTM', 'Attention LSTM'),
-    'transformer': ('pytorch_transformer', 'Transformer', 'Transformer 模型'),
-    'tcn': ('pytorch_tcn', 'TCN', '时间卷积网络'),
-    'localformer': ('pytorch_localformer', 'LocalformerModel', 'Local Transformer'),
-
-    # PyTorch 高级模型
-    'gats': ('pytorch_gats', 'GATs', '图注意力网络'),
-    'sfm': ('pytorch_sfm', 'SFM', '状态频域模型'),
-    'tabnet': ('pytorch_tabnet', 'TabNet', 'TabNet 表格网络'),
-    'adarnn': ('pytorch_adarnn', 'ADARNN', '自适应 RNN'),
-    'add': ('pytorch_add', 'ADD', 'ADD 模型'),
-    'hist': ('pytorch_hist', 'HIST', 'HIST 历史感知模型'),
-    'igmtf': ('pytorch_igmtf', 'IGMTF', 'IGMTF 模型'),
-    'krnn': ('pytorch_krnn', 'KRNN', 'KNN-RNN 混合模型'),
-    'tra': ('pytorch_tra', 'TRA', 'TRA 模型'),
-    'tcts': ('pytorch_tcts', 'TCTS', 'TCTS 模型'),
-    'sandwich': ('pytorch_sandwich', 'Sandwich', 'Sandwich 模型'),
 }
 
-# 模型类型分类
+# 模型类型分类（简化版）
 MODEL_CATEGORIES = {
     'gbdt': ['lgb', 'lightgbm', 'xgboost', 'xgb', 'catboost', 'double_ensemble'],
-    'pytorch_sequence': ['lstm', 'gru', 'alstm', 'transformer', 'tcn', 'localformer'],
-    'pytorch_advanced': ['gats', 'sfm', 'tabnet', 'adarnn', 'add', 'hist', 'igmtf', 'krnn', 'tra', 'tcts', 'sandwich'],
 }
 
 
@@ -259,9 +231,10 @@ def get_model_info(model_type: str) -> Dict[str, Any]:
 
 class QlibModelFactory:
     """
-    Qlib 模型工厂
+    Qlib 模型工厂（简化版）
 
-    统一创建和管理 Qlib 原生模型
+    只支持 GBDT 系列模型
+    推荐使用 GBMStrategy 进行训练
     """
 
     @classmethod
@@ -285,25 +258,13 @@ class QlibModelFactory:
         config = config or QlibModelConfig(model_type=model_type)
         config.model_type = model_type
 
-        # 更新配置
         for key, value in kwargs.items():
             if hasattr(config, key):
                 setattr(config, key, value)
 
-        category = get_model_category(model_type)
-
-        # 创建对应类别的模型
-        if category == 'gbdt':
-            from .gbdt_models import create_gbdt_model
-            return create_gbdt_model(config)
-        elif category == 'pytorch_sequence':
-            from .pytorch_models import create_pytorch_sequence_model
-            return create_pytorch_sequence_model(config)
-        elif category == 'pytorch_advanced':
-            from .advanced_models import create_advanced_model
-            return create_advanced_model(config)
-        else:
-            raise ValueError(f"未知模型类别: {category}")
+        # 只支持 GBDT 模型
+        from .gbdt_models import create_gbdt_model
+        return create_gbdt_model(config)
 
 
 def create_model(model_type: str, **kwargs) -> QlibModelBase:

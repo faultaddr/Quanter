@@ -6,6 +6,7 @@
 - 自动生成买入/卖出信号
 - 多渠道通知
 - 信号历史记录
+- 秒级实时数据支持
 """
 import asyncio
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from ..factors.trend_momentum_scoring import TrendMomentumScoring
 from ..strategies.qlib_strategy import QlibStrategy
 from ..core.timeutils import is_trading_time
 from ..core.logging import get_logger
+from ..infrastructure.data_providers.incremental_data_manager import IncrementalDataManager, DataType
 
 logger = get_logger(__name__)
 
@@ -28,7 +30,8 @@ logger = get_logger(__name__)
 class MonitorConfig:
     """监控配置"""
     symbols: List[str]                           # 监控股票列表
-    interval_minutes: int = 5                    # 检查间隔(分钟)
+    interval_seconds: int = 5                    # 检查间隔(秒)，支持秒级轮询
+    interval_minutes: int = 5                    # 检查间隔(分钟)，向后兼容
     strategy: str = "breakout"                   # 策略名称
     score_threshold: int = 50                    # 评分阈值
     buy_threshold: int = 50                      # 买入阈值
@@ -37,6 +40,8 @@ class MonitorConfig:
     history_days: int = 120                      # 历史数据天数（确保至少60个交易日）
     trading_hours_only: bool = True              # 仅交易时间运行
     cooldown_minutes: int = 15                   # 冷却期(分钟)
+    use_realtime_data: bool = True               # 使用实时行情数据
+    enable_minute_signals: bool = False          # 启用分钟级信号
 
 
 @dataclass
@@ -54,11 +59,12 @@ class RealtimeMonitorService:
     实时信号监控服务
 
     功能:
-    - 定时检查股票评分 (每5分钟)
+    - 定时检查股票评分（支持秒级轮询）
     - 仅在交易时间内运行
     - 多渠道通知
     - 信号冷却机制
     - 历史记录保存
+    - 实时行情数据支持
     """
 
     def __init__(
@@ -66,7 +72,8 @@ class RealtimeMonitorService:
         config: MonitorConfig,
         data_provider=None,
         notifiers: List[Any] = None,
-        signal_store=None
+        signal_store=None,
+        use_incremental: bool = True,
     ):
         """
         初始化监控服务
@@ -76,11 +83,35 @@ class RealtimeMonitorService:
             data_provider: 数据提供者
             notifiers: 通知器列表
             signal_store: 信号存储
+            use_incremental: 是否使用增量数据获取
         """
         self.config = config
         self.data_provider = data_provider
         self.notifiers = notifiers or []
         self.signal_store = signal_store
+        self.use_incremental = use_incremental
+
+        # 计算实际轮询间隔（优先使用秒级配置）
+        self._interval_seconds = config.interval_seconds
+        if config.interval_minutes > 0 and config.interval_seconds == 5:
+            # 向后兼容：如果只设置了 minutes，则使用分钟级
+            self._interval_seconds = config.interval_minutes * 60
+
+        # 增量数据管理器
+        self._incremental_manager: Optional[IncrementalDataManager] = None
+        if use_incremental:
+            try:
+                self._incremental_manager = IncrementalDataManager()
+                logger.info("增量数据管理器初始化成功")
+            except Exception as e:
+                logger.warning(f"增量数据管理器初始化失败: {e}")
+                self._incremental_manager = None
+
+        # 实时数据提供者
+        self._realtime_provider = None
+        self._minute_provider = None
+        if config.use_realtime_data:
+            self._init_realtime_providers()
 
         # 初始化评分系统
         if config.strategy == "breakout":
@@ -107,6 +138,18 @@ class RealtimeMonitorService:
         self._check_count = 0
         self._signal_count = 0
 
+    def _init_realtime_providers(self) -> None:
+        """初始化实时数据提供者"""
+        try:
+            from ..infrastructure.data_providers.realtime_data_provider import get_realtime_provider
+            from ..infrastructure.data_providers.incremental_minute_provider import get_incremental_minute_provider
+
+            self._realtime_provider = get_realtime_provider()
+            self._minute_provider = get_incremental_minute_provider()
+            logger.info("实时数据提供者初始化成功")
+        except Exception as e:
+            logger.warning(f"实时数据提供者初始化失败: {e}")
+
     async def start(self) -> None:
         """
         启动监控服务
@@ -120,7 +163,7 @@ class RealtimeMonitorService:
         self._running = True
         logger.info(
             f"Starting realtime monitor service for {len(self.config.symbols)} symbols, "
-            f"interval={self.config.interval_minutes}min, strategy={self.config.strategy}"
+            f"interval={self._interval_seconds}s, strategy={self.config.strategy}"
         )
 
         # 直接运行监控循环（阻塞）
@@ -135,15 +178,15 @@ class RealtimeMonitorService:
         logger.info("Monitor service stopped")
 
     async def _monitor_loop(self) -> None:
-        """监控循环"""
+        """监控循环（秒级轮询）"""
         while self._running:
             try:
                 await self._check_signals()
             except Exception as e:
                 logger.error(f"Error in monitor loop: {e}")
 
-            # 等待下一个检查周期
-            await asyncio.sleep(self.config.interval_minutes * 60)
+            # 秒级等待
+            await asyncio.sleep(self._interval_seconds)
 
     async def _check_signals(self) -> None:
         """检查所有股票的信号"""
@@ -203,7 +246,7 @@ class RealtimeMonitorService:
             )
 
     async def _get_stock_data(self, symbol: str) -> Optional[pd.DataFrame]:
-        """获取股票历史数据"""
+        """获取股票历史数据（优先使用增量数据管理器）"""
         if self.data_provider is None:
             logger.error("No data provider configured")
             return None
@@ -213,6 +256,22 @@ class RealtimeMonitorService:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=self.config.history_days)
 
+            # 优先使用增量数据管理器
+            if self._incremental_manager:
+                try:
+                    df = self._incremental_manager.get_data(
+                        symbol,
+                        start_date,
+                        end_date,
+                        self.data_provider,
+                        data_type=DataType.STOCK_BAR,
+                    )
+                    if df is not None and not df.empty:
+                        return df
+                except Exception as e:
+                    logger.warning(f"增量获取失败 {symbol}: {e}，回退到直接获取")
+
+            # 回退到直接获取
             data = self.data_provider.get_bars(
                 symbols=[symbol],
                 start_date=start_date,
@@ -390,11 +449,13 @@ class RealtimeMonitorService:
             "running": self._running,
             "symbols": self.config.symbols,
             "strategy": self.config.strategy,
+            "interval_seconds": self._interval_seconds,
             "interval_minutes": self.config.interval_minutes,
             "score_threshold": self.config.score_threshold,
             "check_count": self._check_count,
             "signal_count": self._signal_count,
-            "last_check": datetime.now().isoformat() if self._check_count > 0 else None
+            "last_check": datetime.now().isoformat() if self._check_count > 0 else None,
+            "realtime_data_enabled": self._realtime_provider is not None,
         }
 
     def get_recent_signals(self, limit: int = 20) -> List[SignalResult]:
@@ -417,3 +478,72 @@ class RealtimeMonitorService:
             "avg_score": avg_score,
             "pass_rate": sum(1 for s in self._signal_history if s.passed_filter) / len(self._signal_history)
         }
+
+    # ==========================================
+    # 实时行情接口
+    # ==========================================
+
+    async def get_realtime_quotes(self) -> Dict[str, Any]:
+        """
+        批量获取实时行情
+
+        Returns:
+            {symbol: quote_dict} 字典
+        """
+        if not self._realtime_provider:
+            return {}
+
+        try:
+            quotes = self._realtime_provider.get_realtime_quotes(self.config.symbols)
+            return {symbol: quote.to_dict() for symbol, quote in quotes.items()}
+        except Exception as e:
+            logger.error(f"获取实时行情失败: {e}")
+            return {}
+
+    async def get_minute_data(self, symbol: str, period: str = '5m', count: int = 60) -> pd.DataFrame:
+        """
+        获取分钟K线数据
+
+        Args:
+            symbol: 股票代码
+            period: 周期
+            count: 数量
+
+        Returns:
+            DataFrame
+        """
+        if not self._minute_provider:
+            return pd.DataFrame()
+
+        try:
+            return self._minute_provider.get_minute_bars(symbol, period, count=count)
+        except Exception as e:
+            logger.error(f"获取分钟数据失败 {symbol}: {e}")
+            return pd.DataFrame()
+
+    async def check_minute_signals(self) -> Dict[str, Any]:
+        """
+        基于分钟数据检查信号
+
+        Returns:
+            信号结果字典
+        """
+        if not self.config.enable_minute_signals or not self._minute_provider:
+            return {}
+
+        results = {}
+        for symbol in self.config.symbols:
+            try:
+                df = self._minute_provider.get_minute_bars(symbol, '5m', count=100)
+                if df is not None and not df.empty:
+                    # 使用评分系统计算
+                    result = self._generate_signal(symbol, df)
+                    results[symbol] = {
+                        'score': result.score,
+                        'signal': result.signal.direction.value if result.signal else None,
+                        'passed_filter': result.passed_filter,
+                    }
+            except Exception as e:
+                logger.debug(f"分钟信号检查失败 {symbol}: {e}")
+
+        return results

@@ -572,5 +572,84 @@ def check_trading_day(
         typer.echo("❌ 不是交易日")
 
 
+# ==================== GBM 沪深300 荐股命令 ====================
+
+@app.command(name="gbm-pick")
+def gbm_csi300_pick(
+    top_n: int = typer.Option(10, "--top", "-n", help="返回前 N 只股票"),
+    force_train: bool = typer.Option(False, "--train", "-t", help="强制重新训练模型"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="输出文件路径"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="JSON 格式输出"),
+):
+    """
+    GBM 沪深300 每日荐股
+
+    使用 LightGBM 模型对沪深300成分股进行预测，返回 Top N 推荐股票
+
+    示例：
+    - quanttool enhanced gbm-pick
+    - quanttool enhanced gbm-pick -n 20
+    - quanttool enhanced gbm-pick --train
+    - quanttool enhanced gbm-pick -n 10 -o report.md
+    """
+    typer.echo(f"\n{'='*60}")
+    typer.echo("GBM 沪深300 每日荐股")
+    typer.echo(f"{'='*60}\n")
+
+    if force_train:
+        typer.echo("⚠️  强制重新训练模型...")
+
+    try:
+        from quanttool.application.gbm_picker_service import (
+            GBMCsi300Picker,
+            format_pick_report
+        )
+
+        # 创建荐股器
+        picker = GBMCsi300Picker(top_n=top_n)
+
+        # 获取推荐
+        result = picker.get_daily_picks(force_train=force_train)
+
+        if json_output:
+            import json
+            output_data = {
+                "date": result.date,
+                "total_stocks": result.total_stocks,
+                "valid_stocks": result.valid_stocks,
+                "top_stocks": [
+                    {
+                        "code": r.code,
+                        "pred_return": r.pred_return,
+                        "probability": r.probability,
+                        "percentile": r.percentile,
+                        "confidence": r.confidence,
+                        "signal": r.signal,
+                        "stop_loss": r.stop_loss,
+                        "take_profit": r.take_profit,
+                        "close": r.close,
+                    }
+                    for r in result.top_stocks
+                ],
+                "model_info": result.model_info,
+            }
+            report = json.dumps(output_data, ensure_ascii=False, indent=2)
+        else:
+            report = format_pick_report(result)
+
+        # 输出
+        typer.echo(report)
+
+        # 保存文件
+        if output:
+            with open(output, 'w', encoding='utf-8') as f:
+                f.write(report)
+            typer.echo(f"\n结果已保存至：{output}")
+
+    except Exception as e:
+        typer.echo(f"❌ 荐股失败: {e}", err=True)
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()

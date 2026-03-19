@@ -1,7 +1,8 @@
 """
 Qlib 原生模型集成模块
 
-提供 21 种 Qlib 原生模型的统一接口
+提供 GBDT 系列模型的统一接口：
+- LightGBM, XGBoost, CatBoost, DoubleEnsemble
 """
 
 from .models import (

@@ -22,7 +22,6 @@ from quanttool.factors.talib_patterns import (
 )
 from quanttool.factors.screening import StockScreener, ScreenResult
 from quanttool.infrastructure.data_providers.data_fetcher import create_data_fetcher_with_credentials
-from quanttool.infrastructure.data_providers.incremental_data_manager import IncrementalDataManager, DataType
 from quanttool.strategies.adaptive_threshold import (
     AdaptiveThresholdManager, MarketRegime, VolatilityLevel,
     IndexMarketDetector, DualMarketState, CombinedSignal
@@ -43,30 +42,55 @@ from quanttool.factors.unified_stop_loss import UnifiedStopLossCalculator
 class StockAnalyzer:
     """
     A comprehensive stock analyzer that calculates technical indicators and evaluates trading strategies
+
+    数据说明：
+    - qlib 数据为复权价格，价格绝对值与行情软件不同
+    - $close (后复权): 约 6-7 元，适合技术分析和回测
+    - $adjclose (前复权): 约 170 元，与行情软件方向相反
+    - 涨跌幅与实际一致，适合技术分析
+    - 如需与行情软件一致的实时价格，设置 use_realtime_price=True
     """
 
-    def __init__(self, use_cache: bool = True, max_workers: int = 10, use_incremental: bool = True):
+    def __init__(self, use_cache: bool = True, max_workers: int = 10, use_qlib: bool = True, use_realtime_price: bool = False):
         """Initialize the stock analyzer with data fetcher
 
         Args:
             use_cache: Whether to use local cache for data (default: True)
             max_workers: Maximum parallel workers for batch fetching (default: 10)
-            use_incremental: Whether to use incremental data fetching (default: True)
+            use_qlib: Whether to use qlib data source (default: True, qlib has complete dataset)
+            use_realtime_price: 优先使用实时股价（备用数据源），而非复权价格（默认 False）
+                - False: 优先使用 qlib 复权价格，适合技术分析和回测
+                - True: 优先使用备用数据源获取实时股价，适合展示给用户
         """
-        self.fetcher = create_data_fetcher_with_credentials()
-        self.fetcher.initialize()
         self.use_cache = use_cache
         self.max_workers = max_workers
-        self.use_incremental = use_incremental
+        self.use_qlib = use_qlib
+        self.use_realtime_price = use_realtime_price
 
-        # 增量数据管理器
-        self._incremental_manager: Optional[IncrementalDataManager] = None
-        if use_incremental:
+        # qlib 数据加载器
+        self._qlib_loader = None
+        if use_qlib:
             try:
-                self._incremental_manager = IncrementalDataManager()
+                from quanttool.infrastructure.data_providers.qlib_data_loader import QlibDataLoader
+                self._qlib_loader = QlibDataLoader()
+                if not use_realtime_price:
+                    print("✅ 使用 qlib 数据源（复权价格）")
             except Exception as e:
-                print(f"⚠️ 增量数据管理器初始化失败: {e}")
-                self._incremental_manager = None
+                print(f"⚠️ qlib 数据加载器初始化失败: {e}")
+                self._qlib_loader = None
+
+        # 传统数据获取器（始终初始化作为备用，用于 ETF 等非股票品种或实时股价）
+        self.fetcher = None
+        try:
+            self.fetcher = create_data_fetcher_with_credentials()
+            self.fetcher.initialize()
+            if use_realtime_price:
+                print("✅ 使用实时数据源（备用数据源优先）")
+            else:
+                print("✅ 备用数据源已就绪")
+        except Exception as e:
+            print(f"⚠️ 备用数据源初始化失败: {e}")
+            self.fetcher = None
 
         # Cache for batch-fetched data
         self._batch_data_cache: Dict[str, pd.DataFrame] = {}
@@ -77,15 +101,15 @@ class StockAnalyzer:
         days: int = 360,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
-        force_refresh: bool = False
+        force_refresh: bool = False,
+        use_adjclose: bool = True
     ) -> pd.DataFrame:
         """
         Fetch stock data for the specified symbol and time period.
 
-        增量数据拉取策略：
-        1. 优先使用增量数据管理器（只拉取缺失日期）
-        2. 如果禁用增量模式，使用传统方式拉取完整数据
-        3. 支持强制刷新缓存
+        数据获取策略：
+        1. 优先使用 qlib 数据源（完整数据集）
+        2. 如果 qlib 不可用，回退到传统数据获取器
 
         Args:
             symbol: Stock symbol (e.g., '600519.SH' or '600519')
@@ -93,9 +117,27 @@ class StockAnalyzer:
             start_date: Optional start date (if provided, days parameter is ignored)
             end_date: Optional end date (if provided, days parameter is ignored)
             force_refresh: Force refresh cache (default: False)
+            use_adjclose: 是否使用前复权价格，默认 False
+                - False: 使用后复权 ($close)，适合技术分析和回测
+                - True: 使用前复权 ($adjclose)，注意与行情软件方向相反
 
         Returns:
             DataFrame with stock data, empty DataFrame if failed
+
+        价格说明:
+            qlib 数据的复权方式与行情软件不同：
+            - $close (后复权): 保持时间序列连续性，适合技术分析
+            - $adjclose (前复权): 历史价格累积调整，数值较大
+            - 两种价格的涨跌幅一致，适合计算收益率
+
+        示例:
+            # 默认：获取适合技术分析的价格
+            df = analyzer.get_stock_data('SH600000', 30)
+            print(df['close'].iloc[-1])  # 约 6.7 元
+
+            # 如需与行情软件一致的实时价格，系统会自动回退到备用数据源
+            df = analyzer.get_stock_data('510300.SH', 30)  # ETF 自动使用备用源
+            print(df['close'].iloc[-1])  # 约 4.6 元（实时价格）
         """
         # Use provided dates or calculate from days
         if end_date is None:
@@ -108,69 +150,93 @@ class StockAnalyzer:
 
         # Check batch cache first
         if normalized_symbol in self._batch_data_cache and not force_refresh:
-            print(f"✅ 从内存缓存获取 {normalized_symbol} 的数据")
             return self._batch_data_cache[normalized_symbol].copy()
 
-        # 使用增量数据管理器
-        if self._incremental_manager and not force_refresh:
-            # 先检查缓存状态
-            cached_range = self._incremental_manager._get_data_range(normalized_symbol, DataType.STOCK_BAR)
+        # 根据 use_realtime_price 决定数据源优先级
+        if self.use_realtime_price:
+            # 优先使用备用数据源（实时股价）
+            if self.fetcher:
+                try:
+                    symbols = [normalized_symbol]
+                    data = self.fetcher.get_bars(symbols, start_date, end_date)
 
-            if cached_range:
-                # 计算缓存覆盖率（与增量管理器保持一致的计算方式）
-                from datetime import date
-                start_date_day = start_date.date() if hasattr(start_date, 'date') else start_date
-                end_date_day = end_date.date() if hasattr(end_date, 'date') else end_date
-                earliest = cached_range.earliest_date.date() if hasattr(cached_range.earliest_date, 'date') else cached_range.earliest_date
-                latest = cached_range.latest_date.date() if hasattr(cached_range.latest_date, 'date') else cached_range.latest_date
+                    if normalized_symbol in data and not data[normalized_symbol].empty:
+                        df = data[normalized_symbol].copy()
+                        df['data_source'] = 'realtime'
+                        df['price_type'] = 'realtime'
+                        return df
+                    else:
+                        print(f"⚠️ 备用数据源无 {normalized_symbol} 数据，尝试 qlib")
+                except Exception as e:
+                    print(f"⚠️ 备用数据源获取 {normalized_symbol} 失败: {e}")
 
-                request_days = (end_date_day - start_date_day).days + 1
-                overlap_start = max(start_date_day, earliest)
-                overlap_end = min(end_date_day, latest)
+            # 回退到 qlib
+            if self._qlib_loader:
+                try:
+                    start_str = start_date.strftime('%Y-%m-%d')
+                    end_str = end_date.strftime('%Y-%m-%d')
+                    df = self._qlib_loader.load_stock_data(
+                        normalized_symbol, start_str, end_str,
+                        use_adjclose=use_adjclose
+                    )
 
-                if overlap_start <= overlap_end:
-                    covered_days = (overlap_end - overlap_start).days + 1
-                    coverage = covered_days / request_days if request_days > 0 else 1.0
-                else:
-                    coverage = 0.0
+                    if not df.empty:
+                        df = df.reset_index()
+                        if 'date' in df.columns:
+                            df = df.rename(columns={'date': 'trade_date'})
+                        df['data_source'] = 'qlib'
+                        df['price_type'] = 'adjclose' if use_adjclose else 'close'
+                        return df
+                except Exception as e:
+                    print(f"⚠️ qlib 获取 {normalized_symbol} 失败: {e}")
 
-                # 使用与增量管理器相同的阈值
-                MIN_COVERAGE_THRESHOLD = 0.95
-
-                if coverage >= MIN_COVERAGE_THRESHOLD:
-                    print(f"✅ 从缓存获取 {normalized_symbol} ({cached_range.row_count} 条)")
-                else:
-                    print(f"⏳ 增量获取 {normalized_symbol} (缓存覆盖 {coverage:.0%})")
-            else:
-                print(f"⏳ 首次获取 {normalized_symbol} 数据...")
-
-            try:
-                df = self._incremental_manager.get_data(
-                    normalized_symbol,
-                    start_date,
-                    end_date,
-                    self.fetcher,
-                    data_type=DataType.STOCK_BAR,
-                    force_refresh=False
-                )
-                if not df.empty:
-                    print(f"✅ 成功获取 {len(df)} 条记录")
-                    return df
-            except Exception as e:
-                print(f"⚠️ 增量获取失败，回退到传统方式: {e}")
-
-        # 传统方式：完整拉取
-        print(f"⏳ 获取 {normalized_symbol} 数据 ({start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')})...")
-        symbols = [normalized_symbol]
-        data = self.fetcher.get_bars(symbols, start_date, end_date)
-
-        if normalized_symbol in data and not data[normalized_symbol].empty:
-            df = data[normalized_symbol].copy()
-            print(f"成功获取 {len(df)} 条记录")
-            return df
         else:
-            print(f"未能获取 {normalized_symbol} 的数据")
-            return pd.DataFrame()
+            # 默认：优先使用 qlib 数据源（复权价格，适合技术分析）
+            if self._qlib_loader:
+                try:
+                    start_str = start_date.strftime('%Y-%m-%d')
+                    end_str = end_date.strftime('%Y-%m-%d')
+                    df = self._qlib_loader.load_stock_data(
+                        normalized_symbol, start_str, end_str,
+                        use_adjclose=use_adjclose
+                    )
+
+                    if not df.empty:
+                        df = df.reset_index()
+                        if 'date' in df.columns:
+                            df = df.rename(columns={'date': 'trade_date'})
+                        df['data_source'] = 'qlib'
+                        df['price_type'] = 'adjclose' if use_adjclose else 'close'
+                        return df
+                    else:
+                        print(f"⚠️ qlib 中无 {normalized_symbol} 数据，尝试备用数据源")
+                except Exception as e:
+                    print(f"⚠️ qlib 获取 {normalized_symbol} 失败: {e}")
+
+            # 回退到备用数据源
+            if self.fetcher:
+                print(f"⏳ 使用备用数据源获取 {normalized_symbol}")
+                symbols = [normalized_symbol]
+                data = self.fetcher.get_bars(symbols, start_date, end_date)
+
+                if normalized_symbol in data and not data[normalized_symbol].empty:
+                    df = data[normalized_symbol].copy()
+                    df['data_source'] = 'realtime'
+                    df['price_type'] = 'realtime'
+                    return df
+
+        # 回退到传统数据获取器（用于 ETF 等非股票品种）
+        if self.fetcher:
+            print(f"⏳ 使用备用数据源获取 {normalized_symbol}")
+            symbols = [normalized_symbol]
+            data = self.fetcher.get_bars(symbols, start_date, end_date)
+
+            if normalized_symbol in data and not data[normalized_symbol].empty:
+                df = data[normalized_symbol].copy()
+                return df
+
+        print(f"⚠️ 无法获取 {normalized_symbol} 的数据")
+        return pd.DataFrame()
 
     def update_cache_latest(
         self,
@@ -180,41 +246,30 @@ class StockAnalyzer:
         """
         批量更新最新数据（用于定时任务）
 
-        只拉取每只股票缺失的最新数据，而不是完整历史数据
+        使用 qlib 数据源，无需增量更新
 
         Args:
             symbols: 股票列表
-            days_back: 回溯天数（防止停牌股票漏数据）
+            days_back: 回溯天数
 
         Returns:
             Dict[symbol, rows_added]: 每只股票新增的行数
         """
-        if self._incremental_manager:
-            print(f"📦 增量更新 {len(symbols)} 只股票的最新数据...")
-            results = self._incremental_manager.update_latest(
-                symbols, self.fetcher, days_back
-            )
-            total_added = sum(results.values())
-            print(f"✅ 更新完成，共新增 {total_added} 条记录")
-            return results
-        else:
-            print("⚠️ 增量数据管理器未启用")
-            return {}
+        # qlib 数据是完整数据集，无需增量更新
+        print(f"📦 使用 qlib 数据源，无需增量更新")
+        return {s: 0 for s in symbols}
 
     def get_cache_stats(self) -> Dict:
         """
         获取缓存统计信息
 
         Returns:
-            Dict: 包含 symbol_count, total_rows, total_size_mb 等
+            Dict: 包含 symbol_count, total_rows 等
         """
-        if self._incremental_manager:
-            return self._incremental_manager.get_cache_stats()
         return {
             "symbol_count": len(self._batch_data_cache),
             "total_rows": sum(len(df) for df in self._batch_data_cache.values()),
-            "total_size_mb": 0,
-            "cache_dir": "memory only"
+            "cache_dir": "qlib data"
         }
 
     def list_cached_symbols(self) -> List[Dict]:
@@ -222,10 +277,8 @@ class StockAnalyzer:
         列出所有已缓存的股票
 
         Returns:
-            List of Dict: 每个包含 symbol, earliest_date, latest_date, row_count 等
+            List of Dict: 每个包含 symbol, row_count 等
         """
-        if self._incremental_manager:
-            return self._incremental_manager.list_symbols()
         return [
             {"symbol": s, "row_count": len(df)}
             for s, df in self._batch_data_cache.items()
@@ -238,10 +291,7 @@ class StockAnalyzer:
         Returns:
             int: 清理的条目数
         """
-        if self._incremental_manager:
-            count = self._incremental_manager.clear_expired()
-            print(f"🗑️ 清理 {count} 条过期缓存")
-            return count
+        # qlib 数据是完整数据集，无需清理
         return 0
 
     def get_stock_data_batch(
@@ -249,28 +299,30 @@ class StockAnalyzer:
         symbols: List[str],
         days: int = 360,
         use_parallel: bool = True,
-        show_progress: bool = True
+        show_progress: bool = True,
+        batch_size: int = 30,
+        max_workers: int = 10
     ) -> Dict[str, pd.DataFrame]:
         """
-        Fetch stock data for multiple symbols in parallel with caching.
+        Fetch stock data for multiple symbols.
 
-        This method is significantly faster than calling get_stock_data()
-        repeatedly for each symbol, as it:
-        1. Fetches all symbols in parallel (10 workers by default)
-        2. Uses local cache to avoid redundant network requests
-        3. Stores results in memory for subsequent analysis
+        优先使用 qlib 数据源（完整数据集）
 
         Args:
             symbols: List of stock symbols
             days: Number of days of data to fetch
             use_parallel: Whether to use parallel fetching (default: True)
             show_progress: Whether to show progress logs
+            batch_size: Number of stocks per batch (default: 30)
+            max_workers: Number of concurrent workers per batch (default: 10)
 
         Returns:
             Dictionary mapping normalized symbols to DataFrames
         """
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
+        start_str = start_date.strftime('%Y-%m-%d')
+        end_str = end_date.strftime('%Y-%m-%d')
 
         # Normalize all symbols
         normalized_symbols = [self._normalize_symbol(s) for s in symbols]
@@ -281,30 +333,39 @@ class StockAnalyzer:
             if s not in self._batch_data_cache
         ]
 
-        if symbols_to_fetch:
+        if not symbols_to_fetch:
             if show_progress:
-                print(f"正在批量获取 {len(symbols_to_fetch)} 只股票数据...")
+                print(f"✅ 全部 {len(normalized_symbols)} 只股票已在内存缓存中")
+            return {s: self._batch_data_cache[s].copy() for s in normalized_symbols if s in self._batch_data_cache}
 
-            if use_parallel:
-                # Use parallel fetching with cache
-                data = self.fetcher.get_bars_cached(
-                    symbols_to_fetch, start_date, end_date
-                )
-            else:
-                data = self.fetcher.get_bars(
-                    symbols_to_fetch, start_date, end_date
-                )
-
-            # Store in batch cache
-            for symbol, df in data.items():
-                if not df.empty:
-                    self._batch_data_cache[symbol] = df
-
-            if show_progress:
-                print(f"成功获取 {len(data)} 只股票数据")
-
-        # Return all requested data (from batch cache)
         result = {}
+        success_count = 0
+
+        # 优先使用 qlib 批量加载
+        if self._qlib_loader:
+            if show_progress:
+                print(f"正在使用 qlib 批量加载 {len(symbols_to_fetch)} 只股票数据...")
+
+            try:
+                qlib_data = self._qlib_loader.load_stocks_batch(symbols_to_fetch, start_str, end_str)
+
+                for symbol, df in qlib_data.items():
+                    if not df.empty:
+                        # 重置索引并重命名
+                        df = df.reset_index()
+                        if 'date' in df.columns:
+                            df = df.rename(columns={'date': 'trade_date'})
+                        self._batch_data_cache[symbol] = df
+                        result[symbol] = df.copy()
+                        success_count += 1
+
+                if show_progress:
+                    print(f"✅ qlib 加载完成: {success_count}/{len(symbols_to_fetch)} 只股票")
+
+            except Exception as e:
+                print(f"⚠️ qlib 批量加载失败: {e}")
+
+        # 返回所有请求的数据
         for symbol in normalized_symbols:
             if symbol in self._batch_data_cache:
                 result[symbol] = self._batch_data_cache[symbol].copy()
@@ -318,17 +379,23 @@ class StockAnalyzer:
     def preload_data_for_scan(
         self,
         stock_list: List[Dict[str, str]],
-        days: int = 360
+        days: int = 360,
+        batch_size: int = 30,
+        max_workers: int = 10
     ) -> int:
         """
         Preload all stock data for a scan operation.
 
-        Call this before analyzing multiple stocks to significantly
-        speed up the scan by fetching all data in parallel.
+        批次并发预加载数据：
+        - 每批 batch_size 只股票
+        - 每批内 max_workers 个线程并发获取
+        - 数据来源：内存缓存 -> 磁盘缓存 -> 网络
 
         Args:
             stock_list: List of stock info dicts with 'code' key
             days: Number of days of data to fetch
+            batch_size: Number of stocks per batch (default: 30)
+            max_workers: Number of concurrent workers per batch (default: 10)
 
         Returns:
             Number of stocks successfully loaded
@@ -338,25 +405,21 @@ class StockAnalyzer:
             for stock in stock_list
         ]
 
-        data = self.get_stock_data_batch(symbols, days, use_parallel=True)
+        data = self.get_stock_data_batch(
+            symbols, days,
+            use_parallel=True,
+            batch_size=batch_size,
+            max_workers=max_workers
+        )
         return len(data)
 
     def _normalize_symbol(self, symbol: str) -> str:
         """
-        Normalize the symbol format for different data providers
+        Normalize the symbol format for qlib data provider
+        Returns qlib format: SH600000, SZ000001
         """
-        symbol = symbol.upper().strip()
-
-        # Handle various input formats
-        if symbol.endswith('.SH') or symbol.endswith('.SZ'):
-            return symbol
-        elif len(symbol) == 6:
-            if symbol.startswith(('5', '6', '9')):
-                return f"{symbol}.SH"  # Shanghai
-            else:
-                return f"{symbol}.SZ"  # Shenzhen
-        else:
-            return symbol
+        from quanttool.infrastructure.data_providers.qlib_data_loader import QlibDataLoader
+        return QlibDataLoader.normalize_instrument(symbol)
 
     def calculate_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -366,7 +429,16 @@ class StockAnalyzer:
             print("Error: DataFrame is empty or missing 'close' column")
             return df
 
-        df = df.sort_values('timestamp').reset_index(drop=True)
+        # 检测日期列名（可能是 trade_date, timestamp, 或 date）
+        date_col = None
+        for col in ['trade_date', 'timestamp', 'date']:
+            if col in df.columns:
+                date_col = col
+                break
+        if date_col:
+            df = df.sort_values(date_col).reset_index(drop=True)
+        else:
+            df = df.reset_index(drop=True)
 
         # Ensure all required columns exist
         required_cols = ['open', 'high', 'low', 'close', 'volume']
@@ -543,7 +615,8 @@ class StockAnalyzer:
             scoring.set_market_regime('sideway')
 
         # 获取日期信息
-        latest_date = df['timestamp'].iloc[-1].strftime('%Y-%m-%d') if 'timestamp' in df.columns else ''
+        date_col = 'trade_date' if 'trade_date' in df.columns else ('timestamp' if 'timestamp' in df.columns else 'date')
+        latest_date = df[date_col].iloc[-1].strftime('%Y-%m-%d') if date_col in df.columns else ''
 
         # K线形态分析（已集成到评分系统，此处仅用于报告展示）
         candlestick_result = recognize_talib_patterns(df, lookback=5)
@@ -764,7 +837,8 @@ class StockAnalyzer:
         """运行经典评分系统"""
         scoring = ScoringSystem(stop_loss_pct=0.05)
 
-        latest_date = df['timestamp'].iloc[-1].strftime('%Y-%m-%d') if 'timestamp' in df.columns else ''
+        date_col = 'trade_date' if 'trade_date' in df.columns else ('timestamp' if 'timestamp' in df.columns else 'date')
+        latest_date = df[date_col].iloc[-1].strftime('%Y-%m-%d') if date_col in df.columns else ''
 
         try:
             result = scoring.calculate_all_scores(
