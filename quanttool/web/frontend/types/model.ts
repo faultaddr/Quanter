@@ -9,11 +9,19 @@ export interface TrainParams {
   features?: string[];
 }
 
+// 后端 API 返回的原始模型数据
+export interface ApiModelInfo {
+  path: string;
+  filename: string;
+  size_mb: number;
+  modified: string;
+}
+
 export interface ModelInfo {
   id: string;
   name: string;
   type: string;
-  created_at: string;
+  created_at?: string;
   metrics?: {
     accuracy?: number;
     precision?: number;
