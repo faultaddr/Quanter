@@ -27,6 +27,12 @@ export default function BacktestPage() {
   const [results, setResults] = useState<BacktestResult[]>([]);
   const [activeResultIndex, setActiveResultIndex] = useState(0);
 
+  // A股约束选项
+  const [enableConstraints, setEnableConstraints] = useState(true);
+  const [excludeST, setExcludeST] = useState(true);
+  const [excludeLimit, setExcludeLimit] = useState(true);
+  const [commissionRate, setCommissionRate] = useState(0.0003);
+
   const { loading: loadingStrategies, execute: fetchStrategies } = useApi(backtestApi.getStrategies);
   const { loading: runningBacktest, execute: runBacktest } = useApi(backtestApi.run);
   const { loading: runningAllBacktest, execute: runAllBacktest } = useApi(backtestApi.runAll);
@@ -59,6 +65,11 @@ export default function BacktestPage() {
       start_date: startDate,
       end_date: endDate,
       initial_capital: initialCapital,
+      // A股约束
+      enable_constraints: enableConstraints,
+      exclude_st: excludeST,
+      exclude_limit: excludeLimit,
+      commission_rate: commissionRate,
     });
     if (result) {
       setResults([result]);
@@ -76,6 +87,11 @@ export default function BacktestPage() {
       start_date: startDate,
       end_date: endDate,
       initial_capital: initialCapital,
+      // A股约束
+      enable_constraints: enableConstraints,
+      exclude_st: excludeST,
+      exclude_limit: excludeLimit,
+      commission_rate: commissionRate,
     });
     if (data) {
       setResults(data);
@@ -148,6 +164,53 @@ export default function BacktestPage() {
                 selected={selectedStrategy}
                 onSelect={setSelectedStrategy}
               />
+            )}
+          </div>
+
+          {/* A股约束选项 */}
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            <div className="flex items-center gap-2 mb-3">
+              <input
+                type="checkbox"
+                id="enableConstraints"
+                checked={enableConstraints}
+                onChange={(e) => setEnableConstraints(e.target.checked)}
+                className="rounded"
+              />
+              <label htmlFor="enableConstraints" className="text-sm font-medium text-text-secondary">
+                启用A股交易约束
+              </label>
+              <span className="text-xs text-text-muted">(涨跌停、ST股限制、真实交易成本)</span>
+            </div>
+
+            {enableConstraints && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 ml-6">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={excludeST}
+                    onChange={(e) => setExcludeST(e.target.checked)}
+                    className="rounded"
+                  />
+                  <span>排除ST股</span>
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={excludeLimit}
+                    onChange={(e) => setExcludeLimit(e.target.checked)}
+                    className="rounded"
+                  />
+                  <span>涨跌停不能交易</span>
+                </label>
+                <Input
+                  label="佣金费率"
+                  type="number"
+                  step="0.0001"
+                  value={commissionRate}
+                  onChange={(e) => setCommissionRate(Number(e.target.value))}
+                />
+              </div>
             )}
           </div>
 

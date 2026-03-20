@@ -5,7 +5,11 @@
 - 市场状态识别（BULL/BEAR/SIDEWAY/VOLATILE）
 - 滚动窗口优化权重
 - 状态特定权重配置
+- IC/IR加权优化
+- 风险平价组合
+- 因子权重约束优化
 """
+
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
@@ -13,6 +17,7 @@ from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
 import warnings
+from scipy.optimize import minimize
 
 warnings.filterwarnings('ignore')
 
@@ -257,3 +262,331 @@ def calculate_factor_returns(
         factor: (score / total_score) * future_return
         for factor, score in score_breakdown.items()
     }
+
+
+# ========== 增强的IC/IR加权优化器 ==========
+
+class OptimizerType(str, Enum):
+    """优化器类型"""
+    EQUAL = "equal"                     # 等权
+    IC_WEIGHTED = "ic_weighted"          # IC加权
+    IR_WEIGHTED = "ir_weighted"          # IR加权（信息比率）
+    RISK_PARITY = "risk_parity"          # 风险平价
+    MEAN_VARIANCE = "mean_variance"      # 均值方差
+    REGIME_BASED = "regime_based"       # 市场状态驱动
+
+
+@dataclass
+class ICIRResult:
+    """IC/IR优化结果"""
+    weights: Dict[str, float]
+    expected_return: float
+    risk: float
+    optimization_type: OptimizerType
+    details: Dict[str, float]
+
+
+class ICIRWeightOptimizer:
+    """
+    IC/IR加权优化器
+
+    基于因子有效性指标（IC、IR）动态调整因子权重
+    """
+
+    def __init__(
+        self,
+        min_weight: float = 0.05,
+        max_weight: float = 0.50,
+        target_volatility: Optional[float] = None,
+    ):
+        """
+        初始化IC/IR优化器
+
+        Args:
+            min_weight: 最小权重
+            max_weight: 最大权重
+            target_volatility: 目标波动率（用于风险平价）
+        """
+        self.min_weight = min_weight
+        self.max_weight = max_weight
+        self.target_volatility = target_volatility
+
+        # 存储因子IC/IR历史
+        self.ic_history: Dict[str, List[float]] = {}
+        self.ir_history: Dict[str, List[float]] = {}
+        self.factor_returns: Dict[str, pd.Series] = {}
+
+    def update_factor_metrics(
+        self,
+        factor_name: str,
+        ic_series: pd.Series,
+    ):
+        """
+        更新因子指标
+
+        Args:
+            factor_name: 因子名称
+            ic_series: IC序列
+        """
+        if factor_name not in self.ic_history:
+            self.ic_history[factor_name] = []
+            self.ir_history[factor_name] = []
+
+        # 更新IC历史
+        self.ic_history[factor_name].extend(ic_series.tolist())
+
+        # 限制历史长度
+        max_history = 250  # 约1年
+        if len(self.ic_history[factor_name]) > max_history:
+            self.ic_history[factor_name] = self.ic_history[factor_name][-max_history:]
+
+        # 计算并更新IR
+        if len(self.ic_history[factor_name]) >= 60:
+            ic_arr = np.array(self.ic_history[factor_name])
+            mean_ic = np.mean(ic_arr)
+            std_ic = np.std(ic_arr)
+            ir = mean_ic / std_ic if std_ic > 0 else 0
+            self.ir_history[factor_name].append(ir)
+
+            # 限制IR历史长度
+            if len(self.ir_history[factor_name]) > max_history:
+                self.ir_history[factor_name] = self.ir_history[factor_name][-max_history:]
+
+    def optimize_by_ic(
+        self,
+        factor_names: List[str],
+    ) -> Dict[str, float]:
+        """
+        基于IC优化权重
+
+        Args:
+            factor_names: 因子名称列表
+
+        Returns:
+            优化后的权重
+        """
+        weights = {}
+        total_ic = 0.0
+
+        # 计算总IC
+        for name in factor_names:
+            if name in self.ic_history and self.ic_history[name]:
+                recent_ic = np.mean(self.ic_history[name][-60:])
+                # 使用绝对值，因为负IC也是有效的
+                weights[name] = abs(recent_ic)
+                total_ic += abs(recent_ic)
+            else:
+                weights[name] = 0.0
+
+        if total_ic == 0:
+            # 如果没有IC数据，使用等权
+            return {name: 1.0 / len(factor_names) for name in factor_names}
+
+        # 归一化权重
+        result = {name: w / total_ic for name, w in weights.items()}
+
+        # 应用权重约束
+        return self._apply_weight_constraints(result)
+
+    def optimize_by_ir(
+        self,
+        factor_names: List[str],
+    ) -> Dict[str, float]:
+        """
+        基于IR优化权重
+
+        Args:
+            factor_names: 因子名称列表
+
+        Returns:
+            优化后的权重
+        """
+        weights = {}
+        total_ir = 0.0
+
+        for name in factor_names:
+            if name in self.ir_history and self.ir_history[name]:
+                recent_ir = np.mean(self.ir_history[name][-60:])
+                weights[name] = max(0, recent_ir)  # 只考虑正IR
+                total_ir += max(0, recent_ir)
+            else:
+                weights[name] = 0.0
+
+        if total_ir == 0:
+            # 如果没有IR数据，使用等权
+            return {name: 1.0 / len(factor_names) for name in factor_names}
+
+        # 归一化权重
+        result = {name: w / total_ir for name, w in weights.items()}
+
+        return self._apply_weight_constraints(result)
+
+    def optimize_risk_parity(
+        self,
+        factor_names: List[str],
+        returns: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, float]:
+        """
+        风险平价优化
+
+        各因子对组合风险的贡献相等
+
+        Args:
+            factor_names: 因子名称列表
+            returns: 因子收益DataFrame
+
+        Returns:
+            优化后的权重
+        """
+        if returns is None:
+            # 没有收益数据，使用等权
+            return {name: 1.0 / len(factor_names) for name in factor_names}
+
+        # 计算协方差矩阵
+        cov_matrix = returns.cov()
+
+        # 风险平价目标函数
+        def risk_parity_objective(weights: np.ndarray) -> float:
+            """风险贡献方差"""
+            portfolio_vol = np.sqrt(weights @ cov_matrix.values @ weights)
+            risk_contrib = weights * (cov_matrix.values @ weights) / portfolio_vol
+            target_risk = portfolio_vol / len(weights)
+            return np.sum((risk_contrib - target_risk) ** 2)
+
+        # 约束
+        n = len(factor_names)
+        constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+        bounds = [(self.min_weight, self.max_weight) for _ in range(n)]
+
+        # 初始权重
+        x0 = np.ones(n) / n
+
+        # 优化
+        result = minimize(
+            risk_parity_objective,
+            x0,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=constraints,
+        )
+
+        if result.success:
+            weights_dict = {name: w for name, w in zip(factor_names, result.x)}
+            return weights_dict
+        else:
+            # 如果优化失败，返回等权
+            return {name: 1.0 / len(factor_names) for name in factor_names}
+
+    def optimize_mean_variance(
+        self,
+        factor_names: List[str],
+        returns: pd.DataFrame,
+        risk_aversion: float = 1.0,
+    ) -> Dict[str, float]:
+        """
+        均值方差优化
+
+        Args:
+            factor_names: 因子名称列表
+            returns: 因子收益DataFrame
+            risk_aversion: 风险厌恶系数
+
+        Returns:
+            优化后的权重
+        """
+        # 如果没有returns数据，返回等权
+        if returns is None or returns.empty or len(returns) < 2:
+            return {name: 1.0 / len(factor_names) for name in factor_names}
+
+        # 计算均值和协方差
+        mean_returns = returns.mean()
+        cov_matrix = returns.cov()
+
+        n = len(factor_names)
+
+        # 目标函数：最大化 收益 - 风险厌恶 * 方差
+        def objective(weights: np.ndarray) -> float:
+            port_return = np.dot(weights, mean_returns)
+            port_variance = weights @ cov_matrix.values @ weights
+            return -(port_return - risk_aversion * port_variance)
+
+        # 约束
+        constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+        bounds = [(self.min_weight, self.max_weight) for _ in range(n)]
+
+        # 初始权重
+        x0 = np.ones(n) / n
+
+        # 优化
+        result = minimize(
+            objective,
+            x0,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=constraints,
+        )
+
+        if result.success:
+            return {name: w for name, w in zip(factor_names, result.x)}
+        else:
+            return {name: 1.0 / len(factor_names) for name in factor_names}
+
+    def optimize(
+        self,
+        factor_names: List[str],
+        optimization_type: OptimizerType = OptimizerType.IR_WEIGHTED,
+        returns: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, float]:
+        """
+        优化因子权重
+
+        Args:
+            factor_names: 因子名称列表
+            optimization_type: 优化类型
+            returns: 因子收益DataFrame（可选）
+
+        Returns:
+            优化后的权重
+        """
+        if optimization_type == OptimizerType.EQUAL:
+            return {name: 1.0 / len(factor_names) for name in factor_names}
+        elif optimization_type == OptimizerType.IC_WEIGHTED:
+            return self.optimize_by_ic(factor_names)
+        elif optimization_type == OptimizerType.IR_WEIGHTED:
+            return self.optimize_by_ir(factor_names)
+        elif optimization_type == OptimizerType.RISK_PARITY:
+            return self.optimize_risk_parity(factor_names, returns)
+        elif optimization_type == OptimizerType.MEAN_VARIANCE:
+            if returns is None:
+                raise ValueError("均值方差优化需要提供returns参数")
+            return self.optimize_mean_variance(factor_names, returns)
+        else:
+            return {name: 1.0 / len(factor_names) for name in factor_names}
+
+    def _apply_weight_constraints(
+        self,
+        weights: Dict[str, float]
+    ) -> Dict[str, float]:
+        """应用权重约束"""
+        result = {}
+
+        # 应用最小权重约束
+        for name, w in weights.items():
+            result[name] = max(w, self.min_weight)
+
+        # 重新归一化
+        total = sum(result.values())
+        if total > 0:
+            result = {k: v / total for k, v in result.items()}
+
+        # 应用最大权重约束
+        for name in result:
+            if result[name] > self.max_weight:
+                result[name] = self.max_weight
+
+        # 再次归一化
+        total = sum(result.values())
+        if total > 0:
+            result = {k: v / total for k, v in result.items()}
+
+        return result

@@ -33,6 +33,16 @@ export default function ScanPage() {
   const [maxPrice, setMaxPrice] = useState('');
   const [results, setResults] = useState<ScanResult[]>([]);
 
+  // 因子筛选选项
+  const [factorType, setFactorType] = useState('momentum');
+  const [minFactorScore, setMinFactorScore] = useState('60');
+  const [enableFactorFilter, setEnableFactorFilter] = useState(false);
+
+  // 风控过滤选项
+  const [excludeST, setExcludeST] = useState(true);
+  const [excludeSuspended, setExcludeSuspended] = useState(true);
+  const [excludeLimit, setExcludeLimit] = useState(true);
+
   const { loading, execute: runScan } = useApi(monitorApi.scan);
 
   useEffect(() => {
@@ -42,9 +52,22 @@ export default function ScanPage() {
   const handleScan = async () => {
     const params: Record<string, any> = {};
 
+    // 基本筛选
     if (market !== 'all') params.market = market;
     if (minPrice) params.min_price = Number(minPrice);
     if (maxPrice) params.max_price = Number(maxPrice);
+
+    // 因子筛选
+    if (enableFactorFilter) {
+      params.enable_factor_filter = true;
+      params.factor_type = factorType;
+      if (minFactorScore) params.min_factor_score = Number(minFactorScore);
+    }
+
+    // 风控过滤
+    params.exclude_st = excludeST;
+    params.exclude_suspended = excludeSuspended;
+    params.exclude_limit = excludeLimit;
 
     const data = await runScan(params);
     if (data) {
@@ -110,6 +133,80 @@ export default function ScanPage() {
                   {signal}
                 </Button>
               ))}
+            </div>
+          </div>
+
+          {/* Factor Filters */}
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            <div className="flex items-center gap-2 mb-2">
+              <input
+                type="checkbox"
+                id="enableFactorFilter"
+                checked={enableFactorFilter}
+                onChange={(e) => setEnableFactorFilter(e.target.checked)}
+                className="rounded"
+              />
+              <label htmlFor="enableFactorFilter" className="text-sm font-medium text-text-secondary">
+                启用因子筛选
+              </label>
+            </div>
+            {enableFactorFilter && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 ml-6">
+                <Select
+                  label="因子类型"
+                  options={[
+                    { value: 'momentum', label: '动量因子' },
+                    { value: 'value', label: '价值因子' },
+                    { value: 'quality', label: '质量因子' },
+                    { value: 'growth', label: '成长因子' },
+                  ]}
+                  value={factorType}
+                  onChange={(e) => setFactorType(e.target.value)}
+                />
+                <Input
+                  label="最低因子评分"
+                  type="number"
+                  value={minFactorScore}
+                  onChange={(e) => setMinFactorScore(e.target.value)}
+                  placeholder="60"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Risk Control Filters */}
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            <label className="block text-sm font-medium text-text-secondary mb-2">
+              风控过滤
+            </label>
+            <div className="flex flex-wrap gap-4">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={excludeST}
+                  onChange={(e) => setExcludeST(e.target.checked)}
+                  className="rounded"
+                />
+                <span>排除ST股</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={excludeSuspended}
+                  onChange={(e) => setExcludeSuspended(e.target.checked)}
+                  className="rounded"
+                />
+                <span>排除停牌股</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={excludeLimit}
+                  onChange={(e) => setExcludeLimit(e.target.checked)}
+                  className="rounded"
+                />
+                <span>排除涨跌停股</span>
+              </label>
             </div>
           </div>
         </Card>
