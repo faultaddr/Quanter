@@ -80,3 +80,17 @@ qlib_data/
 node_modules/
 .npm/
 .next/
+
+# Playwright
+.playwright-mcp/
+playwright-report/
+test-results/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Models directory (generated)
+models/gbm/*.pkl
+

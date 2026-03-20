@@ -12,10 +12,13 @@ import MACDChart from '@/components/charts/MACDChart';
 import KDJChart from '@/components/charts/KDJChart';
 import RSIChart from '@/components/charts/RSIChart';
 import ChipChart from '@/components/charts/ChipChart';
+import FlowChart from '@/components/charts/FlowChart';
+import RiskAssessment from '@/components/stock/RiskAssessment';
+import BacktestCompare from '@/components/stock/BacktestCompare';
 import QuoteCard from '@/components/stock/QuoteCard';
 import { useAppStore } from '@/stores/useAppStore';
 import { useStockStore } from '@/stores/useStockStore';
-import { stockApi } from '@/lib/api/stock';
+import { stockApi, FlowData, RiskMetrics, BacktestResult } from '@/lib/api/stock';
 import { monitorApi } from '@/lib/api/monitor';
 import { useApi } from '@/hooks/useApi';
 import Loading from '@/components/ui/Loading';
@@ -23,7 +26,7 @@ import { formatNumber, formatAmount, formatPercent, getChangeColorClass } from '
 import type { StockAnalysis, KlineData } from '@/types/stock';
 import type { RealtimeQuote } from '@/types/api';
 
-type TabType = 'overview' | 'kline' | 'indicators' | 'chip' | 'signals';
+type TabType = 'overview' | 'kline' | 'indicators' | 'chip' | 'flow' | 'risk' | 'backtest' | 'signals';
 
 export default function AnalyzePage() {
   const setActivePage = useAppStore((state) => state.setActivePage);
@@ -37,7 +40,16 @@ export default function AnalyzePage() {
   const [days, setDays] = useState(120);
   const [realtimeQuote, setRealtimeQuote] = useState<RealtimeQuote | null>(null);
 
+  // 新增数据状态
+  const [flowData, setFlowData] = useState<FlowData[]>([]);
+  const [riskMetrics, setRiskMetrics] = useState<RiskMetrics | null>(null);
+  const [backtestResults, setBacktestResults] = useState<BacktestResult[]>([]);
+  const [benchmark, setBenchmark] = useState<{ name: string; total_return: number; equity_curve: { date: string; value: number }[] } | null>(null);
+
   const { loading, execute: fetchAnalysis } = useApi(stockApi.getAnalysis);
+  const { loading: loadingFlow, execute: fetchFlow } = useApi(stockApi.getFlow);
+  const { loading: loadingRisk, execute: fetchRisk } = useApi(stockApi.getRisk);
+  const { loading: loadingBacktest, execute: fetchBacktest } = useApi(stockApi.getBacktestCompare);
 
   // 获取实时行情
   const fetchRealtimeQuote = useCallback(async (sym: string) => {
@@ -62,10 +74,34 @@ export default function AnalyzePage() {
     fetchRealtimeQuote(symbol);
     const interval = setInterval(() => {
       fetchRealtimeQuote(symbol);
-    }, 10000); // 10秒刷新一次
+    }, 10000);
 
     return () => clearInterval(interval);
   }, [symbol, fetchRealtimeQuote]);
+
+  // 根据激活的 tab 加载数据
+  useEffect(() => {
+    if (!symbol) return;
+
+    if (activeTab === 'flow' && flowData.length === 0) {
+      fetchFlow(symbol, 30).then((data) => {
+        if (data?.data) setFlowData(data.data);
+      });
+    }
+
+    if (activeTab === 'risk' && !riskMetrics) {
+      fetchRisk(symbol, 250).then((data) => {
+        if (data?.metrics) setRiskMetrics(data.metrics);
+      });
+    }
+
+    if (activeTab === 'backtest' && backtestResults.length === 0) {
+      fetchBacktest(symbol, 250).then((data) => {
+        if (data?.results) setBacktestResults(data.results);
+        if (data?.benchmark) setBenchmark(data.benchmark);
+      });
+    }
+  }, [symbol, activeTab, flowData.length, riskMetrics, backtestResults.length, fetchFlow, fetchRisk, fetchBacktest]);
 
   const handleStockSelect = async (selectedSymbol: string, name: string) => {
     setSymbol(selectedSymbol);
@@ -81,6 +117,12 @@ export default function AnalyzePage() {
     if (result) {
       setAnalysis(result);
     }
+
+    // 重置其他数据
+    setFlowData([]);
+    setRiskMetrics(null);
+    setBacktestResults([]);
+    setBenchmark(null);
   };
 
   const handleDaysChange = async (newDays: number) => {
@@ -128,6 +170,9 @@ export default function AnalyzePage() {
     { key: 'kline', label: 'K线图', icon: '📈' },
     { key: 'indicators', label: '技术指标', icon: '📉' },
     { key: 'chip', label: '筹码分布', icon: '🎯' },
+    { key: 'flow', label: '资金流向', icon: '💰' },
+    { key: 'risk', label: '风险评估', icon: '⚠️' },
+    { key: 'backtest', label: '回测对比', icon: '🔄' },
     { key: 'signals', label: '交易信号', icon: '📡' },
   ];
 
@@ -138,7 +183,7 @@ export default function AnalyzePage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-text-primary">股票分析</h1>
-            <p className="text-text-muted mt-1">查看K线图、技术指标、筹码分布和交易信号</p>
+            <p className="text-text-muted mt-1">全方位股票分析：K线、技术指标、筹码分布、资金流向、风险评估</p>
           </div>
           <div className="flex items-center gap-4">
             <StockSearch onSelect={handleStockSelect} className="w-72" />
@@ -215,13 +260,14 @@ export default function AnalyzePage() {
             </div>
 
             {/* Tabs */}
-            <div className="flex gap-2 border-b border-border-primary pb-2">
+            <div className="flex flex-wrap gap-2 border-b border-border-primary pb-2">
               {tabs.map((tab) => (
                 <Button
                   key={tab.key}
+                  size="sm"
                   variant={activeTab === tab.key ? 'primary' : 'ghost'}
                   onClick={() => setActiveTab(tab.key)}
-                  className="flex items-center gap-2"
+                  className="flex items-center gap-1"
                 >
                   <span>{tab.icon}</span>
                   {tab.label}
@@ -334,6 +380,54 @@ export default function AnalyzePage() {
                   />
                 </div>
               </Card>
+            )}
+
+            {activeTab === 'flow' && (
+              <Card title="资金流向" noPadding>
+                <div className="p-4">
+                  {loadingFlow ? (
+                    <div className="flex justify-center py-10">
+                      <Loading text="加载资金流向数据..." />
+                    </div>
+                  ) : flowData.length > 0 ? (
+                    <FlowChart data={flowData} height={400} />
+                  ) : (
+                    <div className="text-center py-10 text-text-muted">暂无资金流向数据</div>
+                  )}
+                </div>
+              </Card>
+            )}
+
+            {activeTab === 'risk' && (
+              <div className="p-4">
+                {loadingRisk ? (
+                  <div className="flex justify-center py-10">
+                    <Loading text="计算风险评估..." />
+                  </div>
+                ) : riskMetrics ? (
+                  <RiskAssessment metrics={riskMetrics} period="近250日" />
+                ) : (
+                  <Card className="text-center py-10">
+                    <p className="text-text-muted">暂无风险评估数据</p>
+                  </Card>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'backtest' && (
+              <div className="p-4">
+                {loadingBacktest ? (
+                  <div className="flex justify-center py-10">
+                    <Loading text="运行策略回测..." />
+                  </div>
+                ) : backtestResults.length > 0 ? (
+                  <BacktestCompare results={backtestResults} benchmark={benchmark || undefined} />
+                ) : (
+                  <Card className="text-center py-10">
+                    <p className="text-text-muted">暂无回测数据</p>
+                  </Card>
+                )}
+              </div>
             )}
 
             {activeTab === 'signals' && analysis && (
