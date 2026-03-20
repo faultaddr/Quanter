@@ -1,12 +1,13 @@
 """Backtest engine for QuantTool."""
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import pandas as pd
 from datetime import datetime, timedelta
 from ..domain.interfaces.strategy import IStrategy
 from ..domain.models import Trade, Order, Position, Portfolio, Metric, BacktestResult
 from ..core.timeutils import get_next_trading_bar_timestamp
 from ..core.logging import get_logger
+from .ashare_constraints import ASShareConstraints, create_constraints
 
 
 logger = get_logger(__name__)
@@ -15,10 +16,16 @@ logger = get_logger(__name__)
 class BacktestEngine:
     """Event-driven backtest engine with T+1 support for A-shares."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        use_ashare_constraints: bool = True,
+        enable_st_restriction: bool = True,
+        enable_limit_check: bool = True,
+        commission_rate: Optional[float] = None,
+    ):
         """Initialize backtest engine."""
         self.initial_cash = 100000.0
-        self.commission_rate = 0.0003
+        self.commission_rate = commission_rate or 0.0003
         self.min_commission = 5.0
         self.slippage_rate = 0.0001
         self.max_position_size = 0.1
@@ -29,6 +36,20 @@ class BacktestEngine:
         self.enable_trailing_stop = False  # 启用移动止损（默认关闭）
         self.trailing_stop_percent = 0.05  # 移动止损比例（5%）
 
+        # A股约束处理器
+        self.use_ashare_constraints = use_ashare_constraints
+        if use_ashare_constraints:
+            self.ashare_constraints = create_constraints(
+                commission_rate=self.commission_rate,
+                enable_st=enable_st_restriction,
+                enable_limit=enable_limit_check,
+            )
+        else:
+            self.ashare_constraints = None
+
+        # 股票信息缓存（symbol -> {prev_close, is_suspended, stock_name}）
+        self._stock_info_cache: Dict[str, Dict] = {}
+
         # Runtime state
         self.current_portfolio = None
         self.trades = []
@@ -38,6 +59,11 @@ class BacktestEngine:
         # 止损止盈统计
         self.stop_loss_triggers = 0  # 止损触发次数
         self.take_profit_triggers = 0  # 止盈触发次数
+        # 约束检查统计
+        self.limit_up_skips = 0  # 涨停跳过次数
+        self.limit_down_skips = 0  # 跌停跳过次数
+        self.stock_restriction_skips = 0  # 股票限制跳过次数
+        self.suspended_skips = 0  # 停牌跳过次数
 
     def set_initial_cash(self, cash: float):
         """Set initial cash for backtest."""
@@ -66,6 +92,80 @@ class BacktestEngine:
     def set_t_plus_1(self, enabled: bool):
         """Enable or disable T+1 rule for A-shares."""
         self.enable_t_plus_1 = enabled
+
+    def update_stock_info(
+        self,
+        symbol: str,
+        prev_close: float,
+        is_suspended: bool = False,
+        stock_name: Optional[str] = None,
+    ):
+        """
+        更新股票信息缓存
+
+        Args:
+            symbol: 股票代码
+            prev_close: 前收盘价
+            is_suspended: 是否停牌
+            stock_name: 股票名称
+        """
+        self._stock_info_cache[symbol] = {
+            "prev_close": prev_close,
+            "is_suspended": is_suspended,
+            "stock_name": stock_name,
+        }
+
+    def _check_trading_constraints(
+        self,
+        symbol: str,
+        direction: str,
+        current_price: float,
+    ) -> bool:
+        """
+        检查交易约束
+
+        Args:
+            symbol: 股票代码
+            direction: 买卖方向
+            current_price: 当前价格
+
+        Returns:
+            是否可以交易
+        """
+        if not self.use_ashare_constraints or self.ashare_constraints is None:
+            return True
+
+        stock_info = self._stock_info_cache.get(symbol, {})
+        prev_close = stock_info.get("prev_close", current_price)
+        is_suspended = stock_info.get("is_suspended", False)
+        stock_name = stock_info.get("stock_name")
+
+        if direction == "buy":
+            constraint = self.ashare_constraints.can_buy(
+                symbol, current_price, prev_close, is_suspended, stock_name
+            )
+        else:
+            constraint = self.ashare_constraints.can_sell(
+                symbol, current_price, prev_close, is_suspended, stock_name
+            )
+
+        if not constraint.can_trade:
+            logger.info(f"约束检查阻止交易: {symbol} {direction} - {constraint.reason}")
+            # 统计约束导致的跳过
+            if "涨停" in constraint.reason:
+                self.limit_up_skips += 1
+            elif "跌停" in constraint.reason:
+                self.limit_down_skips += 1
+            elif "ST" in constraint.reason:
+                self.stock_restriction_skips += 1
+            elif "停牌" in constraint.reason:
+                self.suspended_skips += 1
+            return False
+
+        # 使用约束计算的动态滑点
+        self.slippage_rate = constraint.slippage_rate
+
+        return True
 
     def _get_next_trading_day(self, current_date: datetime) -> datetime:
         """
@@ -122,6 +222,23 @@ class BacktestEngine:
         self.latest_market_prices = {}  # Track latest market prices for each symbol
         self.stop_loss_triggers = 0  # 止损触发次数
         self.take_profit_triggers = 0  # 止盈触发次数
+        # 约束检查统计
+        self.limit_up_skips = 0
+        self.limit_down_skips = 0
+        self.stock_restriction_skips = 0
+        self.suspended_skips = 0
+
+        # 初始化股票信息缓存（前收盘价）
+        self._stock_info_cache = {}
+        for symbol, df in data.items():
+            if len(df) > 1:
+                # 使用倒数第二行的收盘价作为前收盘价
+                prev_close = df.iloc[-2]["close"]
+                self._stock_info_cache[symbol] = {
+                    "prev_close": prev_close,
+                    "is_suspended": False,
+                    "stock_name": None,
+                }
 
         # Process each timestamp in chronological order
         for timestamp in all_timestamps:
@@ -138,6 +255,10 @@ class BacktestEngine:
 
                     # Update latest market price for this symbol
                     self.latest_market_prices[symbol] = current_bar["close"]
+
+                    # 更新前收盘价（用于约束检查）
+                    if symbol in self._stock_info_cache:
+                        self._stock_info_cache[symbol]["prev_close"] = current_bar["close"]
 
                     # 先检查止损止盈（在处理策略信号之前）
                     if symbol in self.positions:
@@ -394,6 +515,12 @@ class BacktestEngine:
             execution_bar = next_bar_data.iloc[0]
             execution_price = execution_bar["close"]
 
+            # A股约束检查：检查是否可以交易
+            if not self._check_trading_constraints(
+                symbol, signal["direction"], execution_price
+            ):
+                return
+
             # Apply slippage
             if signal["direction"] == "buy":
                 execution_price *= 1 + self.slippage_rate
@@ -549,6 +676,31 @@ class BacktestEngine:
 
         # Calculate other metrics
         metrics, volatility, sharpe_ratio, sortino_ratio, max_drawdown, profit_factor = self.calculate_metrics(self.trades, self.initial_cash, self.equity_curve)
+
+        # 添加A股约束统计到metrics
+        if self.use_ashare_constraints:
+            metrics.extend([
+                Metric(
+                    name="limit_up_skips",
+                    value=float(self.limit_up_skips),
+                    description="因涨停无法买入的次数",
+                ),
+                Metric(
+                    name="limit_down_skips",
+                    value=float(self.limit_down_skips),
+                    description="因跌停无法卖出的次数",
+                ),
+                Metric(
+                    name="stock_restriction_skips",
+                    value=float(self.stock_restriction_skips),
+                    description="因ST限制无法交易的次数",
+                ),
+                Metric(
+                    name="suspended_skips",
+                    value=float(self.suspended_skips),
+                    description="因停牌无法交易的次数",
+                ),
+            ])
 
         # Convert equity curve to list of dicts format
         equity_curve_list = [{"timestamp": item["timestamp"], "portfolio_value": item["portfolio_value"]} for item in self.equity_curve]
