@@ -1,6 +1,17 @@
 # QuantTool - A-Share Quantitative Trading Analysis Platform
 
-QuantTool is a quantitative analysis platform designed specifically for the A-share market, featuring technical analysis, pattern recognition, multi-factor scoring, and intelligent circuit breakers.
+[中文](./README.md) | [繁體中文](./README_ZH_TW.md)
+
+QuantTool is a professional A-share quantitative trading analysis platform, providing technical analysis, factor research, strategy backtesting, and risk control capabilities.
+
+## Key Features
+
+- **Free Data Sources**: Prioritizes free data sources like Ashare, EastMoney, AkShare
+- **Real-time Data**: Supports minute-level real-time market data
+- **Web Interface**: Modern web frontend with full functionality
+- **Strategy Backtesting**: Multiple technical indicator strategies with realistic A-share trading simulation
+- **Factor Research**: IC/IR analysis, factor optimization, factor neutralization
+- **Risk Management**: Industry exposure monitoring, blacklist checking, position shrinking
 
 ## Core Features
 
@@ -24,195 +35,217 @@ Final Score = Trend Score × Position Modifier
 
 ### 2. Candlestick Pattern Recognition System
 
-Supports 20+ classic candlestick patterns:
+Supports recognition of 20+ classic candlestick patterns including hammer lines, engulfing patterns, morning/evening stars.
 
-#### Single Candle Patterns
-- **Bullish**: Hammer, Inverted Hammer, Big White Candle
-- **Bearish**: Hanging Man, Shooting Star, Big Black Candle
-- **Neutral**: Doji, Long Upper Shadow, Long Lower Shadow, Spinning Top
+### 3. Factor Research & Optimization
 
-#### Multi-Candle Patterns
-- **Bullish Combinations**: Bullish Engulfing, Morning Star, Piercing Line
-- **Bearish Combinations**: Bearish Engulfing, Evening Star, Dark Cloud Cover
+| Feature | Description |
+|---------|-------------|
+| Factor Validation | IC/IR analysis, factor predictive ability assessment |
+| Factor Optimization | IR-weighted, IC-weighted, equal weight, risk parity |
+| Factor Neutralization | Industry neutral, market cap neutral |
+| Factor Pipeline | Winsorize, Standardize processing |
 
-#### Pattern Visualization
-- ASCII art candlestick charts (color-coded: 🟢 green bullish / 🔴 red bearish)
-- Pattern illustration diagrams
+### 4. Portfolio Risk Management
 
-### 3. Intelligent Circuit Breaker Mechanism
+| Feature | Description |
+|---------|-------------|
+| Industry Exposure | Single industry position limit (default 20%) |
+| Blacklist Check | Prohibited stock monitoring |
+| Position Shrinking | Dynamic position adjustment based on drawdown |
+| Risk Scoring | Multi-dimensional risk assessment |
 
-Multi-layer risk control system:
+### 5. A-Share Trading Constraints
 
-| Circuit Breaker Rule | Trigger Condition | Effect |
-|---------------------|-------------------|--------|
-| Strong Bearish Breaker | Big black candle + high position | Score drops to ≤25, position 0% |
-| High Position Bearish Breaker | High position + bearish pattern | Score drops to ≤25, position 0% |
-| Bull Trap Breaker | High position + bullish + extreme overbought | Force hold |
-| Extreme Overbought Breaker | 3+ indicators maxed out | Position modifier ≤0.30 |
+| Constraint Type | Description |
+|-----------------|-------------|
+| Limit Up/Down | Cannot buy at limit up, cannot sell at limit down |
+| ST Stock Restriction | Configurable ST stock exclusion |
+| Real Trading Costs | Commission, stamp duty, slippage simulation |
 
-### 4. Built-in Trading Strategies
+### 6. Built-in Trading Strategies
 
 | Strategy Name | Type | Description |
 |---------------|------|-------------|
-| `ma_cross` | Trend Following | Moving average crossover (golden cross buy, death cross sell) |
-| `dual_ma` | Trend Following | Dual MA strategy (customizable periods) |
+| `ma_cross` | Trend Following | Moving average crossover |
+| `dual_ma` | Trend Following | Dual MA strategy |
 | `breakout` | Breakout | Price breaks N-day high/low |
-| `turtle` | Trend Following | Turtle trading strategy (Donchian Channel) |
-| `ma_alignment` | Trend Following | MA bullish alignment strategy |
-| `rsi` | Oscillator | RSI overbought/oversold strategy |
-| `macd` | Trend Indicator | MACD golden/death cross strategy |
-| `kdj` | Oscillator | KDJ golden/death cross strategy |
-| `bollinger` | Oscillator | Bollinger Band mean reversion strategy |
+| `turtle` | Trend Following | Turtle trading strategy |
+| `ma_alignment` | Trend Following | MA bullish alignment |
+| `rsi` | Oscillator | RSI overbought/oversold |
+| `macd` | Trend Indicator | MACD golden/death cross |
+| `kdj` | Oscillator | KDJ golden/death cross |
+| `bollinger` | Oscillator | Bollinger Band mean reversion |
 
-### 5. Four-Section Report Architecture
+## Architecture
 
 ```
-Part 1: Core Conclusion
-├── Action Signal (Buy/Sell/Hold)
-├── Technical Score (0-100)
-├── Confidence Level
-└── Key Reasons
-
-Part 2: Multi-Dimensional Signal Resonance
-├── Trend State (DMI + MA alignment)
-├── Momentum State (MACD + RSI)
-├── Position State (Bollinger + CCI + WR)
-├── Pattern Analysis (Candlestick patterns)
-└── Candlestick Chart Visualization
-
-Part 3: Quantitative Score Breakdown
-├── Final score formula
-├── Factor score details
-├── Position modifier
-└── Red/Black list
-
-Part 4: Trading Execution Plan
-├── Strategy type determination
-├── Entry/Stop-loss/Target levels
-├── Position sizing
-└── Risk warnings
+QuantTool/
+├── quanttool/
+│   ├── core/                    # Core utilities
+│   │   ├── errors.py           # Error handling
+│   │   ├── logging.py          # Logging
+│   │   └── registry.py         # Component registry
+│   │
+│   ├── domain/                  # Domain layer
+│   │   ├── interfaces/         # Interface definitions
+│   │   └── models/             # Data models
+│   │
+│   ├── application/             # Application services
+│   │   ├── analysis_service.py
+│   │   ├── backtest_service.py
+│   │   └── factor_service.py
+│   │
+│   ├── infrastructure/          # Infrastructure layer
+│   │   ├── data_providers/     # Data providers
+│   │   │   ├── ashare_provider.py
+│   │   │   ├── akshare_minute_provider.py
+│   │   │   └── data_fetcher.py
+│   │   └── stores/             # Storage layer
+│   │
+│   ├── strategies/              # Trading strategies
+│   │   ├── ma_cross.py
+│   │   ├── breakout.py
+│   │   └── ...
+│   │
+│   ├── factors/                 # Factor library
+│   │   ├── factor_validator.py
+│   │   ├── factor_pipeline.py
+│   │   ├── factor_registry.py
+│   │   └── neutralizer.py
+│   │
+│   ├── optimization/            # Optimizers
+│   │   └── weight_optimizer.py
+│   │
+│   ├── risk/                    # Risk management
+│   │   └── risk_controller.py
+│   │
+│   ├── backtest/                # Backtest engine
+│   │   ├── engine.py
+│   │   └── ashare_constraints.py
+│   │
+│   ├── web/                     # Web layer
+│   │   ├── api/                # API routes
+│   │   └── frontend/           # Next.js frontend
+│   │
+│   └── cli/                     # CLI tools
+│       └── main.py
+│
+└── tests/                       # Test cases
 ```
 
 ## Installation
 
+### Prerequisites
+
+- Python 3.9+
+- Node.js 18+
+- npm or yarn
+
+### Setup
+
 ```bash
-git clone https://github.com/yourusername/quanttool.git
-cd quanttool
+# Clone project
+git clone https://github.com/faultaddr/Quanter.git
+cd Quanter
+
+# Install Python dependencies
 pip install -e .
+
+# Install frontend dependencies
+cd quanttool/web/frontend
+npm install
 ```
 
 ## Quick Start
 
-### 1. Configure Data Source
+### Start Services
 
 ```bash
-export TUSHARE_TOKEN="your_tushare_token"
+# Start backend service
+uvicorn quanttool.web.app:app --host 0.0.0.0 --port 8000
+
+# Start frontend dev server
+cd quanttool/web/frontend
+npm run dev
 ```
 
-### 2. Analyze Stocks
+Visit http://localhost:3000 to open the web interface.
+
+### Web Interface Pages
+
+| Page | Function |
+|------|----------|
+| `/` | Market overview, market indices |
+| `/analyze` | Stock analysis, K-line, technical indicators |
+| `/backtest` | Strategy backtest, returns comparison |
+| `/factors` | Factor research, IC/IR analysis |
+| `/risk` | Portfolio risk management |
+| `/scan` | Smart stock screening |
+| `/picks` | AI recommended stocks |
+| `/monitor` | Real-time market monitoring |
+| `/model` | ML model training & prediction |
+
+### Using CLI
 
 ```bash
-# Analyze a single stock
-quant analyze 000001.SZ
+# Analyze stock
+quant analyze 600519 --days 360
 
-# Specify period
-quant analyze 000001.SZ --days 360
-
-# Market scan
-quant analyze scan --market all --days 360 --top 10
+# Backtest strategy
+quant backtest run --strategy ma_cross --symbol 600519 \
+  --start 2023-01-01 --end 2024-01-01 --cash 100000
 ```
 
-### 3. Backtest Strategies
-
-```bash
-# MA Cross strategy
-quant backtest run --strategy ma_cross --symbol 000001.SZ \
-  --start 2023-01-01 --end 2023-06-01 --cash 100000
-
-# RSI strategy
-quant backtest run --strategy rsi --symbol 000001.SZ \
-  --start 2023-01-01 --end 2023-06-01
-
-# Turtle strategy
-quant backtest run --strategy turtle --symbol 000001.SZ \
-  --start 2023-01-01 --end 2023-06-01
-```
-
-## Project Architecture
-
-```
-quanttool/
-├── factors/                    # Factor analysis module
-│   ├── scoring_system.py       # Multi-dimensional scoring system
-│   ├── talib_patterns.py       # Candlestick pattern recognition (TA-Lib 61 patterns)
-│   ├── stock_analyzer.py       # Stock comprehensive analysis
-│   └── tech_indicators.py      # Technical indicator calculation
-├── strategies/                 # Trading strategies module
-│   ├── ma_cross.py            # MA crossover strategy
-│   ├── dual_ma.py             # Dual MA strategy
-│   ├── breakout.py            # Breakout strategy
-│   ├── turtle.py              # Turtle strategy
-│   ├── ma_alignment.py        # MA alignment strategy
-│   ├── rsi.py                 # RSI strategy
-│   ├── macd.py                # MACD strategy
-│   ├── kdj.py                 # KDJ strategy
-│   └── bollinger.py           # Bollinger Band strategy
-├── infrastructure/             # Infrastructure layer
-│   ├── data_providers/        # Data providers
-│   └── stores/                # Storage layer
-├── reports/                    # Report generation
-├── cli/                        # Command-line interface
-└── web/                        # Web API
-```
-
-## Python API
+### Using Python API
 
 ```python
 from quanttool.factors.stock_analyzer import StockAnalyzer
-from quanttool.factors.talib_patterns import (
-    TalibPatternRecognizer,
-    draw_candlestick_chart,
-    draw_pattern_illustration
-)
+from quanttool.backtest.engine import BacktestEngine
 
 # Analyze stock
 analyzer = StockAnalyzer()
-report = analyzer.analyze_stock("000001.SZ", days=360)
-print(report)
+report = analyzer.analyze_stock("600519", days=360)
+print(report.summary)
 
-# Recognize candlestick patterns (TA-Lib 61 patterns)
-recognizer = TalibPatternRecognizer()
-patterns = recognizer.recognize_all(df, lookback=5)
-
-# Draw candlestick chart
-chart = draw_candlestick_chart(df, num_candles=10)
-print(chart)
-
-# Get pattern illustration
-illustration = draw_pattern_illustration("晨星")
-print(illustration)
+# Backtest strategy
+engine = BacktestEngine()
+result = engine.run(
+    symbol="600519",
+    strategy="ma_cross",
+    start_date="2023-01-01",
+    end_date="2024-01-01",
+    initial_capital=1000000,
+)
+print(f"Return: {result.total_return:.2%}")
 ```
 
-## Report Example
+## Data Source Priority
 
-```markdown
-## Part 1: Core Conclusion
+1. **Ashare** - Free, no Token required, primary source
+2. **EastMoney** - Free, rich data
+3. **AkShare** - Free, comprehensive APIs
+4. **TuShare** - Requires Token, fallback
 
-### 🟢 Action Signal: Buy
+## Performance
 
-**Technical Score: 70.5 (Good)**
+| Operation | P50 | P95 |
+|-----------|-----|-----|
+| Cache Hit | < 10ms | < 50ms |
+| Data Fetch | < 500ms | < 2s |
+| Full Analysis | < 2s | < 5s |
 
-### 📊 Recent Candlestick Chart
+## Testing
 
-High: ¥63.77
-   │        │    │  ████ │     │
-   │        │    │  ████ │     │
-   │   │    ████ │  ████ ▓▓▓▓  │
-   │   │    ████ │  ████ ▓▓▓▓  │
-Low: ¥60.27
+```bash
+# Run all tests
+pytest tests/ -v
 
-> Legend: 🟢 Green = Bullish candle | 🔴 Red = Bearish candle
+# Run coverage
+pytest tests/ --cov=quanttool --cov-report=html
 ```
+
+Current test coverage: 400+ test cases passing.
 
 ## License
 

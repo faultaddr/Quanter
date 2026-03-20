@@ -1,6 +1,17 @@
-# QuantTool - A股市量化交易分析平台
+# QuantTool - A 股量化交易分析平台
 
-QuantTool 是一個專為A股市場設計的量化分析平台，提供技術分析、形態識別、多因子評分、風險熔斷等核心功能。
+[中文](./README.md) | [English](./README_EN.md)
+
+QuantTool 是一個專業的 A 股量化交易分析平台，提供技術分析、因子研究、策略回測、風險控制等核心功能。
+
+## 核心特性
+
+- **免費資料來源**：優先使用 Ashare、EastMoney、AkShare 等免費資料來源
+- **即時資料**：支援分鐘級即時行情取得
+- **Web 介面**：現代化的 Web 前端，支援全功能操作
+- **策略回測**：支援多種技術指標策略回測，真實模擬 A 股交易規則
+- **因子研究**：IC/IR 分析、因子優化、因子中性化
+- **風控管理**：行業揭露監控、黑名單檢查、倉位收縮
 
 ## 核心功能
 
@@ -12,207 +23,229 @@ QuantTool 是一個專為A股市場設計的量化分析平台，提供技術分
 最終評分 = 趨勢得分 × 位置修正係數
 ```
 
-#### 趨勢因子（權重40%）
+#### 趨勢因子（權重 40%）
 | 因子 | 權重 | 說明 |
 |------|------|------|
-| 趨勢強度 | 20% | MA20乖離率，DMI狀態修正 |
-| 均線斜率 | 20% | MA5斜率判斷趨勢方向 |
-| MACD動量 | 20% | MACD柱狀圖變化 |
-| 資金流向 | 20% | OBV資金流評分 |
+| 趨勢強度 | 20% | MA20 乖離率，DMI 狀態修正 |
+| 均線斜率 | 20% | MA5 斜率判斷趨勢方向 |
+| MACD 動量 | 20% | MACD 柱狀圖變化 |
+| 資金流向 | 20% | OBV 資金流評分 |
 | 成交量 | 10% | 量價配合度 |
-| K線形態 | 10% | 位置敏感評分 |
+| K 線形態 | 10% | 位置敏感評分 |
 
-### 2. K線形態識別系統
+### 2. K 線形態識別系統
 
-支援識別20+種經典K線形態：
+支援識別 20+ 種經典 K 線形態，包括錘子線、吞沒形態、晨星、暮星等。
 
-#### 單根形態
-- **看漲形態**：錘子線、倒錘子、大陽線
-- **看跌形態**：吊頸線、流星線、大陰線
-- **中性形態**：十字星、長上影線、長下影線、紡錘線
+### 3. 因子研究與優化
 
-#### 組合形態
-- **看漲組合**：看漲吞沒、晨星、穿刺線
-- **看跌組合**：看跌吞沒、暮星、烏雲蓋頂
+| 功能 | 說明 |
+|------|------|
+| 因子有效性檢驗 | IC/IR 分析，評估因子預測能力 |
+| 因子權重優化 | IR 加權、IC 加權、等權、風險平價 |
+| 因子中性化 | 行業中性、市值中性 |
+| 因子流水線處理 | Winsorize、Standardize 處理 |
 
-#### 形態視覺化
-- ASCII藝術K線圖（彩色顯示：🟢綠色陽線/🔴紅色陰線）
-- 形態示意圖解說明
+### 4. 組合風控管理
 
-### 3. 智能熔斷機制
+| 功能 | 說明 |
+|------|------|
+| 行業揭露監控 | 單一行業倉位限制（預設 20%） |
+| 黑名單檢查 | 禁止持倉股票監控 |
+| 倉位收縮 | 基於回撤動態調整倉位 |
+| 風險評分 | 多維度風險評估 |
 
-多層風險控制體系：
+### 5. A 股交易約束
 
-| 熔斷規則 | 觸發條件 | 效果 |
-|----------|----------|------|
-| 強力看跌熔斷 | 大陰線+高位 | 評分降至≤25分，倉位0% |
-| 高位看跌熔斷 | 高位+看跌形態 | 評分降至≤25分，倉位0% |
-| 誘多陷阱熔斷 | 高位+看漲+極端超買 | 強制觀望 |
-| 極端超買熔斷 | 3+指標同時爆表 | 位置係數≤0.30 |
+| 約束類型 | 說明 |
+|----------|------|
+| 漲跌停限制 | 漲停不能買入，跌停不能賣出 |
+| ST 股限制 | 可設定排除 ST 股票 |
+| 真實交易成本 | 佣金、印花稅、滑點模擬 |
 
-### 4. 內建交易策略
+### 6. 內建交易策略
 
 | 策略名稱 | 類型 | 說明 |
 |----------|------|------|
-| `ma_cross` | 趨勢追蹤 | 均線交叉策略（金叉買入，死叉賣出） |
-| `dual_ma` | 趨勢追蹤 | 雙均線策略（支援自定義週期） |
-| `breakout` | 突破策略 | 價格突破N日高低點 |
-| `turtle` | 趨勢追蹤 | 海龜交易策略（唐奇安通道） |
+| `ma_cross` | 趨勢追蹤 | 均線交叉策略 |
+| `dual_ma` | 趨勢追蹤 | 雙均線策略 |
+| `breakout` | 突破策略 | 價格突破 N 日高低點 |
+| `turtle` | 趨勢追蹤 | 海龜交易策略 |
 | `ma_alignment` | 趨勢追蹤 | 均線多頭排列策略 |
-| `rsi` | 震盪指標 | RSI超買超賣策略 |
-| `macd` | 趨勢指標 | MACD金叉死叉策略 |
-| `kdj` | 震盪指標 | KDJ金叉死叉策略 |
+| `rsi` | 震盪指標 | RSI 超買超賣策略 |
+| `macd` | 趨勢指標 | MACD 金叉死叉策略 |
+| `kdj` | 震盪指標 | KDJ 金叉死叉策略 |
 | `bollinger` | 震盪指標 | 布林帶回歸策略 |
 
-### 5. 四部分報告架構
+## 技術架構
 
 ```
-第一部分：核心結論區
-├── 操作指令（買入/賣出/觀望）
-├── 技術評分（0-100分）
-├── 置信度評估
-└── 關鍵理由
-
-第二部分：多維信號共振分析
-├── 趨勢狀態（DMI+均線排列）
-├── 動能狀態（MACD+RSI）
-├── 位置狀態（布林帶+CCI+WR）
-├── 形態特權區（K線形態定性）
-└── K線視覺化圖表
-
-第三部分：量化評分與因子拆解
-├── 綜合評分計算公式
-├── 各因子得分明細
-├── 位置修正係數
-└── 紅黑榜
-
-第四部分：交易執行計畫
-├── 策略類型判定
-├── 入場/止損/目標位
-├── 倉位建議
-└── 風險提示
+QuantTool/
+├── quanttool/
+│   ├── core/                    # 核心功能
+│   │   ├── errors.py           # 錯誤處理
+│   │   ├── logging.py          # 日誌
+│   │   └── registry.py         # 組件註冊
+│   │
+│   ├── domain/                  # 領域層
+│   │   ├── interfaces/         # 介面定義
+│   │   └── models/             # 資料模型
+│   │
+│   ├── application/             # 應用服務層
+│   │   ├── analysis_service.py
+│   │   ├── backtest_service.py
+│   │   └── factor_service.py
+│   │
+│   ├── infrastructure/          # 基礎設施層
+│   │   ├── data_providers/     # 資料提供者
+│   │   │   ├── ashare_provider.py
+│   │   │   ├── akshare_minute_provider.py
+│   │   │   └── data_fetcher.py
+│   │   └── stores/             # 儲存層
+│   │
+│   ├── strategies/              # 交易策略
+│   │   ├── ma_cross.py
+│   │   ├── breakout.py
+│   │   └── ...
+│   │
+│   ├── factors/                # 因子庫
+│   │   ├── factor_validator.py
+│   │   ├── factor_pipeline.py
+│   │   ├── factor_registry.py
+│   │   └── neutralizer.py
+│   │
+│   ├── optimization/           # 優化器
+│   │   └── weight_optimizer.py
+│   │
+│   ├── risk/                   # 風險管理
+│   │   └── risk_controller.py
+│   │
+│   ├── backtest/               # 回測引擎
+│   │   ├── engine.py
+│   │   └── ashare_constraints.py
+│   │
+│   ├── web/                    # Web 層
+│   │   ├── api/               # API 路由
+│   │   └── frontend/          # Next.js 前端
+│   │
+│   └── cli/                    # 命令列工具
+│       └── main.py
+│
+└── tests/                      # 測試用例
 ```
 
 ## 安裝
 
+### 前置要求
+
+- Python 3.9+
+- Node.js 18+
+- npm 或 yarn
+
+### 安裝步驟
+
 ```bash
-git clone https://github.com/yourusername/quanttool.git
-cd quanttool
+# 複製專案
+git clone https://github.com/faultaddr/Quanter.git
+cd Quanter
+
+# 安裝 Python 依賴
 pip install -e .
+
+# 安裝前端依賴
+cd quanttool/web/frontend
+npm install
 ```
 
 ## 快速開始
 
-### 1. 配置數據源
+### 啟動服務
 
 ```bash
-export TUSHARE_TOKEN="your_tushare_token"
+# 啟動後端服務
+uvicorn quanttool.web.app:app --host 0.0.0.0 --port 8000
+
+# 啟動前端開發伺服器
+cd quanttool/web/frontend
+npm run dev
 ```
 
-### 2. 分析股票
+訪問 http://localhost:3000 開啟 Web 介面。
+
+### 使用 Web 介面
+
+| 頁面 | 功能 |
+|------|------|
+| `/` | 盤面概覽、市場指數 |
+| `/analyze` | 股票分析、K 線、技術指標 |
+| `/backtest` | 策略回測、收益對比 |
+| `/factors` | 因子研究、IC/IR 分析 |
+| `/risk` | 組合風控、風險檢查 |
+| `/scan` | 智慧選股、條件篩選 |
+| `/picks` | AI 推薦股票 |
+| `/monitor` | 即時行情監控 |
+| `/model` | ML 模型訓練預測 |
+
+### 使用 CLI
 
 ```bash
-# 分析單只股票
-quant analyze 000001.SZ
+# 分析股票
+quant analyze 600519 --days 360
 
-# 指定週期
-quant analyze 000001.SZ --days 360
-
-# 市場掃描
-quant analyze scan --market all --days 360 --top 10
+# 回測策略
+quant backtest run --strategy ma_cross --symbol 600519 \
+  --start 2023-01-01 --end 2024-01-01 --cash 100000
 ```
 
-### 3. 回測策略
-
-```bash
-# 均線交叉策略
-quant backtest run --strategy ma_cross --symbol 000001.SZ \
-  --start 2023-01-01 --end 2023-06-01 --cash 100000
-
-# RSI策略
-quant backtest run --strategy rsi --symbol 000001.SZ \
-  --start 2023-01-01 --end 2023-06-01
-
-# 海龜策略
-quant backtest run --strategy turtle --symbol 000001.SZ \
-  --start 2023-01-01 --end 2023-06-01
-```
-
-## 專案架構
-
-```
-quanttool/
-├── factors/                    # 因子分析模組
-│   ├── scoring_system.py       # 多維度評分系統
-│   ├── talib_patterns.py       # K線形態識別（TA-Lib 61種）
-│   ├── stock_analyzer.py       # 股票綜合分析
-│   └── tech_indicators.py      # 技術指標計算
-├── strategies/                 # 交易策略模組
-│   ├── ma_cross.py            # 均線交叉策略
-│   ├── dual_ma.py             # 雙均線策略
-│   ├── breakout.py            # 突破策略
-│   ├── turtle.py              # 海龜策略
-│   ├── ma_alignment.py        # 均線排列策略
-│   ├── rsi.py                 # RSI策略
-│   ├── macd.py                # MACD策略
-│   ├── kdj.py                 # KDJ策略
-│   └── bollinger.py           # 布林帶策略
-├── infrastructure/             # 基礎設施層
-│   ├── data_providers/        # 數據提供者
-│   └── stores/                # 儲存層
-├── reports/                    # 報告生成
-├── cli/                        # 命令列介面
-└── web/                        # Web API
-```
-
-## Python API
+### 使用 Python API
 
 ```python
 from quanttool.factors.stock_analyzer import StockAnalyzer
-from quanttool.factors.talib_patterns import (
-    TalibPatternRecognizer,
-    draw_candlestick_chart,
-    draw_pattern_illustration
-)
+from quanttool.backtest.engine import BacktestEngine
 
 # 分析股票
 analyzer = StockAnalyzer()
-report = analyzer.analyze_stock("000001.SZ", days=360)
-print(report)
+report = analyzer.analyze_stock("600519", days=360)
+print(report.summary)
 
-# 識別K線形態（TA-Lib 61種形態）
-recognizer = TalibPatternRecognizer()
-patterns = recognizer.recognize_all(df, lookback=5)
-
-# 繪製K線圖
-chart = draw_candlestick_chart(df, num_candles=10)
-print(chart)
-
-# 獲取形態示意圖
-illustration = draw_pattern_illustration("晨星")
-print(illustration)
+# 回測策略
+engine = BacktestEngine()
+result = engine.run(
+    symbol="600519",
+    strategy="ma_cross",
+    start_date="2023-01-01",
+    end_date="2024-01-01",
+    initial_capital=1000000,
+)
+print(f"收益率: {result.total_return:.2%}")
 ```
 
-## 報告範例
+## 資料來源優先順序
 
-```markdown
-## 第一部分：核心結論
+1. **Ashare** - 免費、無需 Token，主力資料來源
+2. **EastMoney** - 免費、資料豐富
+3. **AkShare** - 免費、介面豐富
+4. **TuShare** - 需要 Token，作為備選
 
-### 🟢 操作指令：買入
+## 效能指標
 
-**技術評分：70.5分（良好）**
+| 操作 | P50 | P95 |
+|------|-----|-----|
+| 快取命中 | < 10ms | < 50ms |
+| 資料取得 | < 500ms | < 2s |
+| 完整分析 | < 2s | < 5s |
 
-### 📊 近期K線圖
+## 測試
 
-最高: ¥63.77
-   │        │    │  ████ │     │
-   │        │    │  ████ │     │
-   │   │    ████ │  ████ ▓▓▓▓  │
-   │   │    ████ │  ████ ▓▓▓▓  │
-最低: ¥60.27
+```bash
+# 執行所有測試
+pytest tests/ -v
 
-> 圖例：🟢 綠色 = 陽線（漲） | 🔴 紅色 = 陰線（跌）
+# 執行覆蓋率測試
+pytest tests/ --cov=quanttool --cov-report=html
 ```
+
+目前測試覆蓋：400+ 測試用例通過。
 
 ## 授權條款
 
