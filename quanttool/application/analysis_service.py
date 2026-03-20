@@ -1,12 +1,13 @@
 """Analysis service for QuantTool."""
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import pandas as pd
 import numpy as np
 from datetime import datetime
 from ..domain.interfaces.data_provider import IDataProvider
 from ..core.registry import registry, ComponentType
 from ..core.logging import get_logger
+from ..infrastructure.data_providers.incremental_data_manager import IncrementalDataManager, DataType
 
 
 logger = get_logger(__name__)
@@ -15,9 +16,51 @@ logger = get_logger(__name__)
 class AnalysisService:
     """Service class for financial analysis and reporting."""
 
-    def __init__(self):
-        """Initialize analysis service."""
-        pass
+    def __init__(self, use_incremental: bool = True):
+        """Initialize analysis service.
+
+        Args:
+            use_incremental: 是否使用增量数据获取
+        """
+        self.use_incremental = use_incremental
+        self._incremental_manager: Optional[IncrementalDataManager] = None
+        if use_incremental:
+            try:
+                self._incremental_manager = IncrementalDataManager()
+                logger.info("增量数据管理器初始化成功")
+            except Exception as e:
+                logger.warning(f"增量数据管理器初始化失败: {e}")
+                self._incremental_manager = None
+
+    def _get_data(
+        self,
+        symbol: str,
+        start_date: datetime,
+        end_date: datetime,
+        data_provider_instance,
+        timeframe: str = "1d",
+    ) -> pd.DataFrame:
+        """获取股票数据（优先使用增量数据管理器）"""
+        # 优先使用增量数据管理器
+        if self._incremental_manager:
+            try:
+                df = self._incremental_manager.get_data(
+                    symbol,
+                    start_date,
+                    end_date,
+                    data_provider_instance,
+                    data_type=DataType.STOCK_BAR,
+                )
+                if df is not None and not df.empty:
+                    return df
+            except Exception as e:
+                logger.warning(f"增量获取失败 {symbol}: {e}，回退到直接获取")
+
+        # 回退到直接获取
+        data = data_provider_instance.get_bars(
+            [symbol], start_date, end_date, timeframe
+        )
+        return data.get(symbol, pd.DataFrame())
 
     def analyze_stock(
         self,
@@ -48,15 +91,11 @@ class AnalysisService:
         if hasattr(data_provider_instance, "initialize"):
             data_provider_instance.initialize()
 
-        # Get data
-        data = data_provider_instance.get_bars(
-            [symbol], start_date, end_date, timeframe
-        )
+        # Get data (使用增量数据管理器)
+        bars = self._get_data(symbol, start_date, end_date, data_provider_instance, timeframe)
 
-        if symbol not in data or data[symbol].empty:
+        if bars.empty:
             raise ValueError(f"No data available for symbol {symbol}")
-
-        bars = data[symbol]
 
         # Calculate technical indicators
         analysis_result = self._calculate_technical_indicators(bars)
@@ -310,10 +349,12 @@ class AnalysisService:
         if hasattr(data_provider_instance, "initialize"):
             data_provider_instance.initialize()
 
-        # Get data
-        all_data = data_provider_instance.get_bars(
-            symbols, start_date, end_date, timeframe
-        )
+        # Get data (使用增量数据管理器)
+        all_data = {}
+        for symbol in symbols:
+            df = self._get_data(symbol, start_date, end_date, data_provider_instance, timeframe)
+            if not df.empty:
+                all_data[symbol] = df
 
         # Ensure all required symbols have data
         missing_symbols = [s for s in symbols if s not in all_data or all_data[s].empty]

@@ -1,0 +1,2449 @@
+{
+  "timestamp": "2026-03-05T01:05:40.277076",
+  "target_return": 0.15,
+  "stocks": [
+    "000876",
+    "600515",
+    "688131",
+    "600600",
+    "600460",
+    "688271",
+    "001965"
+  ],
+  "best_config": {
+    "mom_5_strong": 2.664745600331067,
+    "mom_5_medium": 1.0,
+    "mom_10_strong": 7.9943373071619375,
+    "mom_10_medium": 2.0,
+    "mom_20_strong": 6.663380024242886,
+    "mom_20_medium": 5.0,
+    "ma20_slope_threshold": 1.4174407205091617,
+    "vol_ratio_huge": 2.979983639916633,
+    "vol_ratio_large": 1.5,
+    "position_mid_low": 0.27580016704372473,
+    "position_mid_high": 0.5228866069811772,
+    "position_high_risk": 0.8,
+    "breakout_10d_threshold": 0.99,
+    "buy_threshold": 50,
+    "sell_threshold": 30,
+    "stop_loss_pct": 0.05,
+    "take_profit_pct": 0.1
+  },
+  "best_result": {
+    "success": true,
+    "annual_return": 0.0720867238565166,
+    "total_return": 0.09251967184232504,
+    "sharpe_ratio": 0.45824211166812384,
+    "max_drawdown": 0.12472203646739917,
+    "win_rate": 0.047493403693931395,
+    "total_trades": 379
+  },
+  "best_objective": 0.0555499167896294,
+  "reached_target": false,
+  "optimization_history": [
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1
+      },
+      "objective": 0.009417806701853514,
+      "annual_return": 0.045258093092495066,
+      "max_drawdown": 0.13658322193966785,
+      "sharpe_ratio": 0.3245132457919237
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.15
+      },
+      "objective": 0.009417806701853514,
+      "annual_return": 0.045258093092495066,
+      "max_drawdown": 0.13658322193966785,
+      "sharpe_ratio": 0.3245132457919237
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.2
+      },
+      "objective": 0.009417806701853514,
+      "annual_return": 0.045258093092495066,
+      "max_drawdown": 0.13658322193966785,
+      "sharpe_ratio": 0.3245132457919237
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.1
+      },
+      "objective": 0.009417806701853514,
+      "annual_return": 0.045258093092495066,
+      "max_drawdown": 0.13658322193966785,
+      "sharpe_ratio": 0.3245132457919237
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.15
+      },
+      "objective": 0.009417806701853514,
+      "annual_return": 0.045258093092495066,
+      "max_drawdown": 0.13658322193966785,
+      "sharpe_ratio": 0.3245132457919237
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.2
+      },
+      "objective": 0.009417806701853514,
+      "annual_return": 0.045258093092495066,
+      "max_drawdown": 0.13658322193966785,
+      "sharpe_ratio": 0.3245132457919237
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.1
+      },
+      "objective": 0.009417806701853514,
+      "annual_return": 0.045258093092495066,
+      "max_drawdown": 0.13658322193966785,
+      "sharpe_ratio": 0.3245132457919237
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.15
+      },
+      "objective": 0.009417806701853514,
+      "annual_return": 0.045258093092495066,
+      "max_drawdown": 0.13658322193966785,
+      "sharpe_ratio": 0.3245132457919237
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.2
+      },
+      "objective": 0.009417806701853514,
+      "annual_return": 0.045258093092495066,
+      "max_drawdown": 0.13658322193966785,
+      "sharpe_ratio": 0.3245132457919237
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.05504995537160573,
+      "annual_return": -0.0036997893528410986,
+      "max_drawdown": 0.12052059173671453,
+      "sharpe_ratio": 0.08910129849592635
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.05504995537160573,
+      "annual_return": -0.0036997893528410986,
+      "max_drawdown": 0.12052059173671453,
+      "sharpe_ratio": 0.08910129849592635
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.05504995537160573,
+      "annual_return": -0.0036997893528410986,
+      "max_drawdown": 0.12052059173671453,
+      "sharpe_ratio": 0.08910129849592635
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.05504995537160573,
+      "annual_return": -0.0036997893528410986,
+      "max_drawdown": 0.12052059173671453,
+      "sharpe_ratio": 0.08910129849592635
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.05504995537160573,
+      "annual_return": -0.0036997893528410986,
+      "max_drawdown": 0.12052059173671453,
+      "sharpe_ratio": 0.08910129849592635
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.05504995537160573,
+      "annual_return": -0.0036997893528410986,
+      "max_drawdown": 0.12052059173671453,
+      "sharpe_ratio": 0.08910129849592635
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.05504995537160573,
+      "annual_return": -0.0036997893528410986,
+      "max_drawdown": 0.12052059173671453,
+      "sharpe_ratio": 0.08910129849592635
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.05504995537160573,
+      "annual_return": -0.0036997893528410986,
+      "max_drawdown": 0.12052059173671453,
+      "sharpe_ratio": 0.08910129849592635
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.05504995537160573,
+      "annual_return": -0.0036997893528410986,
+      "max_drawdown": 0.12052059173671453,
+      "sharpe_ratio": 0.08910129849592635
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.030876842532007676,
+      "annual_return": 0.012311238075103148,
+      "max_drawdown": 0.1194774165428727,
+      "sharpe_ratio": 0.16550627664325523
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.030876842532007676,
+      "annual_return": 0.012311238075103148,
+      "max_drawdown": 0.1194774165428727,
+      "sharpe_ratio": 0.16550627664325523
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.030876842532007676,
+      "annual_return": 0.012311238075103148,
+      "max_drawdown": 0.1194774165428727,
+      "sharpe_ratio": 0.16550627664325523
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.030876842532007676,
+      "annual_return": 0.012311238075103148,
+      "max_drawdown": 0.1194774165428727,
+      "sharpe_ratio": 0.16550627664325523
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.030876842532007676,
+      "annual_return": 0.012311238075103148,
+      "max_drawdown": 0.1194774165428727,
+      "sharpe_ratio": 0.16550627664325523
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.030876842532007676,
+      "annual_return": 0.012311238075103148,
+      "max_drawdown": 0.1194774165428727,
+      "sharpe_ratio": 0.16550627664325523
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.030876842532007676,
+      "annual_return": 0.012311238075103148,
+      "max_drawdown": 0.1194774165428727,
+      "sharpe_ratio": 0.16550627664325523
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.030876842532007676,
+      "annual_return": 0.012311238075103148,
+      "max_drawdown": 0.1194774165428727,
+      "sharpe_ratio": 0.16550627664325523
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.030876842532007676,
+      "annual_return": 0.012311238075103148,
+      "max_drawdown": 0.1194774165428727,
+      "sharpe_ratio": 0.16550627664325523
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.0009971606783177739,
+      "annual_return": 0.03646476480010663,
+      "max_drawdown": 0.13234815537279848,
+      "sharpe_ratio": 0.28712152207974834
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.0009971606783177739,
+      "annual_return": 0.03646476480010663,
+      "max_drawdown": 0.13234815537279848,
+      "sharpe_ratio": 0.28712152207974834
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.0009971606783177739,
+      "annual_return": 0.03646476480010663,
+      "max_drawdown": 0.13234815537279848,
+      "sharpe_ratio": 0.28712152207974834
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.0009971606783177739,
+      "annual_return": 0.03646476480010663,
+      "max_drawdown": 0.13234815537279848,
+      "sharpe_ratio": 0.28712152207974834
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.0009971606783177739,
+      "annual_return": 0.03646476480010663,
+      "max_drawdown": 0.13234815537279848,
+      "sharpe_ratio": 0.28712152207974834
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.0009971606783177739,
+      "annual_return": 0.03646476480010663,
+      "max_drawdown": 0.13234815537279848,
+      "sharpe_ratio": 0.28712152207974834
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.0009971606783177739,
+      "annual_return": 0.03646476480010663,
+      "max_drawdown": 0.13234815537279848,
+      "sharpe_ratio": 0.28712152207974834
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.0009971606783177739,
+      "annual_return": 0.03646476480010663,
+      "max_drawdown": 0.13234815537279848,
+      "sharpe_ratio": 0.28712152207974834
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.0009971606783177739,
+      "annual_return": 0.03646476480010663,
+      "max_drawdown": 0.13234815537279848,
+      "sharpe_ratio": 0.28712152207974834
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.052512646839298655,
+      "annual_return": -0.0032022529732437244,
+      "max_drawdown": 0.11531121871544771,
+      "sharpe_ratio": 0.08345215491668925
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.052512646839298655,
+      "annual_return": -0.0032022529732437244,
+      "max_drawdown": 0.11531121871544771,
+      "sharpe_ratio": 0.08345215491668925
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.052512646839298655,
+      "annual_return": -0.0032022529732437244,
+      "max_drawdown": 0.11531121871544771,
+      "sharpe_ratio": 0.08345215491668925
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.052512646839298655,
+      "annual_return": -0.0032022529732437244,
+      "max_drawdown": 0.11531121871544771,
+      "sharpe_ratio": 0.08345215491668925
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.052512646839298655,
+      "annual_return": -0.0032022529732437244,
+      "max_drawdown": 0.11531121871544771,
+      "sharpe_ratio": 0.08345215491668925
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.052512646839298655,
+      "annual_return": -0.0032022529732437244,
+      "max_drawdown": 0.11531121871544771,
+      "sharpe_ratio": 0.08345215491668925
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.052512646839298655,
+      "annual_return": -0.0032022529732437244,
+      "max_drawdown": 0.11531121871544771,
+      "sharpe_ratio": 0.08345215491668925
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.052512646839298655,
+      "annual_return": -0.0032022529732437244,
+      "max_drawdown": 0.11531121871544771,
+      "sharpe_ratio": 0.08345215491668925
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.052512646839298655,
+      "annual_return": -0.0032022529732437244,
+      "max_drawdown": 0.11531121871544771,
+      "sharpe_ratio": 0.08345215491668925
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.009109556465047249,
+      "annual_return": 0.024938136864335547,
+      "max_drawdown": 0.11414637919581115,
+      "sharpe_ratio": 0.23025496268522777
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.009109556465047249,
+      "annual_return": 0.024938136864335547,
+      "max_drawdown": 0.11414637919581115,
+      "sharpe_ratio": 0.23025496268522777
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.009109556465047249,
+      "annual_return": 0.024938136864335547,
+      "max_drawdown": 0.11414637919581115,
+      "sharpe_ratio": 0.23025496268522777
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.009109556465047249,
+      "annual_return": 0.024938136864335547,
+      "max_drawdown": 0.11414637919581115,
+      "sharpe_ratio": 0.23025496268522777
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.009109556465047249,
+      "annual_return": 0.024938136864335547,
+      "max_drawdown": 0.11414637919581115,
+      "sharpe_ratio": 0.23025496268522777
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.009109556465047249,
+      "annual_return": 0.024938136864335547,
+      "max_drawdown": 0.11414637919581115,
+      "sharpe_ratio": 0.23025496268522777
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.009109556465047249,
+      "annual_return": 0.024938136864335547,
+      "max_drawdown": 0.11414637919581115,
+      "sharpe_ratio": 0.23025496268522777
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.009109556465047249,
+      "annual_return": 0.024938136864335547,
+      "max_drawdown": 0.11414637919581115,
+      "sharpe_ratio": 0.23025496268522777
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 55,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.009109556465047249,
+      "annual_return": 0.024938136864335547,
+      "max_drawdown": 0.11414637919581115,
+      "sharpe_ratio": 0.23025496268522777
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.047614972701719244,
+      "annual_return": 0.007169470957861357,
+      "max_drawdown": 0.1363815225402998,
+      "sharpe_ratio": 0.13406317610569304
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.047614972701719244,
+      "annual_return": 0.007169470957861357,
+      "max_drawdown": 0.1363815225402998,
+      "sharpe_ratio": 0.13406317610569304
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.047614972701719244,
+      "annual_return": 0.007169470957861357,
+      "max_drawdown": 0.1363815225402998,
+      "sharpe_ratio": 0.13406317610569304
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.047614972701719244,
+      "annual_return": 0.007169470957861357,
+      "max_drawdown": 0.1363815225402998,
+      "sharpe_ratio": 0.13406317610569304
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.047614972701719244,
+      "annual_return": 0.007169470957861357,
+      "max_drawdown": 0.1363815225402998,
+      "sharpe_ratio": 0.13406317610569304
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.047614972701719244,
+      "annual_return": 0.007169470957861357,
+      "max_drawdown": 0.1363815225402998,
+      "sharpe_ratio": 0.13406317610569304
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.047614972701719244,
+      "annual_return": 0.007169470957861357,
+      "max_drawdown": 0.1363815225402998,
+      "sharpe_ratio": 0.13406317610569304
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.047614972701719244,
+      "annual_return": 0.007169470957861357,
+      "max_drawdown": 0.1363815225402998,
+      "sharpe_ratio": 0.13406317610569304
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.047614972701719244,
+      "annual_return": 0.007169470957861357,
+      "max_drawdown": 0.1363815225402998,
+      "sharpe_ratio": 0.13406317610569304
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.09528853445108296,
+      "annual_return": -0.028979916525107785,
+      "max_drawdown": 0.11880212589531146,
+      "sharpe_ratio": -0.0690755497831943
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.09528853445108296,
+      "annual_return": -0.028979916525107785,
+      "max_drawdown": 0.11880212589531146,
+      "sharpe_ratio": -0.0690755497831943
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.09528853445108296,
+      "annual_return": -0.028979916525107785,
+      "max_drawdown": 0.11880212589531146,
+      "sharpe_ratio": -0.0690755497831943
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.09528853445108296,
+      "annual_return": -0.028979916525107785,
+      "max_drawdown": 0.11880212589531146,
+      "sharpe_ratio": -0.0690755497831943
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.09528853445108296,
+      "annual_return": -0.028979916525107785,
+      "max_drawdown": 0.11880212589531146,
+      "sharpe_ratio": -0.0690755497831943
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.09528853445108296,
+      "annual_return": -0.028979916525107785,
+      "max_drawdown": 0.11880212589531146,
+      "sharpe_ratio": -0.0690755497831943
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.09528853445108296,
+      "annual_return": -0.028979916525107785,
+      "max_drawdown": 0.11880212589531146,
+      "sharpe_ratio": -0.0690755497831943
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.09528853445108296,
+      "annual_return": -0.028979916525107785,
+      "max_drawdown": 0.11880212589531146,
+      "sharpe_ratio": -0.0690755497831943
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.09528853445108296,
+      "annual_return": -0.028979916525107785,
+      "max_drawdown": 0.11880212589531146,
+      "sharpe_ratio": -0.0690755497831943
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.05510227566221576,
+      "annual_return": -0.0027104414560533696,
+      "max_drawdown": 0.11939242107820439,
+      "sharpe_ratio": 0.07304376332939803
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.05510227566221576,
+      "annual_return": -0.0027104414560533696,
+      "max_drawdown": 0.11939242107820439,
+      "sharpe_ratio": 0.07304376332939803
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.05510227566221576,
+      "annual_return": -0.0027104414560533696,
+      "max_drawdown": 0.11939242107820439,
+      "sharpe_ratio": 0.07304376332939803
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.05510227566221576,
+      "annual_return": -0.0027104414560533696,
+      "max_drawdown": 0.11939242107820439,
+      "sharpe_ratio": 0.07304376332939803
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.05510227566221576,
+      "annual_return": -0.0027104414560533696,
+      "max_drawdown": 0.11939242107820439,
+      "sharpe_ratio": 0.07304376332939803
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.05510227566221576,
+      "annual_return": -0.0027104414560533696,
+      "max_drawdown": 0.11939242107820439,
+      "sharpe_ratio": 0.07304376332939803
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.05510227566221576,
+      "annual_return": -0.0027104414560533696,
+      "max_drawdown": 0.11939242107820439,
+      "sharpe_ratio": 0.07304376332939803
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.05510227566221576,
+      "annual_return": -0.0027104414560533696,
+      "max_drawdown": 0.11939242107820439,
+      "sharpe_ratio": 0.07304376332939803
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 60,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.05510227566221576,
+      "annual_return": -0.0027104414560533696,
+      "max_drawdown": 0.11939242107820439,
+      "sharpe_ratio": 0.07304376332939803
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.1273367075287799,
+      "annual_return": -0.045235946794659365,
+      "max_drawdown": 0.12653277523246045,
+      "sharpe_ratio": -0.18834373117890313
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.1273367075287799,
+      "annual_return": -0.045235946794659365,
+      "max_drawdown": 0.12653277523246045,
+      "sharpe_ratio": -0.18834373117890313
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.1273367075287799,
+      "annual_return": -0.045235946794659365,
+      "max_drawdown": 0.12653277523246045,
+      "sharpe_ratio": -0.18834373117890313
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.1273367075287799,
+      "annual_return": -0.045235946794659365,
+      "max_drawdown": 0.12653277523246045,
+      "sharpe_ratio": -0.18834373117890313
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.1273367075287799,
+      "annual_return": -0.045235946794659365,
+      "max_drawdown": 0.12653277523246045,
+      "sharpe_ratio": -0.18834373117890313
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.1273367075287799,
+      "annual_return": -0.045235946794659365,
+      "max_drawdown": 0.12653277523246045,
+      "sharpe_ratio": -0.18834373117890313
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.1273367075287799,
+      "annual_return": -0.045235946794659365,
+      "max_drawdown": 0.12653277523246045,
+      "sharpe_ratio": -0.18834373117890313
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.1273367075287799,
+      "annual_return": -0.045235946794659365,
+      "max_drawdown": 0.12653277523246045,
+      "sharpe_ratio": -0.18834373117890313
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.1273367075287799,
+      "annual_return": -0.045235946794659365,
+      "max_drawdown": 0.12653277523246045,
+      "sharpe_ratio": -0.18834373117890313
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.17574010060913514,
+      "annual_return": -0.07164629315834792,
+      "max_drawdown": 0.13610342248434934,
+      "sharpe_ratio": -0.3604209620861254
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.17574010060913514,
+      "annual_return": -0.07164629315834792,
+      "max_drawdown": 0.13610342248434934,
+      "sharpe_ratio": -0.3604209620861254
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.17574010060913514,
+      "annual_return": -0.07164629315834792,
+      "max_drawdown": 0.13610342248434934,
+      "sharpe_ratio": -0.3604209620861254
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.17574010060913514,
+      "annual_return": -0.07164629315834792,
+      "max_drawdown": 0.13610342248434934,
+      "sharpe_ratio": -0.3604209620861254
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.17574010060913514,
+      "annual_return": -0.07164629315834792,
+      "max_drawdown": 0.13610342248434934,
+      "sharpe_ratio": -0.3604209620861254
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.17574010060913514,
+      "annual_return": -0.07164629315834792,
+      "max_drawdown": 0.13610342248434934,
+      "sharpe_ratio": -0.3604209620861254
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.17574010060913514,
+      "annual_return": -0.07164629315834792,
+      "max_drawdown": 0.13610342248434934,
+      "sharpe_ratio": -0.3604209620861254
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.17574010060913514,
+      "annual_return": -0.07164629315834792,
+      "max_drawdown": 0.13610342248434934,
+      "sharpe_ratio": -0.3604209620861254
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 35,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.17574010060913514,
+      "annual_return": -0.07164629315834792,
+      "max_drawdown": 0.13610342248434934,
+      "sharpe_ratio": -0.3604209620861254
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.12968598055443473,
+      "annual_return": -0.04977748990547359,
+      "max_drawdown": 0.11129468833012414,
+      "sharpe_ratio": -0.24261146483899063
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.12968598055443473,
+      "annual_return": -0.04977748990547359,
+      "max_drawdown": 0.11129468833012414,
+      "sharpe_ratio": -0.24261146483899063
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.12968598055443473,
+      "annual_return": -0.04977748990547359,
+      "max_drawdown": 0.11129468833012414,
+      "sharpe_ratio": -0.24261146483899063
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.12968598055443473,
+      "annual_return": -0.04977748990547359,
+      "max_drawdown": 0.11129468833012414,
+      "sharpe_ratio": -0.24261146483899063
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.12968598055443473,
+      "annual_return": -0.04977748990547359,
+      "max_drawdown": 0.11129468833012414,
+      "sharpe_ratio": -0.24261146483899063
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.07,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.12968598055443473,
+      "annual_return": -0.04977748990547359,
+      "max_drawdown": 0.11129468833012414,
+      "sharpe_ratio": -0.24261146483899063
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.1
+      },
+      "objective": -0.12968598055443473,
+      "annual_return": -0.04977748990547359,
+      "max_drawdown": 0.11129468833012414,
+      "sharpe_ratio": -0.24261146483899063
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.15
+      },
+      "objective": -0.12968598055443473,
+      "annual_return": -0.04977748990547359,
+      "max_drawdown": 0.11129468833012414,
+      "sharpe_ratio": -0.24261146483899063
+    },
+    {
+      "phase": "grid_search",
+      "params": {
+        "buy_threshold": 65,
+        "sell_threshold": 40,
+        "stop_loss_pct": 0.1,
+        "take_profit_pct": 0.2
+      },
+      "objective": -0.12968598055443473,
+      "annual_return": -0.04977748990547359,
+      "max_drawdown": 0.11129468833012414,
+      "sharpe_ratio": -0.24261146483899063
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.5553853365232064,
+        "mom_10_strong": 7.773035219425667,
+        "mom_20_strong": 9.405312436332693,
+        "ma20_slope_threshold": 2.2348566310331064,
+        "vol_ratio_huge": 2.158218209983214,
+        "position_mid_low": 0.3093791206170169,
+        "position_mid_high": 0.6389415358110799
+      },
+      "objective": 0.0010327182097895973,
+      "annual_return": 0.03948567372124723,
+      "max_drawdown": 0.13678764569093044,
+      "sharpe_ratio": 0.29940867334007587
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.3851769766951154,
+        "mom_10_strong": 3.446611702869031,
+        "mom_20_strong": 8.12360458903101,
+        "ma20_slope_threshold": 1.9248570453694844,
+        "vol_ratio_huge": 2.062196700587998,
+        "position_mid_low": 0.21211304363500796,
+        "position_mid_high": 0.6631914109339158
+      },
+      "objective": -0.027840926407139855,
+      "annual_return": 0.018463083523191592,
+      "max_drawdown": 0.13173454276161953,
+      "sharpe_ratio": 0.19563261450478314
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.658621513170432,
+        "mom_10_strong": 5.894315427232294,
+        "mom_20_strong": 11.438085278637596,
+        "ma20_slope_threshold": 2.1922162300875447,
+        "vol_ratio_huge": 1.776098848407102,
+        "position_mid_low": 0.31900884432449095,
+        "position_mid_high": 0.6293534931674214
+      },
+      "objective": 0.006192579752040003,
+      "annual_return": 0.043006789903808684,
+      "max_drawdown": 0.1367959613873157,
+      "sharpe_ratio": 0.31583770541889167
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.3847168808895995,
+        "mom_10_strong": 5.172635390159047,
+        "mom_20_strong": 8.645965437050409,
+        "ma20_slope_threshold": 2.4392778311515433,
+        "vol_ratio_huge": 2.9099188528906312,
+        "position_mid_low": 0.22873697294573275,
+        "position_mid_high": 0.5635786569132648
+      },
+      "objective": -0.004611201001406891,
+      "annual_return": 0.03491461987996525,
+      "max_drawdown": 0.1345100329398903,
+      "sharpe_ratio": 0.27729195588573013
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.6497069861742997,
+        "mom_10_strong": 5.257633719253017,
+        "mom_20_strong": 8.006384048548473,
+        "ma20_slope_threshold": 1.9680799562423716,
+        "vol_ratio_huge": 2.6324024418811813,
+        "position_mid_low": 0.21426292104297717,
+        "position_mid_high": 0.6512063704148433
+      },
+      "objective": 0.011725306910520171,
+      "annual_return": 0.044804769996454,
+      "max_drawdown": 0.1312068112733351,
+      "sharpe_ratio": 0.3252394255073373
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.7321366612222144,
+        "mom_10_strong": 5.891890918460323,
+        "mom_20_strong": 10.03467247511271,
+        "ma20_slope_threshold": 3.9842370279389763,
+        "vol_ratio_huge": 2.1685300924187536,
+        "position_mid_low": 0.23266446497584842,
+        "position_mid_high": 0.5790081373555828
+      },
+      "objective": -0.06350258683600378,
+      "annual_return": -0.0038876216172706313,
+      "max_drawdown": 0.135732147480133,
+      "sharpe_ratio": 0.0825110852133334
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 4.423765862891525,
+        "mom_10_strong": 7.64215194910155,
+        "mom_20_strong": 9.24721511281079,
+        "ma20_slope_threshold": 1.693833650529796,
+        "vol_ratio_huge": 1.6992572435025637,
+        "position_mid_low": 0.21974905900641192,
+        "position_mid_high": 0.5906097964429993
+      },
+      "objective": 0.004752877556801892,
+      "annual_return": 0.042413494920951145,
+      "max_drawdown": 0.1385514639030152,
+      "sharpe_ratio": 0.3161511458735835
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.5593244197035854,
+        "mom_10_strong": 5.774360172075369,
+        "mom_20_strong": 11.804301327828496,
+        "ma20_slope_threshold": 3.5310284746735117,
+        "vol_ratio_huge": 2.8741765743221577,
+        "position_mid_low": 0.3785952758004477,
+        "position_mid_high": 0.5109010789707996
+      },
+      "objective": -0.04207828217103213,
+      "annual_return": 0.01011513761764915,
+      "max_drawdown": 0.1355940495123211,
+      "sharpe_ratio": 0.15603604967479273
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 4.178040441974086,
+        "mom_10_strong": 6.822297533627175,
+        "mom_20_strong": 12.657244201409945,
+        "ma20_slope_threshold": 3.37223568631027,
+        "vol_ratio_huge": 2.1996296872744807,
+        "position_mid_low": 0.3884727756574177,
+        "position_mid_high": 0.6464719093292572
+      },
+      "objective": -0.0736371350025847,
+      "annual_return": -0.00837359128086268,
+      "max_drawdown": 0.14277457586217943,
+      "sharpe_ratio": 0.061237442093676826
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.1586716100547325,
+        "mom_10_strong": 4.3693572491387656,
+        "mom_20_strong": 13.75905006785029,
+        "ma20_slope_threshold": 3.119266821800297,
+        "vol_ratio_huge": 2.310125914170321,
+        "position_mid_low": 0.24320865441690723,
+        "position_mid_high": 0.652497395495752
+      },
+      "objective": -0.08916096714887624,
+      "annual_return": -0.02056487620209413,
+      "max_drawdown": 0.13631684260314003,
+      "sharpe_ratio": -0.004376696452120895
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.964619119894794,
+        "mom_10_strong": 5.831998168458804,
+        "mom_20_strong": 14.722776073666328,
+        "ma20_slope_threshold": 3.3009764742904344,
+        "vol_ratio_huge": 2.490440248238003,
+        "position_mid_low": 0.30201181667705435,
+        "position_mid_high": 0.6612230591306191
+      },
+      "objective": -0.080109200299324,
+      "annual_return": -0.014416686121175526,
+      "max_drawdown": 0.13783154567995481,
+      "sharpe_ratio": 0.03223258661828929
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 4.63128961297414,
+        "mom_10_strong": 3.982228839197689,
+        "mom_20_strong": 9.634665696176372,
+        "ma20_slope_threshold": 3.2697921365365503,
+        "vol_ratio_huge": 1.9796162656290495,
+        "position_mid_low": 0.24696809390912536,
+        "position_mid_high": 0.6434016708587171
+      },
+      "objective": -0.09071361156121936,
+      "annual_return": -0.021287203002608224,
+      "max_drawdown": 0.1378692688842633,
+      "sharpe_ratio": -0.004917741164794939
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.098695380854818,
+        "mom_10_strong": 7.597189928450401,
+        "mom_20_strong": 11.492892998972147,
+        "ma20_slope_threshold": 1.6197135661314803,
+        "vol_ratio_huge": 2.1019646396035188,
+        "position_mid_low": 0.2704506992648302,
+        "position_mid_high": 0.5289892031429657
+      },
+      "objective": 0.016651580103640456,
+      "annual_return": 0.04796147586124255,
+      "max_drawdown": 0.13146209156851757,
+      "sharpe_ratio": 0.3442115002665669
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 4.3338438758475055,
+        "mom_10_strong": 3.463528932201533,
+        "mom_20_strong": 12.981189744065828,
+        "ma20_slope_threshold": 3.6478407863001627,
+        "vol_ratio_huge": 1.5809361497115764,
+        "position_mid_low": 0.397424700624762,
+        "position_mid_high": 0.6520055400857472
+      },
+      "objective": -0.060349123673545065,
+      "annual_return": -0.00306477222300483,
+      "max_drawdown": 0.13234411272317398,
+      "sharpe_ratio": 0.08887704911046757
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.5768124557663574,
+        "mom_10_strong": 7.897034211388954,
+        "mom_20_strong": 7.272793635186715,
+        "ma20_slope_threshold": 1.3702040207547144,
+        "vol_ratio_huge": 2.7312035682935716,
+        "position_mid_low": 0.20951852424182016,
+        "position_mid_high": 0.6641192873719554
+      },
+      "objective": -0.010564098474068938,
+      "annual_return": 0.029135468189951386,
+      "max_drawdown": 0.12949563777370404,
+      "sharpe_ratio": 0.25048252222831696
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.9538840125427344,
+        "mom_10_strong": 7.523663783362829,
+        "mom_20_strong": 10.57987978113872,
+        "ma20_slope_threshold": 2.6970686747095987,
+        "vol_ratio_huge": 2.6065973806454714,
+        "position_mid_low": 0.33325550066605736,
+        "position_mid_high": 0.6212865819737231
+      },
+      "objective": -0.005824359580429941,
+      "annual_return": 0.03467939087741878,
+      "max_drawdown": 0.13621346972525764,
+      "sharpe_ratio": 0.27602984404780095
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.601127682766819,
+        "mom_10_strong": 5.543594480024315,
+        "mom_20_strong": 10.245479584833484,
+        "ma20_slope_threshold": 2.4172757730125825,
+        "vol_ratio_huge": 1.7518031100340448,
+        "position_mid_low": 0.27061158488206116,
+        "position_mid_high": 0.5666058321042431
+      },
+      "objective": 0.005678198946073576,
+      "annual_return": 0.04215112881927441,
+      "max_drawdown": 0.13516896213327445,
+      "sharpe_ratio": 0.31111551193436393
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.5473620151850067,
+        "mom_10_strong": 6.267209421963104,
+        "mom_20_strong": 7.759440732698421,
+        "ma20_slope_threshold": 3.8886019283446873,
+        "vol_ratio_huge": 1.5317461151350398,
+        "position_mid_low": 0.23014113476646125,
+        "position_mid_high": 0.5956231292460331
+      },
+      "objective": 0.023143710827506256,
+      "annual_return": 0.05115379574615453,
+      "max_drawdown": 0.12775028576586997,
+      "sharpe_ratio": 0.3586505796428671
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.61256556246906,
+        "mom_10_strong": 6.71821567862434,
+        "mom_20_strong": 8.859565666292292,
+        "ma20_slope_threshold": 3.7344983881865352,
+        "vol_ratio_huge": 2.4774724035195677,
+        "position_mid_low": 0.38808568348711475,
+        "position_mid_high": 0.5441965976199895
+      },
+      "objective": -0.041482930035361215,
+      "annual_return": 0.010477039840010693,
+      "max_drawdown": 0.13541657281673014,
+      "sharpe_ratio": 0.15748316532993165
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.386386313074354,
+        "mom_10_strong": 5.687842775508847,
+        "mom_20_strong": 12.549816162431052,
+        "ma20_slope_threshold": 3.2123777992226628,
+        "vol_ratio_huge": 2.0842978107057,
+        "position_mid_low": 0.2965856787272724,
+        "position_mid_high": 0.6874888643256956
+      },
+      "objective": -0.0754769866796647,
+      "annual_return": -0.011491078877203131,
+      "max_drawdown": 0.13736295373373392,
+      "sharpe_ratio": 0.04695569064405395
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 4.072329459317983,
+        "mom_10_strong": 3.0325427787842663,
+        "mom_20_strong": 8.056975484538304,
+        "ma20_slope_threshold": 1.9717649656004799,
+        "vol_ratio_huge": 2.3721601524678246,
+        "position_mid_low": 0.28282195384754927,
+        "position_mid_high": 0.6397152871973392
+      },
+      "objective": 0.004184371723109148,
+      "annual_return": 0.037780786216516704,
+      "max_drawdown": 0.12551279285963698,
+      "sharpe_ratio": 0.29159981936410934
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.1348703332609054,
+        "mom_10_strong": 7.940097696149419,
+        "mom_20_strong": 14.838060506104494,
+        "ma20_slope_threshold": 2.1772048950019296,
+        "vol_ratio_huge": 2.7377645565381927,
+        "position_mid_low": 0.3075756643051837,
+        "position_mid_high": 0.5009385548185353
+      },
+      "objective": 0.024054718999739703,
+      "annual_return": 0.053827789224124345,
+      "max_drawdown": 0.1334373710534592,
+      "sharpe_ratio": 0.3694561530234496
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.664745600331067,
+        "mom_10_strong": 7.9943373071619375,
+        "mom_20_strong": 6.663380024242886,
+        "ma20_slope_threshold": 1.4174407205091617,
+        "vol_ratio_huge": 2.979983639916633,
+        "position_mid_low": 0.27580016704372473,
+        "position_mid_high": 0.5228866069811772
+      },
+      "objective": 0.0555499167896294,
+      "annual_return": 0.0720867238565166,
+      "max_drawdown": 0.12472203646739917,
+      "sharpe_ratio": 0.45824211166812384
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 4.137557911156646,
+        "mom_10_strong": 4.891926720624592,
+        "mom_20_strong": 9.00153154425871,
+        "ma20_slope_threshold": 1.5562750434093768,
+        "vol_ratio_huge": 2.737939790630492,
+        "position_mid_low": 0.3140417752914934,
+        "position_mid_high": 0.572554705607293
+      },
+      "objective": -0.01782496569954249,
+      "annual_return": 0.028712334517997373,
+      "max_drawdown": 0.14219984178352046,
+      "sharpe_ratio": 0.24562620674220367
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.1877605909273585,
+        "mom_10_strong": 4.2966416328923875,
+        "mom_20_strong": 13.987655317658882,
+        "ma20_slope_threshold": 3.8125502721063045,
+        "vol_ratio_huge": 2.0489723780422024,
+        "position_mid_low": 0.33633359112064226,
+        "position_mid_high": 0.5530746369502403
+      },
+      "objective": -0.05073163393596815,
+      "annual_return": 0.004673504605527956,
+      "max_drawdown": 0.13656634920562932,
+      "sharpe_ratio": 0.12878036061318557
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 4.8206015203124615,
+        "mom_10_strong": 7.573986891826032,
+        "mom_20_strong": 13.25565200748774,
+        "ma20_slope_threshold": 3.742541915477624,
+        "vol_ratio_huge": 1.8719105810693502,
+        "position_mid_low": 0.23604961219640405,
+        "position_mid_high": 0.6649138959099168
+      },
+      "objective": -0.09159672637210997,
+      "annual_return": -0.020467812846056255,
+      "max_drawdown": 0.1408600194609434,
+      "sharpe_ratio": -0.006989037955820189
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 4.0747179446962,
+        "mom_10_strong": 4.381989347049818,
+        "mom_20_strong": 12.135374580978254,
+        "ma20_slope_threshold": 2.2535405546547524,
+        "vol_ratio_huge": 1.8341079178155428,
+        "position_mid_low": 0.3641729859480293,
+        "position_mid_high": 0.611765843117121
+      },
+      "objective": -0.02483489503877244,
+      "annual_return": 0.023710215854072736,
+      "max_drawdown": 0.14141271469919944,
+      "sharpe_ratio": 0.22161246456754546
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.9185157052431125,
+        "mom_10_strong": 4.336980557984322,
+        "mom_20_strong": 7.308032754872524,
+        "ma20_slope_threshold": 3.7640244576305406,
+        "vol_ratio_huge": 2.360621077533829,
+        "position_mid_low": 0.23343308479666536,
+        "position_mid_high": 0.5930100253505253
+      },
+      "objective": -0.008270075058280285,
+      "annual_return": 0.03093726161158239,
+      "max_drawdown": 0.12991861292160067,
+      "sharpe_ratio": 0.2575196979093766
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.624431456238179,
+        "mom_10_strong": 5.010740382542043,
+        "mom_20_strong": 14.075022504985863,
+        "ma20_slope_threshold": 3.5416410199619963,
+        "vol_ratio_huge": 1.8303704199073816,
+        "position_mid_low": 0.3417786683561398,
+        "position_mid_high": 0.6464794068474176
+      },
+      "objective": -0.06987815138971354,
+      "annual_return": -0.007904758164348102,
+      "max_drawdown": 0.13704027091986537,
+      "sharpe_ratio": 0.06546742234567252
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.81488805296798,
+        "mom_10_strong": 6.188768357258444,
+        "mom_20_strong": 8.383620559311105,
+        "ma20_slope_threshold": 1.3533202366637238,
+        "vol_ratio_huge": 1.5634902115503848,
+        "position_mid_low": 0.22561435838629185,
+        "position_mid_high": 0.5637653708786731
+      },
+      "objective": 0.010399463918595565,
+      "annual_return": 0.0444664485332682,
+      "max_drawdown": 0.13299088439757256,
+      "sharpe_ratio": 0.32428457584113646
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 4.756282144456116,
+        "mom_10_strong": 4.643694908166873,
+        "mom_20_strong": 10.44999852603857,
+        "ma20_slope_threshold": 1.295940074068992,
+        "vol_ratio_huge": 1.8437219644248977,
+        "position_mid_low": 0.20910702038402995,
+        "position_mid_high": 0.6324971109315994
+      },
+      "objective": -0.03539279424245173,
+      "annual_return": 0.01578682729586145,
+      "max_drawdown": 0.13881510152401427,
+      "sharpe_ratio": 0.1822792922369396
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.163509446413248,
+        "mom_10_strong": 3.382697102790649,
+        "mom_20_strong": 9.697831296908896,
+        "ma20_slope_threshold": 2.9433248694350005,
+        "vol_ratio_huge": 2.274049786458034,
+        "position_mid_low": 0.39346077945188884,
+        "position_mid_high": 0.6855124175886153
+      },
+      "objective": -0.10550209202127514,
+      "annual_return": -0.0312924228901621,
+      "max_drawdown": 0.13632576874944707,
+      "sharpe_ratio": -0.060467847563895054
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 4.1214275785400405,
+        "mom_10_strong": 3.6266634631943466,
+        "mom_20_strong": 6.9211131371946815,
+        "ma20_slope_threshold": 3.0642427325594888,
+        "vol_ratio_huge": 2.3908520755242746,
+        "position_mid_low": 0.3657693709623763,
+        "position_mid_high": 0.6885854045330199
+      },
+      "objective": -0.03827511095315138,
+      "annual_return": 0.011171368691657468,
+      "max_drawdown": 0.1306834756732184,
+      "sharpe_ratio": 0.1589525819180035
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.344661150933227,
+        "mom_10_strong": 6.131145826744345,
+        "mom_20_strong": 6.169427986185699,
+        "ma20_slope_threshold": 2.6817385812925894,
+        "vol_ratio_huge": 1.9152122612012135,
+        "position_mid_low": 0.22087345030197136,
+        "position_mid_high": 0.6807184123576163
+      },
+      "objective": -0.02107946778997666,
+      "annual_return": 0.021735851267812745,
+      "max_drawdown": 0.12812813497480252,
+      "sharpe_ratio": 0.21248748429611852
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.481912441200546,
+        "mom_10_strong": 5.972366298687232,
+        "mom_20_strong": 7.704040372528943,
+        "ma20_slope_threshold": 3.62603841824338,
+        "vol_ratio_huge": 1.958461749164376,
+        "position_mid_low": 0.3476153775775635,
+        "position_mid_high": 0.6155407179034734
+      },
+      "objective": 0.027677112865575774,
+      "annual_return": 0.05541209752990328,
+      "max_drawdown": 0.13054636349536355,
+      "sharpe_ratio": 0.3753819708335427
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.526872358491495,
+        "mom_10_strong": 5.162085650097282,
+        "mom_20_strong": 8.476855443526693,
+        "ma20_slope_threshold": 1.4566436283519655,
+        "vol_ratio_huge": 1.9317954431884248,
+        "position_mid_low": 0.2912689454446927,
+        "position_mid_high": 0.5675021734885155
+      },
+      "objective": 0.006774386649899822,
+      "annual_return": 0.04346537019036356,
+      "max_drawdown": 0.13659290921380587,
+      "sharpe_ratio": 0.31605471066439195
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 4.358887695477222,
+        "mom_10_strong": 5.788214813533766,
+        "mom_20_strong": 10.896949938340827,
+        "ma20_slope_threshold": 3.310163273176574,
+        "vol_ratio_huge": 2.152504967421404,
+        "position_mid_low": 0.2670183668678413,
+        "position_mid_high": 0.6097409850019825
+      },
+      "objective": -0.07196983003032591,
+      "annual_return": -0.007815483570584258,
+      "max_drawdown": 0.14088057069699436,
+      "sharpe_ratio": 0.06285938888755538
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.8386858517368627,
+        "mom_10_strong": 6.737381946221682,
+        "mom_20_strong": 7.216657849027753,
+        "ma20_slope_threshold": 1.0304031943394916,
+        "vol_ratio_huge": 1.716756142503164,
+        "position_mid_low": 0.2904336750192706,
+        "position_mid_high": 0.558767552579569
+      },
+      "objective": 0.019452744760404254,
+      "annual_return": 0.05068034170435021,
+      "max_drawdown": 0.13288820120607087,
+      "sharpe_ratio": 0.35216503659089476
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.672667086980258,
+        "mom_10_strong": 3.10488813037912,
+        "mom_20_strong": 7.3030421711857025,
+        "ma20_slope_threshold": 1.1880315774163723,
+        "vol_ratio_huge": 1.526710437370753,
+        "position_mid_low": 0.23167569391245205,
+        "position_mid_high": 0.5332987565795084
+      },
+      "objective": -0.006095645323711783,
+      "annual_return": 0.030900850935618784,
+      "max_drawdown": 0.1252829921964242,
+      "sharpe_ratio": 0.25644999838881527
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.8192420413120884,
+        "mom_10_strong": 4.575309266273786,
+        "mom_20_strong": 14.438884979860378,
+        "ma20_slope_threshold": 2.814327889006964,
+        "vol_ratio_huge": 2.517301147023533,
+        "position_mid_low": 0.2700572499100991,
+        "position_mid_high": 0.5136985342793848
+      },
+      "objective": 0.0036223841098875532,
+      "annual_return": 0.04200603925946922,
+      "max_drawdown": 0.13905513764328345,
+      "sharpe_ratio": 0.3114391367206006
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.154106489348387,
+        "mom_10_strong": 6.162486490191149,
+        "mom_20_strong": 14.04417402554651,
+        "ma20_slope_threshold": 3.447107414618699,
+        "vol_ratio_huge": 2.74210981759539,
+        "position_mid_low": 0.28164080014871695,
+        "position_mid_high": 0.6410605722148061
+      },
+      "objective": -0.0745180496595623,
+      "annual_return": -0.010609557849423967,
+      "max_drawdown": 0.13772492460416064,
+      "sharpe_ratio": 0.04953970491941982
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.9313178589299205,
+        "mom_10_strong": 4.106066012490576,
+        "mom_20_strong": 11.481841327375669,
+        "ma20_slope_threshold": 2.1666137097431077,
+        "vol_ratio_huge": 1.869848830966748,
+        "position_mid_low": 0.2643199114400284,
+        "position_mid_high": 0.555997014850401
+      },
+      "objective": -0.0011814758949106295,
+      "annual_return": 0.03745901910073801,
+      "max_drawdown": 0.13502966893393223,
+      "sharpe_ratio": 0.28874339471317473
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.9207106292550455,
+        "mom_10_strong": 6.914244422285715,
+        "mom_20_strong": 9.616285255128275,
+        "ma20_slope_threshold": 3.088758066631537,
+        "vol_ratio_huge": 2.4426281203038185,
+        "position_mid_low": 0.3572608272890475,
+        "position_mid_high": 0.5774050559655242
+      },
+      "objective": -0.058536562384598013,
+      "annual_return": -0.0009505965230393043,
+      "max_drawdown": 0.1352254603695419,
+      "sharpe_ratio": 0.10026764323212234
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.7443457214053373,
+        "mom_10_strong": 6.139699922511609,
+        "mom_20_strong": 8.040006078921161,
+        "ma20_slope_threshold": 2.2733488739351775,
+        "vol_ratio_huge": 1.6779731739778845,
+        "position_mid_low": 0.2167431742332975,
+        "position_mid_high": 0.696469020689691
+      },
+      "objective": -0.04958780432314163,
+      "annual_return": 0.007685803831553706,
+      "max_drawdown": 0.14256881612597214,
+      "sharpe_ratio": 0.1401079990829073
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.2900665767839485,
+        "mom_10_strong": 6.081674529935193,
+        "mom_20_strong": 9.781775578152956,
+        "ma20_slope_threshold": 1.779376198899776,
+        "vol_ratio_huge": 2.2457242713012575,
+        "position_mid_low": 0.2426105616394416,
+        "position_mid_high": 0.6358825025284389
+      },
+      "objective": 0.007544123431796439,
+      "annual_return": 0.04326339013733138,
+      "max_drawdown": 0.13523590875512326,
+      "sharpe_ratio": 0.3189868767202668
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.887579466266029,
+        "mom_10_strong": 5.4795297040274935,
+        "mom_20_strong": 6.551096530173476,
+        "ma20_slope_threshold": 2.80059328322728,
+        "vol_ratio_huge": 2.6861881910175693,
+        "position_mid_low": 0.38778500319426595,
+        "position_mid_high": 0.5799845645663594
+      },
+      "objective": -0.02459354936471768,
+      "annual_return": 0.022049115368096395,
+      "max_drawdown": 0.13598231468913188,
+      "sharpe_ratio": 0.21348492611751868
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 3.5535967760536002,
+        "mom_10_strong": 4.502827455761743,
+        "mom_20_strong": 8.820845599731854,
+        "ma20_slope_threshold": 2.3556774728452057,
+        "vol_ratio_huge": 1.9198273714437524,
+        "position_mid_low": 0.38060317258711124,
+        "position_mid_high": 0.535164213629725
+      },
+      "objective": -0.0007173322117386451,
+      "annual_return": 0.03822437444190707,
+      "max_drawdown": 0.13605020016147262,
+      "sharpe_ratio": 0.2908339342709059
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.4434770039795968,
+        "mom_10_strong": 6.0694261414755815,
+        "mom_20_strong": 8.253433291244942,
+        "ma20_slope_threshold": 3.2058094630211382,
+        "vol_ratio_huge": 2.2306900568403902,
+        "position_mid_low": 0.24456709123244114,
+        "position_mid_high": 0.5246927133690997
+      },
+      "objective": -0.042346374292402116,
+      "annual_return": 0.00787468239670841,
+      "max_drawdown": 0.1292145421715677,
+      "sharpe_ratio": 0.1438621439667332
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 4.8164218511512225,
+        "mom_10_strong": 7.769255140035678,
+        "mom_20_strong": 13.774337917701475,
+        "ma20_slope_threshold": 2.5733948714189316,
+        "vol_ratio_huge": 2.821534861303482,
+        "position_mid_low": 0.25803771848670526,
+        "position_mid_high": 0.669229719963371
+      },
+      "objective": -0.025909094634662372,
+      "annual_return": 0.022770371145043544,
+      "max_drawdown": 0.14086701862410841,
+      "sharpe_ratio": 0.2175404353234829
+    },
+    {
+      "phase": "random_search",
+      "params": {
+        "buy_threshold": 50,
+        "sell_threshold": 30,
+        "stop_loss_pct": 0.05,
+        "take_profit_pct": 0.1,
+        "mom_5_strong": 2.4047851095743162,
+        "mom_10_strong": 3.8105123526746585,
+        "mom_20_strong": 9.637200809148672,
+        "ma20_slope_threshold": 2.9969887718206905,
+        "vol_ratio_huge": 2.3005611613467076,
+        "position_mid_low": 0.26124386947380546,
+        "position_mid_high": 0.5629750219055025
+      },
+      "objective": -0.09853901032935719,
+      "annual_return": -0.0255081887888019,
+      "max_drawdown": 0.14042125317479312,
+      "sharpe_ratio": -0.028201949531587313
+    }
+  ]
+}

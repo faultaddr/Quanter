@@ -1,0 +1,19 @@
+# 代理列表文件
+# 每行一个代理，支持以下格式：
+#
+# 格式1: protocol://user:pass@host:port (完整格式)
+# http://username:password@192.168.1.1:8080
+# socks5://user:pass@proxy.example.com:1080
+#
+# 格式2: host:port (默认使用http协议)
+# 10.0.0.1:3128
+# 172.16.0.1:8888
+#
+# 注释以 # 开头，空行会被忽略
+#
+# 推荐代理服务商：
+# - 快代理: https://www.kuaidaili.com/
+# - 芝麻代理: https://jahttp.zhimacangku.com/
+# - 阿布云: https://www.abuyun.com/
+#
+# 在下方添加你的代理：

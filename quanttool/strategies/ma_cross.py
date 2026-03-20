@@ -54,6 +54,16 @@ class MACrossStrategy(IStrategy):
         if bars is None or len(bars) == 0:
             return pd.DataFrame()
 
+        # 需要足够的数据来计算移动平均线
+        if len(bars) < self.long_window:
+            # 返回空信号数据框
+            result = pd.DataFrame({
+                'timestamp': bars['timestamp'] if 'timestamp' in bars.columns else bars.index,
+                'signal': [0] * len(bars),
+                'position': [0] * len(bars)
+            })
+            return result
+
         df = bars.copy()
 
         # Calculate moving averages

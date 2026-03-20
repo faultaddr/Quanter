@@ -1,0 +1,96 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Cache and data files
+.cache/
+*.parquet
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite3
+
+# ML/AI artifacts
+mlruns/
+catboost_info/
+*.model
+*.pkl
+*.pickle
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local config
+.env
+.env.local
+*.local
+
+# Build artifacts
+*.egg
+quanttool.log
+qlib_data/
+
+# Node.js
+node_modules/
+.npm/
+.next/
+
+# Playwright
+.playwright-mcp/
+playwright-report/
+test-results/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Models directory (generated)
+models/gbm/*.pkl
+

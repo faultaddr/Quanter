@@ -1,0 +1,15 @@
+{
+  "annual_return": 0.22341964147000015,
+  "total_return": 0.22341964147000015,
+  "final_capital": 1223419.6414700001,
+  "total_trades": 771,
+  "win_rate": 0.7470817120622568,
+  "max_drawdown": 0.14559055961374548,
+  "total_signals": 9720,
+  "params": {
+    "score_threshold": 50,
+    "max_positions": 15,
+    "stop_loss_pct": 0.06,
+    "take_profit_pct": 0.12
+  }
+}

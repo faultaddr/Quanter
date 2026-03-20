@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import sys
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 # Add project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
@@ -14,62 +14,412 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 from quanttool.factors.tech_indicators import *
 from quanttool.factors.trading_strategies import TradingStrategies
 from quanttool.factors.scoring_system import ScoringSystem
-from quanttool.factors.candlestick_patterns import (
-    CandlestickPatternRecognizer, get_pattern_assessment, analyze_candlestick_patterns,
+from quanttool.factors.trend_scoring_system import TrendScoringSystem, analyze_trend_quality
+from quanttool.factors.breakout_scoring_system import BreakoutScoringSystem, analyze_breakout_quality
+from quanttool.factors.talib_patterns import (
+    TalibPatternRecognizer, recognize_talib_patterns, format_patterns_report,
     draw_candlestick_chart, draw_pattern_illustration
 )
+from quanttool.factors.screening import StockScreener, ScreenResult
 from quanttool.infrastructure.data_providers.data_fetcher import create_data_fetcher_with_credentials
+from quanttool.strategies.adaptive_threshold import (
+    AdaptiveThresholdManager, MarketRegime, VolatilityLevel,
+    IndexMarketDetector, DualMarketState, CombinedSignal
+)
+from quanttool.risk.risk_controller import RiskController, StopLossType
+
+# 新增：统一分析上下文相关导入
+from quanttool.factors.analysis_context import (
+    AnalysisContext, ActionType, MarketState, PositionAssessment,
+    StopLossConfig, StopLossType as UnifiedStopLossType,
+    UnifiedMarketState, FinalRecommendation, ScoringSystemType,
+    ClassicScore, TrendScore, BreakoutScore
+)
+from quanttool.factors.recommendation_engine import RecommendationEngine
+from quanttool.factors.unified_stop_loss import UnifiedStopLossCalculator
 
 
 class StockAnalyzer:
     """
     A comprehensive stock analyzer that calculates technical indicators and evaluates trading strategies
+
+    数据说明：
+    - qlib 数据为复权价格，价格绝对值与行情软件不同
+    - $close (后复权): 约 6-7 元，适合技术分析和回测
+    - $adjclose (前复权): 约 170 元，与行情软件方向相反
+    - 涨跌幅与实际一致，适合技术分析
+    - 如需与行情软件一致的实时价格，设置 use_realtime_price=True
     """
 
-    def __init__(self):
-        """Initialize the stock analyzer with data fetcher"""
-        self.fetcher = create_data_fetcher_with_credentials()
-        self.fetcher.initialize()
+    def __init__(self, use_cache: bool = True, max_workers: int = 10, use_qlib: bool = True, use_realtime_price: bool = False):
+        """Initialize the stock analyzer with data fetcher
 
-    def get_stock_data(self, symbol: str, days: int = 360) -> pd.DataFrame:
+        Args:
+            use_cache: Whether to use local cache for data (default: True)
+            max_workers: Maximum parallel workers for batch fetching (default: 10)
+            use_qlib: Whether to use qlib data source (default: True, qlib has complete dataset)
+            use_realtime_price: 优先使用实时股价（备用数据源），而非复权价格（默认 False）
+                - False: 优先使用 qlib 复权价格，适合技术分析和回测
+                - True: 优先使用备用数据源获取实时股价，适合展示给用户
         """
-        Fetch stock data for the specified symbol and time period
+        self.use_cache = use_cache
+        self.max_workers = max_workers
+        self.use_qlib = use_qlib
+        self.use_realtime_price = use_realtime_price
+
+        # qlib 数据加载器
+        self._qlib_loader = None
+        if use_qlib:
+            try:
+                from quanttool.infrastructure.data_providers.qlib_data_loader import QlibDataLoader
+                self._qlib_loader = QlibDataLoader()
+                if not use_realtime_price:
+                    print("✅ 使用 qlib 数据源（复权价格）")
+            except Exception as e:
+                print(f"⚠️ qlib 数据加载器初始化失败: {e}")
+                self._qlib_loader = None
+
+        # 传统数据获取器（始终初始化作为备用，用于 ETF 等非股票品种或实时股价）
+        self.fetcher = None
+        try:
+            self.fetcher = create_data_fetcher_with_credentials()
+            self.fetcher.initialize()
+            if use_realtime_price:
+                print("✅ 使用实时数据源（备用数据源优先）")
+            else:
+                print("✅ 备用数据源已就绪")
+        except Exception as e:
+            print(f"⚠️ 备用数据源初始化失败: {e}")
+            self.fetcher = None
+
+        # Cache for batch-fetched data
+        self._batch_data_cache: Dict[str, pd.DataFrame] = {}
+
+    def get_stock_data(
+        self,
+        symbol: str,
+        days: int = 360,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        force_refresh: bool = False,
+        use_adjclose: bool = True
+    ) -> pd.DataFrame:
         """
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
+        Fetch stock data for the specified symbol and time period.
+
+        数据获取策略：
+        1. 优先使用 qlib 数据源（完整数据集）
+        2. 如果 qlib 不可用，回退到传统数据获取器
+
+        Args:
+            symbol: Stock symbol (e.g., '600519.SH' or '600519')
+            days: Number of days of data to fetch (used only if start_date/end_date not provided)
+            start_date: Optional start date (if provided, days parameter is ignored)
+            end_date: Optional end date (if provided, days parameter is ignored)
+            force_refresh: Force refresh cache (default: False)
+            use_adjclose: 是否使用前复权价格，默认 False
+                - False: 使用后复权 ($close)，适合技术分析和回测
+                - True: 使用前复权 ($adjclose)，注意与行情软件方向相反
+
+        Returns:
+            DataFrame with stock data, empty DataFrame if failed
+
+        价格说明:
+            qlib 数据的复权方式与行情软件不同：
+            - $close (后复权): 保持时间序列连续性，适合技术分析
+            - $adjclose (前复权): 历史价格累积调整，数值较大
+            - 两种价格的涨跌幅一致，适合计算收益率
+
+        示例:
+            # 默认：获取适合技术分析的价格
+            df = analyzer.get_stock_data('SH600000', 30)
+            print(df['close'].iloc[-1])  # 约 6.7 元
+
+            # 如需与行情软件一致的实时价格，系统会自动回退到备用数据源
+            df = analyzer.get_stock_data('510300.SH', 30)  # ETF 自动使用备用源
+            print(df['close'].iloc[-1])  # 约 4.6 元（实时价格）
+        """
+        # Use provided dates or calculate from days
+        if end_date is None:
+            end_date = datetime.now()
+        if start_date is None:
+            start_date = end_date - timedelta(days=days)
 
         # Normalize symbol format for different data providers
         normalized_symbol = self._normalize_symbol(symbol)
-        symbols = [normalized_symbol]
 
-        print(f"正在获取 {normalized_symbol} 的数据，时间范围：{start_date.strftime('%Y-%m-%d')} 至 {end_date.strftime('%Y-%m-%d')}...")
+        # Check batch cache first
+        if normalized_symbol in self._batch_data_cache and not force_refresh:
+            return self._batch_data_cache[normalized_symbol].copy()
 
-        data = self.fetcher.get_bars(symbols, start_date, end_date)
+        # 根据 use_realtime_price 决定数据源优先级
+        if self.use_realtime_price:
+            # 优先使用备用数据源（实时股价）
+            if self.fetcher:
+                try:
+                    symbols = [normalized_symbol]
+                    data = self.fetcher.get_bars(symbols, start_date, end_date)
 
-        if normalized_symbol in data and not data[normalized_symbol].empty:
-            df = data[normalized_symbol].copy()
-            print(f"成功获取 {len(df)} 条记录")
-            return df
+                    if normalized_symbol in data and not data[normalized_symbol].empty:
+                        df = data[normalized_symbol].copy()
+                        df['data_source'] = 'realtime'
+                        df['price_type'] = 'realtime'
+                        return df
+                    else:
+                        print(f"⚠️ 备用数据源无 {normalized_symbol} 数据，尝试 qlib")
+                except Exception as e:
+                    print(f"⚠️ 备用数据源获取 {normalized_symbol} 失败: {e}")
+
+            # 回退到 qlib
+            if self._qlib_loader:
+                try:
+                    start_str = start_date.strftime('%Y-%m-%d')
+                    end_str = end_date.strftime('%Y-%m-%d')
+                    df = self._qlib_loader.load_stock_data(
+                        normalized_symbol, start_str, end_str,
+                        use_adjclose=use_adjclose
+                    )
+
+                    if not df.empty:
+                        df = df.reset_index()
+                        if 'date' in df.columns:
+                            df = df.rename(columns={'date': 'trade_date'})
+                        df['data_source'] = 'qlib'
+                        df['price_type'] = 'adjclose' if use_adjclose else 'close'
+                        return df
+                except Exception as e:
+                    print(f"⚠️ qlib 获取 {normalized_symbol} 失败: {e}")
+
         else:
-            print(f"未能获取 {normalized_symbol} 的数据")
-            return pd.DataFrame()
+            # 默认：优先使用 qlib 数据源（复权价格，适合技术分析）
+            if self._qlib_loader:
+                try:
+                    start_str = start_date.strftime('%Y-%m-%d')
+                    end_str = end_date.strftime('%Y-%m-%d')
+                    df = self._qlib_loader.load_stock_data(
+                        normalized_symbol, start_str, end_str,
+                        use_adjclose=use_adjclose
+                    )
+
+                    if not df.empty:
+                        df = df.reset_index()
+                        if 'date' in df.columns:
+                            df = df.rename(columns={'date': 'trade_date'})
+                        df['data_source'] = 'qlib'
+                        df['price_type'] = 'adjclose' if use_adjclose else 'close'
+                        return df
+                    else:
+                        print(f"⚠️ qlib 中无 {normalized_symbol} 数据，尝试备用数据源")
+                except Exception as e:
+                    print(f"⚠️ qlib 获取 {normalized_symbol} 失败: {e}")
+
+            # 回退到备用数据源
+            if self.fetcher:
+                print(f"⏳ 使用备用数据源获取 {normalized_symbol}")
+                symbols = [normalized_symbol]
+                data = self.fetcher.get_bars(symbols, start_date, end_date)
+
+                if normalized_symbol in data and not data[normalized_symbol].empty:
+                    df = data[normalized_symbol].copy()
+                    df['data_source'] = 'realtime'
+                    df['price_type'] = 'realtime'
+                    return df
+
+        # 回退到传统数据获取器（用于 ETF 等非股票品种）
+        if self.fetcher:
+            print(f"⏳ 使用备用数据源获取 {normalized_symbol}")
+            symbols = [normalized_symbol]
+            data = self.fetcher.get_bars(symbols, start_date, end_date)
+
+            if normalized_symbol in data and not data[normalized_symbol].empty:
+                df = data[normalized_symbol].copy()
+                return df
+
+        print(f"⚠️ 无法获取 {normalized_symbol} 的数据")
+        return pd.DataFrame()
+
+    def update_cache_latest(
+        self,
+        symbols: List[str],
+        days_back: int = 30
+    ) -> Dict[str, int]:
+        """
+        批量更新最新数据（用于定时任务）
+
+        使用 qlib 数据源，无需增量更新
+
+        Args:
+            symbols: 股票列表
+            days_back: 回溯天数
+
+        Returns:
+            Dict[symbol, rows_added]: 每只股票新增的行数
+        """
+        # qlib 数据是完整数据集，无需增量更新
+        print(f"📦 使用 qlib 数据源，无需增量更新")
+        return {s: 0 for s in symbols}
+
+    def get_cache_stats(self) -> Dict:
+        """
+        获取缓存统计信息
+
+        Returns:
+            Dict: 包含 symbol_count, total_rows 等
+        """
+        return {
+            "symbol_count": len(self._batch_data_cache),
+            "total_rows": sum(len(df) for df in self._batch_data_cache.values()),
+            "cache_dir": "qlib data"
+        }
+
+    def list_cached_symbols(self) -> List[Dict]:
+        """
+        列出所有已缓存的股票
+
+        Returns:
+            List of Dict: 每个包含 symbol, row_count 等
+        """
+        return [
+            {"symbol": s, "row_count": len(df)}
+            for s, df in self._batch_data_cache.items()
+        ]
+
+    def clear_expired_cache(self) -> int:
+        """
+        清理过期的缓存数据
+
+        Returns:
+            int: 清理的条目数
+        """
+        # qlib 数据是完整数据集，无需清理
+        return 0
+
+    def get_stock_data_batch(
+        self,
+        symbols: List[str],
+        days: int = 360,
+        use_parallel: bool = True,
+        show_progress: bool = True,
+        batch_size: int = 30,
+        max_workers: int = 10
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        Fetch stock data for multiple symbols.
+
+        优先使用 qlib 数据源（完整数据集）
+
+        Args:
+            symbols: List of stock symbols
+            days: Number of days of data to fetch
+            use_parallel: Whether to use parallel fetching (default: True)
+            show_progress: Whether to show progress logs
+            batch_size: Number of stocks per batch (default: 30)
+            max_workers: Number of concurrent workers per batch (default: 10)
+
+        Returns:
+            Dictionary mapping normalized symbols to DataFrames
+        """
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        start_str = start_date.strftime('%Y-%m-%d')
+        end_str = end_date.strftime('%Y-%m-%d')
+
+        # Normalize all symbols
+        normalized_symbols = [self._normalize_symbol(s) for s in symbols]
+
+        # Filter out already cached symbols
+        symbols_to_fetch = [
+            s for s in normalized_symbols
+            if s not in self._batch_data_cache
+        ]
+
+        if not symbols_to_fetch:
+            if show_progress:
+                print(f"✅ 全部 {len(normalized_symbols)} 只股票已在内存缓存中")
+            return {s: self._batch_data_cache[s].copy() for s in normalized_symbols if s in self._batch_data_cache}
+
+        result = {}
+        success_count = 0
+
+        # 优先使用 qlib 批量加载
+        if self._qlib_loader:
+            if show_progress:
+                print(f"正在使用 qlib 批量加载 {len(symbols_to_fetch)} 只股票数据...")
+
+            try:
+                qlib_data = self._qlib_loader.load_stocks_batch(symbols_to_fetch, start_str, end_str)
+
+                for symbol, df in qlib_data.items():
+                    if not df.empty:
+                        # 重置索引并重命名
+                        df = df.reset_index()
+                        if 'date' in df.columns:
+                            df = df.rename(columns={'date': 'trade_date'})
+                        self._batch_data_cache[symbol] = df
+                        result[symbol] = df.copy()
+                        success_count += 1
+
+                if show_progress:
+                    print(f"✅ qlib 加载完成: {success_count}/{len(symbols_to_fetch)} 只股票")
+
+            except Exception as e:
+                print(f"⚠️ qlib 批量加载失败: {e}")
+
+        # 返回所有请求的数据
+        for symbol in normalized_symbols:
+            if symbol in self._batch_data_cache:
+                result[symbol] = self._batch_data_cache[symbol].copy()
+
+        return result
+
+    def clear_batch_cache(self):
+        """Clear the in-memory batch data cache."""
+        self._batch_data_cache.clear()
+
+    def preload_data_for_scan(
+        self,
+        stock_list: List[Dict[str, str]],
+        days: int = 360,
+        batch_size: int = 30,
+        max_workers: int = 10
+    ) -> int:
+        """
+        Preload all stock data for a scan operation.
+
+        批次并发预加载数据：
+        - 每批 batch_size 只股票
+        - 每批内 max_workers 个线程并发获取
+        - 数据来源：内存缓存 -> 磁盘缓存 -> 网络
+
+        Args:
+            stock_list: List of stock info dicts with 'code' key
+            days: Number of days of data to fetch
+            batch_size: Number of stocks per batch (default: 30)
+            max_workers: Number of concurrent workers per batch (default: 10)
+
+        Returns:
+            Number of stocks successfully loaded
+        """
+        symbols = [
+            stock['code'] if isinstance(stock, dict) else stock
+            for stock in stock_list
+        ]
+
+        data = self.get_stock_data_batch(
+            symbols, days,
+            use_parallel=True,
+            batch_size=batch_size,
+            max_workers=max_workers
+        )
+        return len(data)
 
     def _normalize_symbol(self, symbol: str) -> str:
         """
-        Normalize the symbol format for different data providers
+        Normalize the symbol format for qlib data provider
+        Returns qlib format: SH600000, SZ000001
         """
-        symbol = symbol.upper().strip()
-
-        # Handle various input formats
-        if symbol.endswith('.SH') or symbol.endswith('.SZ'):
-            return symbol
-        elif len(symbol) == 6:
-            if symbol.startswith(('5', '6', '9')):
-                return f"{symbol}.SH"  # Shanghai
-            else:
-                return f"{symbol}.SZ"  # Shenzhen
-        else:
-            return symbol
+        from quanttool.infrastructure.data_providers.qlib_data_loader import QlibDataLoader
+        return QlibDataLoader.normalize_instrument(symbol)
 
     def calculate_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -79,7 +429,16 @@ class StockAnalyzer:
             print("Error: DataFrame is empty or missing 'close' column")
             return df
 
-        df = df.sort_values('timestamp').reset_index(drop=True)
+        # 检测日期列名（可能是 trade_date, timestamp, 或 date）
+        date_col = None
+        for col in ['trade_date', 'timestamp', 'date']:
+            if col in df.columns:
+                date_col = col
+                break
+        if date_col:
+            df = df.sort_values(date_col).reset_index(drop=True)
+        else:
+            df = df.reset_index(drop=True)
 
         # Ensure all required columns exist
         required_cols = ['open', 'high', 'low', 'close', 'volume']
@@ -179,6 +538,12 @@ class StockAnalyzer:
 
         # OBV 能量潮
         df['obv'] = OBV(close, volume)
+        df['obv_ma'] = MA(df['obv'].values, 20)  # OBV 20日均线
+
+        # 成交量均线
+        df['vol_ma5'] = MA(volume, 5)
+        df['vol_ma10'] = MA(volume, 10)
+        df['vol_ma20'] = MA(volume, 20)
 
         # MFI 资金流量指标
         df['mfi'] = MFI(close, high, low, volume)
@@ -225,11 +590,36 @@ class StockAnalyzer:
         print("正在计算多维度评分（百分制）...")
         scoring = ScoringSystem(stop_loss_pct=0.05)
 
+        # 新增：双重市场状态检测
+        print("正在检测双重市场状态...")
+        market_detector = IndexMarketDetector(default_index='hs300')
+        dual_market_state = market_detector.get_dual_market_state(df)
+        results['dual_market_state'] = {
+            'index_regime': dual_market_state.index_regime.value,
+            'stock_regime': dual_market_state.stock_regime.value,
+            'combined_signal': dual_market_state.combined_signal.value,
+            'confidence': dual_market_state.confidence,
+            'index_code': dual_market_state.index_code,
+            'index_name': dual_market_state.index_name,
+        }
+
+        # 根据综合信号调整评分系统的市场状态
+        if dual_market_state.combined_signal == CombinedSignal.CASH:
+            # 空仓信号，设置熊市权重
+            scoring.set_market_regime('bear')
+        elif dual_market_state.combined_signal == CombinedSignal.STRONG_BUY:
+            # 强买入信号，设置牛市权重
+            scoring.set_market_regime('bull')
+        elif dual_market_state.combined_signal == CombinedSignal.WAIT:
+            # 观望信号，设置震荡市权重
+            scoring.set_market_regime('sideway')
+
         # 获取日期信息
-        latest_date = df['timestamp'].iloc[-1].strftime('%Y-%m-%d') if 'timestamp' in df.columns else ''
+        date_col = 'trade_date' if 'trade_date' in df.columns else ('timestamp' if 'timestamp' in df.columns else 'date')
+        latest_date = df[date_col].iloc[-1].strftime('%Y-%m-%d') if date_col in df.columns else ''
 
         # K线形态分析（已集成到评分系统，此处仅用于报告展示）
-        candlestick_result = analyze_candlestick_patterns(df, lookback=5)
+        candlestick_result = recognize_talib_patterns(df, lookback=5)
 
         # 计算股价位置（用于形态定性判断）
         latest = df.iloc[-1]
@@ -252,7 +642,7 @@ class StockAnalyzer:
         if boll_upper != boll_lower:
             boll_pctb = (close - boll_lower) / (boll_upper - boll_lower)
 
-        # 评分计算（K线形态已集成到评分系统，参与趋势评分）
+        # 评分计算（纯因子评分，不含K线形态）
         results['scoring'] = scoring.calculate_all_scores(
             df=df,
             stock_code=symbol,
@@ -261,7 +651,33 @@ class StockAnalyzer:
             open_T1=None
         )
 
-        # 保存形态和位置信息供报告使用（评分详情在 factors_raw.candlestick_detail 中）
+        # 新增：应用筛选层（K线形态筛选）
+        screener = StockScreener()
+        screening_result = screener.screen(df, results['scoring'])
+        results['screening'] = {
+            'result': screening_result.result.value,
+            'score_modifier': screening_result.score_modifier,
+            'reasons': screening_result.reasons,
+            'details': screening_result.details,
+        }
+
+        # 根据筛选结果调整推荐
+        if screening_result.result == ScreenResult.FILTER:
+            results['scoring']['screening_action'] = 'reject'
+            results['scoring']['screening_reason'] = '; '.join(screening_result.reasons)
+        elif screening_result.result == ScreenResult.WARNING:
+            results['scoring']['screening_action'] = 'caution'
+            results['scoring']['screening_reason'] = '; '.join(screening_result.reasons)
+            # 应用评分修正
+            if 'score' in results['scoring']:
+                original_score = results['scoring']['score']
+                results['scoring']['original_score'] = original_score
+                results['scoring']['score'] = original_score * screening_result.score_modifier
+        else:
+            results['scoring']['screening_action'] = 'pass'
+            results['scoring']['screening_reason'] = '; '.join(screening_result.reasons) if screening_result.reasons else '通过筛选'
+
+        # 保存形态和位置信息供报告使用
         results['candlestick_patterns'] = candlestick_result
         results['position_info'] = {
             'position_ratio': position_ratio,
@@ -271,9 +687,847 @@ class StockAnalyzer:
             'is_high': position_ratio > 0.70 or bias20 > 0.05 or boll_pctb > 0.8,
         }
 
+        # 新增：趋势评分系统（纯趋势强度评分）
+        print("正在计算趋势评分...")
+        try:
+            trend_system = TrendScoringSystem()
+            trend_result = trend_system.calculate_score(df)
+            results['trend_scoring'] = {
+                'final_score': trend_result.final_score,
+                'trend_total_score': trend_result.trend_total_score,
+                'timing_coefficient': trend_result.timing_coefficient,
+                'ma_structure_score': trend_result.ma_structure_score,
+                'price_momentum_score': trend_result.price_momentum_score,
+                'volume_score': trend_result.volume_score,
+                'relative_strength_score': trend_result.relative_strength_score,
+                'timing_type': trend_result.timing_type,
+                'passed_hard_filter': trend_result.passed_hard_filter,
+                'hard_filter_reason': trend_result.hard_filter_reason,
+                'details': trend_result.details,
+            }
+            print(f"趋势评分: {trend_result.final_score:.1f}分 (时机系数: {trend_result.timing_coefficient:.2f})")
+        except Exception as e:
+            print(f"趋势评分计算失败: {e}")
+            results['trend_scoring'] = None
+
+        # 新增：市场状态检测和自适应阈值
+        try:
+            threshold_manager = AdaptiveThresholdManager()
+            adaptive_config = threshold_manager.get_adaptive_thresholds(df)
+            results['market_regime'] = {
+                'regime': adaptive_config.market_regime.value,
+                'volatility_level': adaptive_config.volatility_level.value,
+                'buy_threshold': adaptive_config.buy_threshold,
+                'sell_threshold': adaptive_config.sell_threshold,
+                'confidence': adaptive_config.confidence,
+            }
+            print(f"市场状态: {adaptive_config.market_regime.value} | 波动率: {adaptive_config.volatility_level.value}")
+        except Exception as e:
+            print(f"市场状态检测失败: {e}")
+            results['market_regime'] = None
+
+        # 新增：风险控制建议
+        try:
+            risk_controller = RiskController()
+            signal_strength = results['scoring'].get('score', 50) / 100
+            stop_loss_result = risk_controller.calculate_dynamic_stop_loss(
+                df, close, signal_strength=signal_strength
+            )
+            results['risk_control'] = {
+                'stop_price': stop_loss_result.stop_price,
+                'stop_type': stop_loss_result.stop_type.value,
+                'distance_percent': stop_loss_result.distance_percent,
+                'confidence': stop_loss_result.confidence,
+            }
+            print(f"风险控制: 建议止损位 ¥{stop_loss_result.stop_price:.2f} ({stop_loss_result.stop_type.value})")
+        except Exception as e:
+            print(f"风险控制计算失败: {e}")
+            results['risk_control'] = None
+
         print(f"评分计算完成。综合评分: {results['scoring'].get('score', 0):.1f}分")
+        print(f"筛选结果: {results['scoring'].get('screening_action', 'unknown')} - {results['scoring'].get('screening_reason', '')}")
         print("交易策略运行完成。")
         return results
+
+    def build_analysis_context(
+        self,
+        df: pd.DataFrame,
+        symbol: str,
+        primary_system: ScoringSystemType = ScoringSystemType.AUTO
+    ) -> AnalysisContext:
+        """
+        构建统一分析上下文
+
+        整合三套评分系统、市场状态、位置评估、止损计算，
+        生成最终的推荐结果。
+
+        Args:
+            df: 股票数据（已计算技术指标）
+            symbol: 股票代码
+            primary_system: 主评分系统类型
+
+        Returns:
+            AnalysisContext: 统一分析上下文
+        """
+        if df.empty:
+            return AnalysisContext(
+                symbol=symbol,
+                current_price=0,
+                analysis_date=datetime.now()
+            )
+
+        latest = df.iloc[-1]
+        close = latest.get('close', 0)
+
+        # 初始化上下文
+        context = AnalysisContext(
+            symbol=symbol,
+            current_price=close,
+            analysis_date=datetime.now()
+        )
+
+        # 1. 运行三套评分系统
+        print("正在计算三套评分系统...")
+
+        # 经典评分
+        context.classic_score = self._run_classic_scoring(df, symbol)
+
+        # 趋势评分
+        context.trend_score = self._run_trend_scoring(df)
+
+        # 突破评分
+        context.breakout_score = self._run_breakout_scoring(df)
+
+        # 2. 构建统一市场状态
+        context.market_state = self._build_unified_market_state(df)
+
+        # 3. 构建位置评估
+        context.position_assessment = self._build_position_assessment(df, context.classic_score)
+
+        # 4. 计算统一止损
+        stop_loss_calculator = UnifiedStopLossCalculator()
+        context.stop_loss_config = stop_loss_calculator.calculate(df, context)
+
+        # 5. 存储K线形态
+        candlestick_result = recognize_talib_patterns(df, lookback=5)
+        context.candlestick_patterns = candlestick_result.get('patterns', [])
+
+        # 6. 存储筛选结果
+        context.screening_result = {
+            'result': 'pass',
+            'reasons': [],
+        }
+
+        # 7. 存储最后一行数据
+        context.df_last_row = latest.to_dict() if hasattr(latest, 'to_dict') else dict(latest)
+
+        # 8. 生成最终推荐（单点决策）
+        recommendation_engine = RecommendationEngine()
+        context.final_recommendation = recommendation_engine.generate_recommendation(context)
+
+        print(f"评分完成: 经典={context.classic_score.score:.1f}分, "
+              f"趋势={context.trend_score.final_score:.1f}分, "
+              f"突破={context.breakout_score.final_score:.1f}分")
+        print(f"最终推荐: {context.final_recommendation.get_action_display()} "
+              f"(主系统: {context.final_recommendation.primary_system.value})")
+
+        return context
+
+    def _run_classic_scoring(self, df: pd.DataFrame, symbol: str) -> ClassicScore:
+        """运行经典评分系统"""
+        scoring = ScoringSystem(stop_loss_pct=0.05)
+
+        date_col = 'trade_date' if 'trade_date' in df.columns else ('timestamp' if 'timestamp' in df.columns else 'date')
+        latest_date = df[date_col].iloc[-1].strftime('%Y-%m-%d') if date_col in df.columns else ''
+
+        try:
+            result = scoring.calculate_all_scores(
+                df=df,
+                stock_code=symbol,
+                trade_date_T=latest_date,
+                trade_date_T1=None,
+                open_T1=None
+            )
+
+            return ClassicScore(
+                score=result.get('score', 50),
+                trend_score=result.get('trend_score', 50),
+                position_modifier=result.get('position_modifier', 1.0),
+                score_grade=result.get('score_grade', '一般'),
+                factors_score=result.get('factors_score', {}),
+                factors_raw=result.get('factors_raw', {}),
+                execution=result.get('execution', {}),
+                warnings=result.get('warnings', []),
+            )
+        except Exception as e:
+            print(f"经典评分计算失败: {e}")
+            return ClassicScore()
+
+    def _run_trend_scoring(self, df: pd.DataFrame) -> TrendScore:
+        """运行趋势评分系统"""
+        try:
+            system = TrendScoringSystem()
+            result = system.calculate_score(df)
+
+            return TrendScore(
+                final_score=result.final_score,
+                trend_total_score=result.trend_total_score,
+                timing_coefficient=result.timing_coefficient,
+                timing_type=result.timing_type,
+                passed_hard_filter=result.passed_hard_filter,
+                hard_filter_reason=result.hard_filter_reason,
+                ma_structure_score=result.ma_structure_score,
+                price_momentum_score=result.price_momentum_score,
+                volume_score=result.volume_score,
+                relative_strength_score=result.relative_strength_score,
+                details=result.details,
+            )
+        except Exception as e:
+            print(f"趋势评分计算失败: {e}")
+            return TrendScore()
+
+    def _run_breakout_scoring(self, df: pd.DataFrame) -> BreakoutScore:
+        """运行突破评分系统"""
+        try:
+            system = BreakoutScoringSystem()
+            result = system.calculate_score(df)
+
+            return BreakoutScore(
+                final_score=result.final_score,
+                is_low_position=result.is_low_position,
+                is_consolidating=result.is_consolidating,
+                has_breakout=result.has_breakout,
+                passed_filter=result.passed_filter,
+                filter_reason=result.filter_reason,
+                quality_score=result.quality_score,
+                growth_score=result.growth_score,
+                value_score=result.value_score,
+                momentum_score=result.momentum_score,
+                flow_score=result.flow_score,
+                risk_score=result.risk_score,
+                consolidation_days=result.consolidation_days,
+                price_range=result.price_range,
+                volume_ratio=result.volume_ratio,
+                breakout_strength=result.breakout_strength,
+                stop_loss_price=result.stop_loss_price,
+                take_profit_price=result.take_profit_price,
+                details=result.details,
+            )
+        except Exception as e:
+            print(f"突破评分计算失败: {e}")
+            return BreakoutScore()
+
+    def _build_unified_market_state(self, df: pd.DataFrame) -> UnifiedMarketState:
+        """构建统一市场状态"""
+        try:
+            market_detector = IndexMarketDetector(default_index='hs300')
+            dual_state = market_detector.get_dual_market_state(df)
+
+            # 映射市场状态
+            regime_map = {
+                MarketRegime.BULL: MarketState.BULL,
+                MarketRegime.BEAR: MarketState.BEAR,
+                MarketRegime.SIDEWAY: MarketState.SIDEWAY,
+                MarketRegime.VOLATILE: MarketState.VOLATILE,
+            }
+
+            return UnifiedMarketState(
+                index_regime=regime_map.get(dual_state.index_regime, MarketState.SIDEWAY),
+                stock_regime=regime_map.get(dual_state.stock_regime, MarketState.SIDEWAY),
+                combined_regime=regime_map.get(dual_state.index_regime, MarketState.SIDEWAY),
+                confidence=dual_state.confidence,
+                volatility_level='normal',
+                combined_signal=dual_state.combined_signal.value,
+                index_code=dual_state.index_code,
+                index_name=dual_state.index_name,
+            )
+        except Exception as e:
+            print(f"市场状态检测失败: {e}")
+            return UnifiedMarketState()
+
+    def _build_position_assessment(
+        self,
+        df: pd.DataFrame,
+        classic_score: ClassicScore
+    ) -> PositionAssessment:
+        """构建位置评估"""
+        if df.empty:
+            return PositionAssessment()
+
+        latest = df.iloc[-1]
+        close = latest.get('close', 0)
+        ma20 = latest.get('ma_20', close)
+        ma50 = latest.get('ma_50', close)
+        ma200 = latest.get('ma_200', 0)
+
+        # 计算位置修正系数（从经典评分获取）
+        position_modifier = classic_score.position_modifier
+
+        # 技术指标状态
+        wr = latest.get('wr', 50)
+        cci = latest.get('cci', 0)
+        rsi = latest.get('rsi_24', 50)
+        boll_upper = latest.get('boll_upper', close)
+        boll_lower = latest.get('boll_lower', close)
+
+        boll_pctb = (close - boll_lower) / (boll_upper - boll_lower) if boll_upper > boll_lower else 0.5
+
+        # 判断超买超卖
+        is_extreme_overbought = wr < 10 or cci > 200 or rsi > 80 or boll_pctb > 0.95
+        is_extreme_oversold = wr > 90 or cci < -200 or rsi < 20 or boll_pctb < 0.05
+        is_overbought = (wr < 20 or cci > 100 or rsi > 70 or boll_pctb > 0.85) and not is_extreme_overbought
+        is_oversold = (wr > 80 or cci < -100 or rsi < 30 or boll_pctb < 0.15) and not is_extreme_oversold
+
+        # 计算价格位置
+        avg_ma = (ma20 + ma50) / 2 if ma20 > 0 and ma50 > 0 else close
+        price_ratio = close / avg_ma if avg_ma > 0 else 1.0
+
+        # 计算MA20乖离率
+        bias20 = (close / ma20 - 1) if ma20 > 0 else 0
+
+        # 计算长短期位置
+        long_term_position = 'mid'
+        short_term_position = 'mid'
+
+        if len(df) >= 60:
+            high_60 = df['high'].iloc[-60:].max()
+            low_60 = df['low'].iloc[-60:].min()
+            if high_60 > low_60:
+                position_ratio = (close - low_60) / (high_60 - low_60)
+                if position_ratio < 0.35:
+                    long_term_position = 'low'
+                elif position_ratio > 0.65:
+                    long_term_position = 'high'
+
+        # 短期位置基于技术指标
+        if is_extreme_oversold or is_oversold:
+            short_term_position = 'low'
+        elif is_extreme_overbought or is_overbought:
+            short_term_position = 'high'
+
+        # 综合位置判断
+        if is_extreme_oversold or is_oversold:
+            position = 'low'
+            reason = f"技术指标超卖（WR={wr:.1f}, RSI={rsi:.1f}）"
+        elif is_extreme_overbought or is_overbought:
+            position = 'high'
+            reason = f"技术指标超买（WR={wr:.1f}, RSI={rsi:.1f}）"
+        elif boll_pctb < 0.25:
+            position = 'low'
+            reason = f"布林带下轨附近（位置={boll_pctb*100:.0f}%）"
+        elif boll_pctb > 0.75:
+            position = 'high'
+            reason = f"布林带上轨附近（位置={boll_pctb*100:.0f}%）"
+        elif price_ratio < 0.95:
+            position = 'low'
+            reason = f"均线位置偏低（价格/均价={price_ratio:.2f}）"
+        elif price_ratio > 1.05:
+            position = 'high'
+            reason = f"均线位置偏高（价格/均价={price_ratio:.2f}）"
+        else:
+            position = 'middle'
+            reason = f"位置适中（修正系数={position_modifier:.2f}）"
+
+        return PositionAssessment(
+            position=position,
+            long_term_position=long_term_position,
+            short_term_position=short_term_position,
+            is_overbought=is_overbought or is_extreme_overbought,
+            is_oversold=is_oversold or is_extreme_oversold,
+            is_extreme_overbought=is_extreme_overbought,
+            is_extreme_oversold=is_extreme_oversold,
+            position_modifier=position_modifier,
+            price_ratio=price_ratio,
+            boll_pctb=boll_pctb,
+            bias20=bias20,
+            close=close,
+            ma20=ma20,
+            ma50=ma50,
+            ma200=ma200 if not pd.isna(ma200) else 0,
+            reason=reason,
+        )
+
+    def analyze_stock_with_context(
+        self,
+        symbol: str,
+        days: int = 360,
+        primary_system: ScoringSystemType = ScoringSystemType.AUTO
+    ) -> Tuple[AnalysisContext, str]:
+        """
+        使用统一分析上下文分析股票
+
+        Args:
+            symbol: 股票代码
+            days: 分析天数
+            primary_system: 主评分系统类型
+
+        Returns:
+            Tuple[AnalysisContext, str]: (分析上下文, 报告文本)
+        """
+        print(f"开始分析 {symbol}（使用统一上下文）...")
+
+        # 获取数据
+        df = self.get_stock_data(symbol, days)
+        if df.empty:
+            return AnalysisContext(
+                symbol=symbol,
+                current_price=0,
+                analysis_date=datetime.now()
+            ), f"无法获取 {symbol} 的数据"
+
+        # 计算技术指标
+        df_with_indicators = self.calculate_technical_indicators(df)
+
+        # 构建统一分析上下文
+        context = self.build_analysis_context(df_with_indicators, symbol, primary_system)
+
+        # 生成报告
+        report = self.generate_report_from_context(df_with_indicators, context, symbol)
+
+        return context, report
+
+    def generate_report_from_context(
+        self,
+        df: pd.DataFrame,
+        context: AnalysisContext,
+        symbol: str
+    ) -> str:
+        """
+        从统一分析上下文生成报告
+
+        使用同一个 FinalRecommendation 对象，确保报告各部分一致
+        """
+        if df.empty:
+            return "No data available for report generation"
+
+        report = []
+        rec = context.final_recommendation
+
+        # 基本信息
+        report.append(f"# 股票技术分析报告：{symbol}")
+        report.append("")
+        report.append(f"**分析日期：** {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        report.append(f"**主评分系统：** {rec.primary_system.value}")
+        report.append("")
+
+        # ========== 第一部分：核心结论 ==========
+        report.extend(self._generate_core_conclusion_v2(context))
+
+        # ========== 第二部分：三系统评分对比 ==========
+        report.extend(self._generate_three_system_analysis(context))
+
+        # ========== 第三部分：市场状态与风险 ==========
+        report.extend(self._generate_market_risk_section(context))
+
+        # ========== 第四部分：交易执行计划 ==========
+        report.extend(self._generate_trading_plan_v2(context))
+
+        # 附录：原始技术指标
+        report.append("---")
+        report.append("")
+        report.append("## 附录：原始技术指标")
+        report.append("")
+
+        latest = df.iloc[-1]
+        report.extend(self._generate_technical_indicators_table(latest, context))
+
+        report.append("")
+        report.append("> **免责声明：** 本分析仅供学习参考，不构成投资建议。投资决策应基于全面研究和独立判断。")
+        report.append("")
+
+        return "\n".join(report)
+
+    def _generate_core_conclusion_v2(self, context: AnalysisContext) -> List[str]:
+        """生成核心结论（使用统一推荐）"""
+        report = []
+        rec = context.final_recommendation
+
+        report.append("## 第一部分：核心结论")
+        report.append("")
+
+        # 操作指令
+        report.append(f"### {rec.get_action_emoji()} 操作指令：{rec.get_action_display()}")
+        report.append("")
+
+        # 评分展示
+        report.append(f"**技术评分：{rec.final_score:.1f}分（{rec.score_grade}）**")
+        report.append("")
+
+        # 主评分系统说明
+        system_names = {
+            ScoringSystemType.CLASSIC: "经典多因子评分",
+            ScoringSystemType.TREND: "趋势强度评分",
+            ScoringSystemType.BREAKOUT: "低位盘整突破评分",
+        }
+        report.append(f"**主评分系统：{system_names.get(rec.primary_system, '未知')}**")
+        report.append("")
+
+        # 熔断原因（如果有）
+        if rec.fuse_reason:
+            report.append(f"**⚠️ 熔断原因：{rec.fuse_reason}**")
+            report.append("")
+
+        # 形态覆盖原因（如果有）
+        if rec.pattern_override:
+            report.append(f"**🔍 形态覆盖：{rec.pattern_override}**")
+            report.append("")
+
+        # 置信度
+        report.append(f"**置信度：{rec.confidence}**")
+        report.append("")
+
+        # 关键理由
+        report.append("### 💡 关键理由")
+        report.append("")
+        for reason in rec.reasons:
+            report.append(f"- {reason}")
+
+        # 警告
+        if rec.warnings:
+            report.append("")
+            report.append("### ⚠️ 风险警告")
+            report.append("")
+            for warning in rec.warnings:
+                report.append(f"- {warning}")
+
+        report.append("")
+        return report
+
+    def _generate_three_system_analysis(self, context: AnalysisContext) -> List[str]:
+        """生成三系统评分对比"""
+        report = []
+
+        report.append("## 第二部分：三系统评分对比")
+        report.append("")
+
+        report.append("| 评分系统 | 最终评分 | 状态 | 说明 |")
+        report.append("|----------|----------|------|------|")
+
+        # 经典评分
+        classic = context.classic_score
+        classic_status = "✅ 通过" if classic.score >= 50 else "❌ 未通过"
+        report.append(f"| 经典评分 | {classic.score:.1f}分 | {classic_status} | 趋势分{classic.trend_score:.1f} × 位置系数{classic.position_modifier:.2f} |")
+
+        # 趋势评分
+        trend = context.trend_score
+        if trend.passed_hard_filter:
+            trend_status = "✅ 通过"
+            trend_note = f"时机系数{trend.timing_coefficient:.2f}({trend.timing_type})"
+        else:
+            trend_status = "❌ 未通过"
+            trend_note = trend.hard_filter_reason
+        report.append(f"| 趋势评分 | {trend.final_score:.1f}分 | {trend_status} | {trend_note} |")
+
+        # 突破评分
+        breakout = context.breakout_score
+        if breakout.passed_filter:
+            breakout_status = "✅ 通过"
+            if breakout.has_breakout:
+                breakout_note = f"盘整{breakout.consolidation_days}天后突破"
+            elif breakout.is_consolidating:
+                breakout_note = "盘整蓄势中"
+            else:
+                breakout_note = "形态不完整"
+        else:
+            breakout_status = "❌ 未通过"
+            breakout_note = breakout.filter_reason
+        report.append(f"| 突破评分 | {breakout.final_score:.1f}分 | {breakout_status} | {breakout_note} |")
+
+        report.append("")
+
+        # 主系统选择说明
+        report.append(f"**主系统选择原因：** {context.final_recommendation.primary_system.value}")
+        market = context.market_state
+        regime_names = {
+            MarketState.BULL: "牛市",
+            MarketState.BEAR: "熊市",
+            MarketState.SIDEWAY: "震荡市",
+            MarketState.VOLATILE: "剧烈波动",
+        }
+        report.append(f"- 市场状态：{regime_names.get(market.combined_regime, '未知')}")
+        report.append(f"- 综合信号：{market.combined_signal}")
+        report.append("")
+
+        return report
+
+    def _generate_market_risk_section(self, context: AnalysisContext) -> List[str]:
+        """生成市场状态与风险部分"""
+        report = []
+        market = context.market_state
+        position = context.position_assessment
+        stop_loss = context.stop_loss_config
+
+        report.append("## 第三部分：市场状态与风险控制")
+        report.append("")
+
+        # 市场状态
+        report.append("### 🌡️ 市场状态")
+        report.append("")
+
+        regime_emoji = {
+            MarketState.BULL: '📈',
+            MarketState.BEAR: '📉',
+            MarketState.SIDEWAY: '↔️',
+            MarketState.VOLATILE: '⚡'
+        }
+        regime_cn = {
+            MarketState.BULL: '牛市',
+            MarketState.BEAR: '熊市',
+            MarketState.SIDEWAY: '震荡',
+            MarketState.VOLATILE: '剧烈波动'
+        }
+
+        report.append(f"- **综合状态**: {regime_cn.get(market.combined_regime, '未知')} {regime_emoji.get(market.combined_regime, '➖')}")
+        report.append(f"- **综合信号**: {market.combined_signal}")
+        report.append(f"- **置信度**: {market.confidence*100:.0f}%")
+        report.append("")
+
+        # 位置评估
+        report.append("### 📍 位置评估")
+        report.append("")
+
+        position_emoji = {'high': '🔴', 'middle': '🟡', 'low': '🟢'}
+        report.append(f"- **价格位置**: {position_emoji.get(position.position, '⚪')} {position.position}")
+        report.append(f"- **长期位置**: {position_emoji.get(position.long_term_position, '⚪')} {position.long_term_position}")
+        report.append(f"- **短期位置**: {position_emoji.get(position.short_term_position, '⚪')} {position.short_term_position}")
+        report.append(f"- **位置修正系数**: {position.position_modifier:.2f}")
+        report.append(f"- **原因**: {position.reason}")
+        report.append("")
+
+        # 风险控制
+        report.append("### 🛡️ 风险控制")
+        report.append("")
+
+        stop_type_cn = {
+            UnifiedStopLossType.PATTERN: '形态止损',
+            UnifiedStopLossType.SUPPORT: '支撑位止损',
+            UnifiedStopLossType.ATR: 'ATR止损',
+            UnifiedStopLossType.MA: '均线止损',
+            UnifiedStopLossType.PERCENTAGE: '固定比例止损',
+        }
+
+        report.append(f"- **建议止损位**: ¥{stop_loss.stop_price:.2f} ({stop_type_cn.get(stop_loss.stop_type, '止损')})")
+        report.append(f"- **止损幅度**: {stop_loss.distance_percent*100:.1f}%")
+        if stop_loss.take_profit_price > 0:
+            report.append(f"- **建议止盈位**: ¥{stop_loss.take_profit_price:.2f}")
+            report.append(f"- **盈亏比**: {stop_loss.risk_reward_ratio:.1f}:1")
+        report.append("")
+
+        return report
+
+    def _generate_trading_plan_v2(self, context: AnalysisContext) -> List[str]:
+        """生成交易执行计划（使用统一推荐）"""
+        report = []
+        rec = context.final_recommendation
+        stop_loss = context.stop_loss_config
+
+        report.append("## 第四部分：交易执行计划")
+        report.append("")
+
+        # 策略类型
+        report.append("### 📈 策略类型")
+        report.append("")
+
+        if rec.is_actionable():
+            if rec.primary_system == ScoringSystemType.TREND:
+                strategy_type = "✅ 右侧交易（趋势跟随）"
+                strategy_desc = "趋势确立，跟随趋势操作"
+            elif rec.primary_system == ScoringSystemType.BREAKOUT:
+                strategy_type = "✅ 突破交易（形态驱动）"
+                strategy_desc = "低位盘整突破，形态确认"
+            else:
+                strategy_type = "✅ 信号驱动（逢低布局）"
+                strategy_desc = "综合评分良好，当前位置适合布局"
+        else:
+            if rec.action == ActionType.SELL:
+                strategy_type = "🛡️ 防御型（减仓/清仓）"
+                strategy_desc = "风险信号明确，建议规避"
+            else:
+                strategy_type = "🔍 观望型（等待机会）"
+                strategy_desc = "信号不明确，等待更好的入场时机"
+
+        report.append(f"- **类型**：{strategy_type}")
+        report.append(f"- **说明**：{strategy_desc}")
+        report.append("")
+
+        # 具体点位
+        report.append("### 📍 具体点位")
+        report.append("")
+
+        if rec.is_actionable():
+            report.append("| 项目 | 建议数值 | 说明 |")
+            report.append("|------|----------|------|")
+            report.append(f"| 入场区间 | ¥{rec.entry_low:.2f} ~ ¥{rec.entry_high:.2f} | 当前价格附近 |")
+            report.append(f"| 止损位 | ¥{stop_loss.stop_price:.2f} | {stop_loss.stop_type.value} |")
+            if stop_loss.take_profit_price > 0:
+                report.append(f"| 目标位 | ¥{stop_loss.take_profit_price:.2f} | 盈亏比{stop_loss.risk_reward_ratio:.1f}:1 |")
+        else:
+            report.append(f"| ⚠️ 操作建议 | **{rec.get_action_display()}** | {rec.fuse_reason or '等待更明确信号'} |")
+
+        report.append("")
+
+        # 仓位建议
+        report.append("### 💰 仓位建议")
+        report.append("")
+        report.append(f"- **建议仓位**：{rec.position_size}")
+        report.append("")
+
+        # 风险提示
+        if rec.warnings:
+            report.append("### ⚠️ 风险提示")
+            report.append("")
+            for warning in rec.warnings:
+                report.append(f"- {warning}")
+            report.append("")
+
+        return report
+
+    def _generate_technical_indicators_table(
+        self,
+        latest: pd.Series,
+        context: AnalysisContext
+    ) -> List[str]:
+        """生成技术指标表格"""
+        report = []
+
+        report.append("| 指标 | 数值 | 状态 |")
+        report.append("|------|------|------|")
+
+        close = latest.get('close', 0)
+
+        # RSI
+        rsi_val = latest.get('rsi_24', 50)
+        if rsi_val > 70:
+            rsi_desc = "超买区"
+        elif rsi_val < 30:
+            rsi_desc = "超卖区"
+        else:
+            rsi_desc = "中性"
+        report.append(f"| RSI(24) | {rsi_val:.2f} | {rsi_desc} |")
+
+        # MACD
+        macd_val = latest.get('macd', 0)
+        macd_desc = "多头" if macd_val > 0 else "空头"
+        report.append(f"| MACD | {macd_val:.2f} | {macd_desc} |")
+
+        # KDJ
+        k = latest.get('kdj_k', 0)
+        d = latest.get('kdj_d', 0)
+        j = latest.get('kdj_j', 0)
+        kdj_desc = "J值偏高" if j > 80 else "J值偏低" if j < 20 else "正常"
+        report.append(f"| KDJ | K: {k:.2f} / D: {d:.2f} / J: {j:.2f} | {kdj_desc} |")
+
+        # 均线
+        ma20 = latest.get('ma_20', 0)
+        ma50 = latest.get('ma_50', 0)
+        ma200 = latest.get('ma_200', 0)
+        ma200_str = f"{ma200:.2f}" if not pd.isna(ma200) else "无数据"
+        report.append(f"| 移动平均线 | MA20: ¥{ma20:.2f} / MA50: ¥{ma50:.2f} / MA200: {ma200_str} | 趋势参考 |")
+
+        # 布林带
+        boll_upper = latest.get('boll_upper', close)
+        boll_mid = latest.get('boll_mid', close)
+        boll_lower = latest.get('boll_lower', close)
+        boll_pctb = (close - boll_lower) / (boll_upper - boll_lower) if boll_upper > boll_lower else 0.5
+        boll_desc = "触及上轨" if close >= boll_upper else "触及下轨" if close <= boll_lower else "中轨附近"
+        report.append(f"| 布林带 | 上轨: ¥{boll_upper:.2f} / 中轨: ¥{boll_mid:.2f} / 下轨: ¥{boll_lower:.2f} | {boll_desc} |")
+
+        # BIAS 乖离率
+        bias_6 = latest.get('bias_6', 0)
+        bias_12 = latest.get('bias_12', 0)
+        bias_24 = latest.get('bias_24', 0)
+        bias_desc = "超买" if bias_6 > 5 else "超卖" if bias_6 < -5 else "正常"
+        report.append(f"| BIAS(乖离率) | BIAS6: {bias_6:.2f}% / BIAS12: {bias_12:.2f}% / BIAS24: {bias_24:.2f}% | {bias_desc} |")
+
+        # DMI 动向指标
+        pdi = latest.get('dmi_pdi', 0)
+        mdi = latest.get('dmi_mdi', 0)
+        adx = latest.get('dmi_adx', 0)
+        if pdi > mdi and adx > 25:
+            dmi_desc = "多头趋势强"
+        elif mdi > pdi and adx > 25:
+            dmi_desc = "空头趋势强"
+        elif adx < 20:
+            dmi_desc = "趋势不明"
+        else:
+            dmi_desc = "多空平衡"
+        report.append(f"| DMI(动向指标) | PDI: {pdi:.2f} / MDI: {mdi:.2f} / ADX: {adx:.2f} | {dmi_desc} |")
+
+        # ATR 真实波幅
+        atr = latest.get('atr_14', 0)
+        atr_pct = (atr / close * 100) if close > 0 else 0
+        atr_desc = "高波动" if atr_pct > 3 else "低波动" if atr_pct < 1 else "正常波动"
+        report.append(f"| ATR(真实波幅) | {atr:.2f} ({atr_pct:.2f}%) | {atr_desc} |")
+
+        # CCI 顺势指标
+        cci = latest.get('cci', 0)
+        if cci > 100:
+            cci_desc = "超买区"
+        elif cci < -100:
+            cci_desc = "超卖区"
+        else:
+            cci_desc = "正常区间"
+        report.append(f"| CCI(顺势指标) | {cci:.2f} | {cci_desc} |")
+
+        # WR 威廉指标
+        wr = latest.get('wr', 0)
+        wr_6 = latest.get('wr_6', 0)
+        if wr < -80:
+            wr_desc = "超卖区"
+        elif wr > -20:
+            wr_desc = "超买区"
+        else:
+            wr_desc = "正常区间"
+        report.append(f"| WR(威廉指标) | WR14: {wr:.2f} / WR6: {wr_6:.2f} | {wr_desc} |")
+
+        # TRIX 三重平滑移动平均
+        trix = latest.get('trix', 0)
+        trix_ma = latest.get('trix_ma', 0)
+        trix_desc = "多头" if trix > trix_ma else "空头"
+        report.append(f"| TRIX | TRIX: {trix:.4f} / TRMA: {trix_ma:.4f} | {trix_desc} |")
+
+        # OBV 能量潮
+        obv = latest.get('obv', 0)
+        obv_desc = "资金流入" if obv > 0 else "资金流出"
+        report.append(f"| OBV(能量潮) | {obv:,.0f} | {obv_desc} |")
+
+        # MFI 资金流量指标
+        mfi = latest.get('mfi', 50)
+        if mfi > 80:
+            mfi_desc = "资金超买"
+        elif mfi < 20:
+            mfi_desc = "资金超卖"
+        else:
+            mfi_desc = "正常"
+        report.append(f"| MFI(资金流量) | {mfi:.2f} | {mfi_desc} |")
+
+        # VR 容量比率
+        vr = latest.get('vr', 100)
+        if vr > 350:
+            vr_desc = "超买区"
+        elif vr < 70:
+            vr_desc = "超卖区"
+        else:
+            vr_desc = "正常区间"
+        report.append(f"| VR(容量比率) | {vr:.2f} | {vr_desc} |")
+
+        # PSY 心理线
+        psy = latest.get('psy', 50)
+        if psy > 75:
+            psy_desc = "超买区"
+        elif psy < 25:
+            psy_desc = "超卖区"
+        else:
+            psy_desc = "正常区间"
+        report.append(f"| PSY(心理线) | {psy:.2f}% | {psy_desc} |")
+
+        # BBI 多空指标
+        bbi = latest.get('bbi', close)
+        bbi_desc = "多头排列" if close > bbi else "空头排列"
+        report.append(f"| BBI(多空指标) | ¥{bbi:.2f} | {bbi_desc} |")
+
+        report.append("")
+        return report
 
     def _analyze_signal_conflicts(self, latest_data: pd.Series, strategies_results: Dict,
                                    df: pd.DataFrame = None,
@@ -556,8 +1810,8 @@ class StockAnalyzer:
         position_info['price_ratio_display'] = position_info['price_ratio'] * 50
 
         # 获取K线形态评估（定性）
-        candlestick_recognizer = CandlestickPatternRecognizer()
-        candlestick_result = candlestick_recognizer.recognize_all_patterns(df, lookback=5)
+        candlestick_recognizer = TalibPatternRecognizer()
+        candlestick_result = candlestick_recognizer.recognize_all(df, lookback=5)
 
         # 将形态结果转换为评估字典
         pattern_assessment = self._convert_pattern_to_assessment(candlestick_result, df)
@@ -566,6 +1820,15 @@ class StockAnalyzer:
 
         # 第一部分：核心结论区
         report.extend(self._generate_core_conclusion(scoring, position_info, pattern_assessment))
+
+        # 新增：三因子组评分表格
+        report.extend(self._generate_factor_groups_score(scoring, strategies_results))
+
+        # 新增：市场状态与风险控制
+        report.extend(self._generate_market_and_risk_info(strategies_results))
+
+        # 新增：趋势评分系统报告
+        report.extend(self._generate_trend_scoring_report(strategies_results))
 
         # 第二部分：多维信号共振分析
         report.extend(self._generate_signal_resonance(latest_data, position_info, pattern_assessment, scoring, df))
@@ -669,10 +1932,10 @@ class StockAnalyzer:
         report.append("")
 
         # 添加K线形态报告（如果有）
-        if candlestick_result and candlestick_result.get('patterns'):
+        if candlestick_result and candlestick_result.patterns:
             report.append("### K线形态识别")
             report.append("")
-            candlestick_report = candlestick_recognizer.format_patterns_report(candlestick_result)
+            candlestick_report = format_patterns_report(candlestick_result)
             report.append(candlestick_report)
 
         report.append("")
@@ -683,9 +1946,12 @@ class StockAnalyzer:
 
     def _determine_position_status(self, latest_data: pd.Series, position_modifier: float = 1.0) -> Dict:
         """
-        综合判断位置状态
+        综合判断位置状态（改进版：多指标交叉验证）
 
-        优化：使用 scoring_system 计算的 position_modifier 作为主要判断依据，避免双重标准
+        核心改进：
+        1. 区分"短线偏热"和"全面超买"
+        2. 需要多个指标一致确认才算超买/超卖
+        3. 均线乖离率作为重要参考
 
         返回: {
             'position': 'high'/'low'/'middle',
@@ -694,6 +1960,7 @@ class StockAnalyzer:
             'is_oversold': bool,
             'is_extreme_overbought': bool,
             'is_extreme_oversold': bool,
+            'is_short_term_hot': bool,  # 新增：短线偏热（但不一定是全面超买）
             'reason': str,
             'close': float,
             'ma20': float,
@@ -704,9 +1971,11 @@ class StockAnalyzer:
         ma20 = latest_data.get('ma_20', close)
         ma50 = latest_data.get('ma_50', close)
 
-        # 1. 均线位置判断（辅助判断）
+        # 1. 均线位置判断（核心参考）
         avg_ma = (ma20 + ma50) / 2 if ma20 > 0 and ma50 > 0 else close
         price_ratio = close / avg_ma if avg_ma > 0 else 1.0
+        bias20 = (close / ma20 - 1) if ma20 > 0 else 0  # MA20乖离率
+        bias50 = (close / ma50 - 1) if ma50 > 0 else 0  # MA50乖离率
 
         # 2. 技术位置判断（基于超买超卖指标）
         wr = latest_data.get('wr_14', latest_data.get('wr', 50))
@@ -716,75 +1985,110 @@ class StockAnalyzer:
         boll_lower = latest_data.get('boll_lower', 0)
         boll_pctb = (close - boll_lower) / (boll_upper - boll_lower) if boll_upper > boll_lower else 0.5
 
-        # 极端超买判断
+        # 3. 多指标交叉验证（改进：需要多个指标一致确认）
+        # 计算超买信号数量
+        overbought_signals = 0
+        overbought_details = []
+        if wr < 20:
+            overbought_signals += 1
+            overbought_details.append(f"WR={wr:.0f}")
+        if rsi > 70:
+            overbought_signals += 1
+            overbought_details.append(f"RSI={rsi:.0f}")
+        if cci > 100:
+            overbought_signals += 1
+            overbought_details.append(f"CCI={cci:.0f}")
+        if boll_pctb > 0.85:
+            overbought_signals += 1
+            overbought_details.append(f"布林{boll_pctb*100:.0f}%")
+        if bias20 > 0.08:
+            overbought_signals += 1
+            overbought_details.append(f"BIAS20={bias20*100:.1f}%")
+
+        # 计算超卖信号数量
+        oversold_signals = 0
+        oversold_details = []
+        if wr > 80:
+            oversold_signals += 1
+            oversold_details.append(f"WR={wr:.0f}")
+        if rsi < 30:
+            oversold_signals += 1
+            oversold_details.append(f"RSI={rsi:.0f}")
+        if cci < -100:
+            oversold_signals += 1
+            oversold_details.append(f"CCI={cci:.0f}")
+        if boll_pctb < 0.15:
+            oversold_signals += 1
+            oversold_details.append(f"布林{boll_pctb*100:.0f}%")
+        if bias20 < -0.08:
+            oversold_signals += 1
+            oversold_details.append(f"BIAS20={bias20*100:.1f}%")
+
+        # 4. 综合判断（改进：需要至少2个指标一致确认）
+        # 极端超买：至少3个指标确认 + MA20乖离率 > 5%
         is_extreme_overbought = (
-            wr < 10 or
-            cci > 200 or
-            rsi > 80 or
-            boll_pctb > 0.95
+            overbought_signals >= 3 and
+            bias20 > 0.05
         )
 
-        # 普通超买判断
+        # 普通超买：至少2个指标确认 + 均线乖离率为正
         is_overbought = (
-            wr < 20 or
-            cci > 100 or
-            rsi > 70 or
-            boll_pctb > 0.85
-        ) and not is_extreme_overbought
-
-        # 极端超卖判断
-        is_extreme_oversold = (
-            wr > 90 or
-            cci < -200 or
-            rsi < 20 or
-            boll_pctb < 0.05
+            overbought_signals >= 2 and
+            bias20 > 0 and
+            not is_extreme_overbought
         )
 
-        # 普通超卖判断
-        is_oversold = (
-            wr > 80 or
-            cci < -100 or
-            rsi < 30 or
-            boll_pctb < 0.15
-        ) and not is_extreme_oversold
+        # 短线偏热：只有1个指标显示超买（如WR<20），但其他指标不确认
+        is_short_term_hot = (
+            overbought_signals == 1 and
+            not is_overbought and
+            not is_extreme_overbought
+        )
 
-        # 3. 综合判断：优先使用 position_modifier（来自 scoring_system）
-        # position_modifier 范围: 0.3 ~ 1.0
-        if position_modifier < 0.5:
-            position = 'high'
-            reason = f"位置危险（修正系数={position_modifier:.2f}，严重超买）"
-        elif position_modifier < 0.7:
-            position = 'high'
-            reason = f"位置偏高（修正系数={position_modifier:.2f}，技术指标超买）"
-        elif position_modifier >= 0.95:
+        # 极端超卖：至少3个指标确认 + MA20乖离率 < -5%
+        is_extreme_oversold = (
+            oversold_signals >= 3 and
+            bias20 < -0.05
+        )
+
+        # 普通超卖：至少2个指标确认 + 均线乖离率为负
+        is_oversold = (
+            oversold_signals >= 2 and
+            bias20 < 0 and
+            not is_extreme_oversold
+        )
+
+        # 5. 位置判断（综合均线和技术指标）
+        # 关键改进：均线位置优先，技术指标辅助
+        if is_extreme_oversold:
             position = 'low'
-            reason = f"位置安全（修正系数={position_modifier:.2f}，入场位置良好）"
-        elif position_modifier >= 0.8:
-            position = 'middle'
-            reason = f"位置适中（修正系数={position_modifier:.2f}）"
+            reason = f"全面超卖（{', '.join(oversold_details[:3])}）"
+        elif is_extreme_overbought:
+            position = 'high'
+            reason = f"全面超买（{', '.join(overbought_details[:3])}）"
+        elif is_oversold:
+            position = 'low'
+            reason = f"技术指标超卖（{', '.join(oversold_details[:2])}）"
+        elif is_overbought:
+            position = 'high'
+            reason = f"技术指标超买（{', '.join(overbought_details[:2])}）"
+        # 均线位置判断（更重要的参考）
+        elif bias20 < -0.05:
+            position = 'low'
+            reason = f"均线位置偏低（MA20乖离率={bias20*100:.1f}%）"
+        elif bias20 > 0.05:
+            position = 'high'
+            reason = f"均线位置偏高（MA20乖离率={bias20*100:.1f}%）"
+        # 布林带位置判断
+        elif boll_pctb < 0.25:
+            position = 'low'
+            reason = f"布林带下轨附近（位置={boll_pctb*100:.0f}%）"
+        elif boll_pctb > 0.75:
+            position = 'high'
+            reason = f"布林带上轨附近（位置={boll_pctb*100:.0f}%）"
         else:
-            # 回退到技术指标判断
-            if is_extreme_overbought:
-                position = 'high'
-                reason = f"极端超买（WR={wr:.1f}, CCI={cci:.1f}, RSI={rsi:.1f}）"
-            elif is_overbought:
-                position = 'high'
-                reason = f"技术指标超买（WR={wr:.1f}, RSI={rsi:.1f}）"
-            elif is_extreme_oversold:
-                position = 'low'
-                reason = f"极端超卖（WR={wr:.1f}, CCI={cci:.1f}, RSI={rsi:.1f}）"
-            elif is_oversold:
-                position = 'low'
-                reason = f"技术指标超卖（WR={wr:.1f}, RSI={rsi:.1f}）"
-            else:
-                # 最终回退到均线位置判断
-                if price_ratio > 1.15:
-                    position = 'high'
-                elif price_ratio < 0.85:
-                    position = 'low'
-                else:
-                    position = 'middle'
-                reason = f"均线位置判断（价格/均价={price_ratio:.2f}）"
+            position = 'middle'
+            reason = f"位置适中（MA20乖离率={bias20*100:.1f}%）"
 
         return {
             'position': position,
@@ -793,6 +2097,7 @@ class StockAnalyzer:
             'is_oversold': is_oversold or is_extreme_oversold,
             'is_extreme_overbought': is_extreme_overbought,
             'is_extreme_oversold': is_extreme_oversold,
+            'is_short_term_hot': is_short_term_hot,  # 新增
             'reason': reason,
             'close': close,
             'ma20': ma20,
@@ -800,14 +2105,21 @@ class StockAnalyzer:
             'wr': wr,
             'cci': cci,
             'rsi': rsi,
-            'boll_pctb': boll_pctb
+            'boll_pctb': boll_pctb,
+            'bias20': bias20,
+            'overbought_signals': overbought_signals,
+            'oversold_signals': oversold_signals
         }
 
-    def _convert_pattern_to_assessment(self, candlestick_result: Dict, df: pd.DataFrame) -> Dict:
+    def _convert_pattern_to_assessment(self, candlestick_result, df: pd.DataFrame) -> Dict:
         """
         将K线形态识别结果转换为形态评估字典
         """
-        patterns = candlestick_result.get('patterns', [])
+        # 兼容 AllPatternsResult 对象和字典
+        if hasattr(candlestick_result, 'patterns'):
+            patterns = candlestick_result.patterns
+        else:
+            patterns = candlestick_result.get('patterns', [])
 
         if not patterns:
             return {
@@ -818,22 +2130,21 @@ class StockAnalyzer:
             }
 
         # 中文强度值映射为数字
-        strength_map = {'强': 4, '中': 2, '弱': 1}
+        strength_map = {'极强': 5, '强': 4, '中': 2, '弱': 1}
 
         # 按强度排序（使用映射后的数字值）
         def get_strength_value(p):
-            s = p.get('strength', 1)
+            s = p.strength if hasattr(p, 'strength') else p.get('strength', 1)
             return strength_map.get(s, 1) if isinstance(s, str) else int(s)
 
         sorted_patterns = sorted(patterns, key=get_strength_value, reverse=True)
         strongest = sorted_patterns[0]
 
-        pattern_name = strongest.get('name', '')
-        pattern_type = strongest.get('type', '')
+        pattern_name = strongest.name if hasattr(strongest, 'name') else strongest.get('name', '')
+        pattern_type = strongest.type if hasattr(strongest, 'type') else strongest.get('type', '')
 
         # 中文强度值映射为数字
-        strength_map = {'强': 4, '中': 2, '弱': 1}
-        strength_raw = strongest.get('strength', 1)
+        strength_raw = strongest.strength if hasattr(strongest, 'strength') else strongest.get('strength', 1)
         strength = strength_map.get(strength_raw, 1) if isinstance(strength_raw, str) else int(strength_raw)
 
         # 计算止损位（基于形态最低点）
@@ -853,9 +2164,9 @@ class StockAnalyzer:
         return {
             'type': assessment_type,
             'strength': strength,
-            'patterns': [p.get('name', '') for p in sorted_patterns[:3]],
+            'patterns': [p.name if hasattr(p, 'name') else p.get('name', '') for p in sorted_patterns[:3]],
             'stop_loss': stop_loss,
-            'description': strongest.get('description', '')
+            'description': strongest.description if hasattr(strongest, 'description') else strongest.get('description', '')
         }
 
     def analyze_stock(self, symbol: str, days: int = 360) -> str:
@@ -991,6 +2302,358 @@ class StockAnalyzer:
             report.append("   建议观望等待更明确的方向信号。")
         report.append("")
 
+    def _generate_factor_groups_score(self, scoring: Dict, strategies_results: Dict) -> List[str]:
+        """
+        生成因子评分表格（右侧交易版）
+
+        评分公式：最终评分 = 趋势分 + 趋势确认加成 + 成交量加成
+        """
+        report = []
+        report.append("### 📊 因子组评分")
+        report.append("")
+
+        factors_score = scoring.get('factors_score', {})
+        factors_raw = scoring.get('factors_raw', {})
+
+        # 获取评分系统的核心数据
+        trend_score = scoring.get('trend_score', 50)
+        momentum_score = scoring.get('momentum_score', 50)
+        money_score = scoring.get('money_score', 50)
+        trend_bonus = scoring.get('trend_bonus', 0)
+        volume_bonus = scoring.get('volume_bonus', 0)
+        final_score = scoring.get('score', 50)
+
+        # 解析嵌套的 factors_raw 结构
+        trend_factors = factors_raw.get('trend_factors', {})
+        momentum_factors = factors_raw.get('momentum_factors', {})
+        money_factors = factors_raw.get('money_factors', {})
+        aux_factors = factors_raw.get('aux_factors', {})
+
+        # 三因子组评分
+        report.append("| 因子组 | 因子得分 | 说明 |")
+        report.append("|--------|----------|------|")
+        report.append(f"| 趋势因子组 | {trend_score:.1f} | 综合评分（核心指标）|")
+        report.append(f"| 动能因子组 | {momentum_score:.1f} | 参考指标 |")
+        report.append(f"| 资金因子组 | {money_score:.1f} | 参考指标 |")
+        report.append("")
+
+        # 评分计算过程
+        report.append("**评分计算过程（右侧交易版）：**")
+        report.append("")
+        report.append(f"| 步骤 | 计算 | 结果 |")
+        report.append("|------|------|------|")
+        report.append(f"| ① 趋势基础分 | 五因子加权得分 | **{trend_score:.1f}分** |")
+        report.append(f"| ② 趋势确认加成 | 多头排列+DMI+MACD确认 | **+{trend_bonus:.1f}分** |")
+        report.append(f"| ③ 成交量加成 | 放量确认 | **+{volume_bonus:.1f}分** |")
+        report.append(f"| **最终评分** | 基础分 + 加成 | **{final_score:.1f}分** |")
+        report.append("")
+
+        # 检查是否有熔断或风险警告修正
+        execution = scoring.get('execution', {})
+        action_guide = execution.get('action_guide', '')
+        has_circuit_breaker = '熔断' in action_guide
+        has_risk_warning = '风险警告' in action_guide
+
+        if has_circuit_breaker:
+            report.append(f"| ③ 熔断修正 | 触发熔断，评分强制降低 | **{base_score:.1f} → {min(base_score, 25):.1f}分** |")
+        elif has_risk_warning:
+            report.append(f"| ④ 风险警告修正 | 评分打7折 | **{final_score * 0.7:.1f}分** |")
+        else:
+            report.append(f"| ④ 最终评分 | 基础分 + 加成 | **{final_score:.1f}分** |")
+
+        report.append("")
+
+        # 因子详情
+        report.append("**因子详情：**")
+        report.append("")
+
+        # 定义因子信息：描述、原始值来源、格式化方式
+        factor_info = {
+            'trend_strength': {
+                'desc': '股价相对MA20位置',
+                'raw_key': ('aux_factors', 'trend_strength'),  # 从 aux_factors 获取
+                'format': 'percent',  # 百分比格式
+                'label': 'MA20乖离率'
+            },
+            'ma_slope': {
+                'desc': '均线斜率方向',
+                'raw_key': ('trend_factors', 'ma_alignment'),  # 从 trend_factors 获取
+                'format': 'score',  # 评分格式
+                'label': '均线排列得分'
+            },
+            'macd_momentum': {
+                'desc': 'MACD柱状图动量',
+                'raw_key': ('trend_factors', 'macd_momentum'),  # 从 trend_factors 获取
+                'format': 'float',  # 浮点数格式
+                'label': 'MACD动量变化'
+            },
+            'volume_ratio': {
+                'desc': '成交量相对强度',
+                'raw_key': ('money_factors', 'volume_ratio'),  # 从 money_factors 获取
+                'format': 'ratio',  # 比率格式
+                'label': '量比'
+            },
+            'money_flow': {
+                'desc': 'OBV资金流向',
+                'raw_key': ('money_factors', 'obv_flow'),  # 从 money_factors 获取
+                'format': 'score',  # 评分格式
+                'label': 'OBV强度'
+            }
+        }
+
+        for factor_key, info in factor_info.items():
+            score_val = factors_score.get(factor_key, 50)
+
+            # 从嵌套结构中获取原始值
+            group_name, raw_key = info['raw_key']
+            if group_name == 'trend_factors':
+                raw_val = trend_factors.get(raw_key, 'N/A')
+            elif group_name == 'momentum_factors':
+                raw_val = momentum_factors.get(raw_key, 'N/A')
+            elif group_name == 'money_factors':
+                raw_val = money_factors.get(raw_key, 'N/A')
+            elif group_name == 'aux_factors':
+                raw_val = aux_factors.get(raw_key, 'N/A')
+            else:
+                raw_val = 'N/A'
+
+            # 状态判断
+            if score_val >= 70:
+                status = "✅ 良好"
+            elif score_val >= 50:
+                status = "➖ 一般"
+            else:
+                status = "⚠️ 偏弱"
+
+            # 格式化原始值
+            if raw_val == 'N/A':
+                raw_str = 'N/A'
+            elif info['format'] == 'percent':
+                # 百分比格式
+                raw_str = f"{raw_val*100:.2f}%" if isinstance(raw_val, (int, float)) else str(raw_val)
+            elif info['format'] == 'ratio':
+                # 比率格式
+                raw_str = f"{raw_val:.2f}" if isinstance(raw_val, (int, float)) else str(raw_val)
+            elif info['format'] == 'score':
+                # 评分格式
+                raw_str = f"{raw_val:.0f}分" if isinstance(raw_val, (int, float)) else str(raw_val)
+            else:
+                # 默认浮点数格式
+                raw_str = f"{raw_val:.3f}" if isinstance(raw_val, (int, float)) else str(raw_val)
+
+            report.append(f"- **{info['desc']}** ({factor_key}): {score_val:.1f}分 {status} ({info['label']}: {raw_str})")
+
+        report.append("")
+        return report
+
+    def _generate_market_and_risk_info(self, strategies_results: Dict) -> List[str]:
+        """
+        生成市场状态与风险控制信息
+        """
+        report = []
+
+        # 双重市场状态信息
+        dual_market_state = strategies_results.get('dual_market_state')
+        if dual_market_state:
+            report.append("### 🌡️ 双重市场状态")
+            report.append("")
+
+            index_regime = dual_market_state.get('index_regime', 'sideway')
+            stock_regime = dual_market_state.get('stock_regime', 'sideway')
+            combined_signal = dual_market_state.get('combined_signal', '观望')
+            index_name = dual_market_state.get('index_name', '沪深300')
+            confidence = dual_market_state.get('confidence', 0.5)
+
+            # 市场状态emoji
+            regime_emoji = {
+                'bull': '📈',
+                'bear': '📉',
+                'sideway': '↔️',
+                'volatile': '⚡'
+            }
+
+            regime_cn = {
+                'bull': '牛市',
+                'bear': '熊市',
+                'sideway': '震荡',
+                'volatile': '剧烈波动'
+            }
+
+            # 综合信号emoji
+            signal_emoji = {
+                '强买入': '🚀',
+                '关注': '👀',
+                '回避': '⚠️',
+                '轻仓': '💰',
+                '观望': '➖',
+                '空仓': '🛑'
+            }.get(combined_signal, '➖')
+
+            index_regime_cn = regime_cn.get(index_regime, '未知')
+            stock_regime_cn = regime_cn.get(stock_regime, '未知')
+
+            report.append(f"- **综合信号**: {combined_signal} {signal_emoji}")
+            report.append(f"- **大盘({index_name})**: {index_regime_cn} {regime_emoji.get(index_regime, '➖')}")
+            report.append(f"- **个股状态**: {stock_regime_cn} {regime_emoji.get(stock_regime, '➖')}")
+            report.append(f"- **置信度**: {confidence*100:.0f}%")
+            report.append("")
+
+        # 市场状态信息（个股状态详情）
+        market_regime = strategies_results.get('market_regime')
+        if market_regime:
+            report.append("### 📊 自适应阈值")
+            report.append("")
+
+            regime = market_regime.get('regime', 'sideway')
+            volatility = market_regime.get('volatility_level', 'normal')
+            buy_threshold = market_regime.get('buy_threshold', 50)
+            sell_threshold = market_regime.get('sell_threshold', 25)
+            confidence = market_regime.get('confidence', 0.5)
+
+            volatility_cn = {
+                'low': '低波动',
+                'normal': '正常',
+                'high': '高波动',
+                'extreme': '极端波动'
+            }.get(volatility, '正常')
+
+            report.append(f"- **买入阈值**: {buy_threshold:.1f}")
+            report.append(f"- **卖出阈值**: {sell_threshold:.1f}")
+            report.append(f"- **波动率水平**: {volatility_cn}")
+            report.append("")
+
+        # 风险控制信息
+        risk_control = strategies_results.get('risk_control')
+        if risk_control:
+            report.append("### 🛡️ 风险控制")
+            report.append("")
+
+            stop_price = risk_control.get('stop_price', 0)
+            stop_type = risk_control.get('stop_type', 'atr')
+            distance_pct = risk_control.get('distance_percent', 0.05)
+            confidence = risk_control.get('confidence', 0.5)
+
+            stop_type_cn = {
+                'atr': 'ATR止损',
+                'support': '支撑位止损',
+                'mae': '历史MAE止损',
+                'percentage': '固定比例止损'
+            }.get(stop_type, '止损')
+
+            report.append(f"- **建议止损位**: ¥{stop_price:.2f} ({stop_type_cn})")
+            report.append(f"- **止损幅度**: {distance_pct*100:.1f}%")
+            report.append(f"- **信号强度**: {confidence:.2f}")
+            report.append("")
+
+            # 风险提示
+            if distance_pct > 0.10:
+                report.append("⚠️ **风险提示**: 止损幅度较大，建议控制仓位")
+            elif distance_pct > 0.08:
+                report.append("⚠️ **注意**: 止损幅度适中，可考虑分批建仓")
+            else:
+                report.append("✅ **建议**: 止损幅度合理，风险可控")
+            report.append("")
+
+        return report
+
+    def _generate_trend_scoring_report(self, strategies_results: Dict) -> List[str]:
+        """
+        生成趋势评分系统报告
+
+        展示纯趋势强度评分、各因子得分和时机系数
+        """
+        report = []
+
+        trend_scoring = strategies_results.get('trend_scoring')
+        if not trend_scoring:
+            return report
+
+        report.append("### 📈 趋势评分系统")
+        report.append("")
+
+        # 硬过滤结果
+        passed_filter = trend_scoring.get('passed_hard_filter', False)
+        filter_reason = trend_scoring.get('hard_filter_reason', '')
+
+        if not passed_filter:
+            report.append(f"**❌ 未通过硬过滤**: {filter_reason}")
+            report.append("")
+            return report
+
+        # 趋势总分
+        final_score = trend_scoring.get('final_score', 0)
+        trend_total = trend_scoring.get('trend_total_score', 0)
+        timing_coef = trend_scoring.get('timing_coefficient', 1.0)
+        timing_type = trend_scoring.get('timing_type', '标准')
+
+        # 评分等级
+        if final_score >= 90:
+            grade = "极强趋势"
+            grade_emoji = "🚀"
+        elif final_score >= 75:
+            grade = "强趋势"
+            grade_emoji = "📈"
+        elif final_score >= 60:
+            grade = "趋势一般"
+            grade_emoji = "➖"
+        else:
+            grade = "趋势弱"
+            grade_emoji = "📉"
+
+        report.append(f"**最终评分**: {final_score:.1f}分 {grade_emoji} ({grade})")
+        report.append(f"- 趋势总分: {trend_total:.1f}分")
+        report.append(f"- 时机系数: {timing_coef:.2f} ({timing_type})")
+        report.append("")
+
+        # 各因子得分表格
+        report.append("| 因子 | 得分 | 权重 | 贡献分 |")
+        report.append("|------|------|------|--------|")
+
+        ma_score = trend_scoring.get('ma_structure_score', 0)
+        momentum_score = trend_scoring.get('price_momentum_score', 0)
+        volume_score = trend_scoring.get('volume_score', 0)
+        rs_score = trend_scoring.get('relative_strength_score', 0)
+
+        report.append(f"| 均线结构 | {ma_score:.1f} | 30% | {ma_score * 0.3:.1f} |")
+        report.append(f"| 价格动能 | {momentum_score:.1f} | 30% | {momentum_score * 0.3:.1f} |")
+        report.append(f"| 量能配合 | {volume_score:.1f} | 25% | {volume_score * 0.25:.1f} |")
+        report.append(f"| 相对强度 | {rs_score:.1f} | 15% | {rs_score * 0.15:.1f} |")
+        report.append(f"| **合计** | - | **100%** | **{trend_total:.1f}** |")
+        report.append("")
+
+        # 时机分析
+        details = trend_scoring.get('details', {})
+        timing_details = details.get('timing', {})
+
+        if timing_details:
+            report.append("**时机分析**:")
+            timing_reason = timing_details.get('timing_reason', '')
+            return_5d = timing_details.get('return_5d', 0)
+            dist_to_ma20 = timing_details.get('dist_to_ma20', 0)
+
+            report.append(f"- 时机类型: {timing_type}")
+            if timing_reason:
+                report.append(f"- 原因: {timing_reason}")
+            report.append(f"- 5日涨幅: {return_5d:.2f}%")
+            report.append(f"- 距MA20: {dist_to_ma20:.2f}%")
+            report.append("")
+
+        # 建议
+        report.append("**操作建议**:")
+        if final_score >= 75:
+            report.append("- ✅ 趋势强劲，可考虑入场或加仓")
+            if timing_coef >= 1.1:
+                report.append("- 🎯 时机较好，建议积极参与")
+            elif timing_coef <= 0.8:
+                report.append("- ⚠️ 时机一般，建议控制仓位")
+        elif final_score >= 60:
+            report.append("- ➖ 趋势一般，建议观望或轻仓")
+        else:
+            report.append("- ❌ 趋势较弱，不建议入场")
+        report.append("")
+
+        return report
+
     def _generate_core_conclusion(self, scoring: Dict, position_info: Dict,
                                    pattern_assessment: Dict) -> List[str]:
         """
@@ -1006,7 +2669,7 @@ class StockAnalyzer:
         score = scoring.get('score', 50)
         score_grade = scoring.get('score_grade', 'N/A')
         trend_score = scoring.get('trend_score', score)
-        position_modifier = scoring.get('position_modifier', 1.0)
+        trend_bonus = scoring.get('trend_bonus', 0)
 
         # 获取评分系统的操作指引（已包含熔断机制）
         execution = scoring.get('execution', {})
@@ -1063,7 +2726,7 @@ class StockAnalyzer:
                 action_override = 'wait'
                 override_reason = f"短期高位看涨形态，可能是诱多/力竭"
 
-        # 根据位置修正系数调整操作建议（细化逻辑）
+        # 根据评分调整操作建议
         if action_override in ['fuse', 'warning']:
             # 熔断机制或风险警告已确定操作，不做调整
             pass
@@ -1076,16 +2739,12 @@ class StockAnalyzer:
         elif action_override == 'wait':
             action_emoji = "🟡"
             action_text = "观望（警惕诱多）"
-        elif position_modifier < 0.5:
-            # 位置危险，建议卖出或观望
-            action_emoji = "🔴"
-            action_text = "不宜追高"
-        elif position_modifier < 0.7:
-            # 位置警戒
-            action_emoji = "🟡"
-            action_text = "谨慎观望"
+        elif score >= 80:
+            # 高评分：趋势确立，右侧交易机会
+            action_emoji = "🟢"
+            action_text = "买入"
         elif score >= 65:
-            # 趋势好+位置安全
+            # 评分较高
             action_emoji = "🟢"
             action_text = "买入"
         elif score >= 50:
@@ -1106,8 +2765,9 @@ class StockAnalyzer:
             report.append(f"**技术评分：{score:.1f}分（{score_grade}）**")
         report.append("")
 
+        # 评分构成（修正：如果评分被熔断修改，显示原始计算和最终结果）
         # 评分构成
-        report.append(f"**评分构成：** 趋势分 {trend_score:.1f} × 位置系数 {position_modifier:.2f} = {score:.1f}")
+        report.append(f"**评分构成：** 趋势分 {trend_score:.1f} + 趋势加成 {trend_bonus:.1f} = **{score:.1f}分**")
         report.append("")
 
         # 置信度计算
@@ -1152,15 +2812,16 @@ class StockAnalyzer:
         elif short_term_pos == 'low':
             reason_parts.append("✅ 短期超卖，可关注反弹机会")
 
-        # 基于位置修正系数
-        if position_modifier < 0.5:
-            reason_parts.append("入场位置危险（严重超买）")
-        elif position_modifier < 0.7:
-            reason_parts.append("入场位置偏高（技术指标超买）")
-        elif position_modifier >= 0.95:
-            reason_parts.append("入场位置安全")
+        # 基于超买超卖状态
+        is_oversold = position_info.get('is_oversold', False)
+        is_overbought = position_info.get('is_overbought', False)
 
-        # MA200压力判断（新增）
+        if is_overbought:
+            reason_parts.append("入场位置偏高（技术指标偏热）")
+        elif is_oversold:
+            reason_parts.append("入场位置安全（技术指标超卖）")
+
+        # MA200压力判断
         close = position_info.get('close', 0)
         ma200 = position_info.get('ma200', 0)
         if ma200 > 0 and close > 0:
@@ -1174,8 +2835,8 @@ class StockAnalyzer:
         elif trend_score >= 55:
             reason_parts.append("趋势偏强")
         elif trend_score < 40:
-            # 检测"接飞刀"行情：趋势极弱但位置看起来安全
-            if position_modifier >= 0.95:
+            # 检测"接飞刀"行情：趋势极弱
+            if is_oversold:
                 reason_parts.append("⚠️【接飞刀风险】位置虽低但趋势极弱，切勿盲目抄底")
             else:
                 reason_parts.append("趋势极弱")
@@ -1295,17 +2956,39 @@ class StockAnalyzer:
             trend_state = "震荡/无趋势"
             trend_desc = f"PDI≈MDI（差值{dmi_diff:.2f}），多空力量均衡"
         elif pdi > mdi:
-            if adx > 25:
-                trend_state = "上升趋势（强）"
+            # 关键修复：必须结合MACD状态判断，避免DMI与MACD矛盾时的误判
+            macd = latest_data.get('macd', 0)
+            if macd < 0:
+                # DMI多头但MACD空头 = 矛盾信号，趋势不可靠
+                if adx > 25:
+                    trend_state = "震荡偏多（警惕背离）"
+                    trend_desc = f"⚠️ PDI>MDI但MACD({macd:.1f})为空头，DMI与MACD背离，趋势存疑"
+                else:
+                    trend_state = "震荡/无趋势"
+                    trend_desc = f"PDI>MDI但MACD({macd:.1f})为空头，ADX={adx:.1f}偏低，趋势不明确"
             else:
-                trend_state = "上升趋势（弱）"
-            trend_desc = f"PDI>MDI，多头占优，ADX={adx:.1f}（均线交织，需确认）"
+                if adx > 25:
+                    trend_state = "上升趋势（强）"
+                else:
+                    trend_state = "上升趋势（弱）"
+                trend_desc = f"PDI>MDI，多头占优，ADX={adx:.1f}（均线交织，需确认）"
         else:
-            if adx > 25:
-                trend_state = "下跌趋势（强）"
+            # MDI > PDI
+            macd = latest_data.get('macd', 0)
+            if macd > 0:
+                # DMI空头但MACD多头 = 矛盾信号
+                if adx > 25:
+                    trend_state = "震荡偏空（警惕背离）"
+                    trend_desc = f"⚠️ MDI>PDI但MACD({macd:.1f})为多头，可能反弹而非反转"
+                else:
+                    trend_state = "震荡/无趋势"
+                    trend_desc = f"MDI>PDI但MACD({macd:.1f})为多头，趋势不明确"
             else:
-                trend_state = "下跌趋势（弱）"
-            trend_desc = f"PDI<MDI，空头占优，ADX={adx:.1f}"
+                if adx > 25:
+                    trend_state = "下跌趋势（强）"
+                else:
+                    trend_state = "下跌趋势（弱）"
+                trend_desc = f"PDI<MDI，空头占优，ADX={adx:.1f}"
 
         report.append(f"- **状态**：{trend_state}")
         report.append(f"- **说明**：{trend_desc}")
@@ -1365,20 +3048,43 @@ class StockAnalyzer:
         cci = latest_data.get('cci', 0)
         wr = latest_data.get('wr', 50)
 
-        # 布林带位置
+        # 布林带位置 - 综合考虑CCI和WR指标
         if boll_upper > boll_lower:
             boll_pct = (close - boll_lower) / (boll_upper - boll_lower) * 100
         else:
             boll_pct = 50
 
+        # 综合判断：布林带位置结合CCI/WR超买超卖状态
+        # 解决矛盾：布林带中部但CCI/WR显示超卖时，应该描述为偏低
+        is_oversold = cci < -100 or wr > 80
+        is_overbought = cci > 100 or wr < 20
+
         if boll_pct > 90:
             boll_state = "极度超买（触及上轨）"
         elif boll_pct > 70:
-            boll_state = "偏高"
+            if is_overbought:
+                boll_state = "偏高（超买确认）"
+            else:
+                boll_state = "偏高"
         elif boll_pct < 10:
             boll_state = "极度超卖（触及下轨）"
         elif boll_pct < 30:
-            boll_state = "偏低"
+            if is_oversold:
+                boll_state = "偏低（超卖确认）"
+            else:
+                boll_state = "偏低"
+        elif boll_pct < 50:
+            # 30-50%区间，如果CCI/WR超卖，应该描述为偏低
+            if is_oversold:
+                boll_state = "偏低（超卖信号）"
+            else:
+                boll_state = "中下部"
+        elif boll_pct > 50 and boll_pct <= 70:
+            # 50-70%区间，如果CCI/WR超买，应该描述为偏高
+            if is_overbought:
+                boll_state = "偏高（超买信号）"
+            else:
+                boll_state = "中上部"
         else:
             boll_state = "中部"
 
@@ -1491,9 +3197,9 @@ class StockAnalyzer:
 
     def _generate_score_breakdown(self, scoring: Dict) -> List[str]:
         """
-        生成第三部分：量化评分与因子拆解（重构版）
+        生成第三部分：量化评分与因子拆解（右侧交易版）
 
-        新架构：最终评分 = 趋势得分 × 位置修正系数
+        评分公式：最终评分 = 趋势分 + 趋势确认加成 + 成交量加成
         """
         report = []
         report.append("## 第三部分：量化评分与因子拆解")
@@ -1502,15 +3208,16 @@ class StockAnalyzer:
         score = scoring.get('score', 0)
         score_grade = scoring.get('score_grade', 'N/A')
         trend_score = scoring.get('trend_score', score)
-        position_modifier = scoring.get('position_modifier', 1.0)
+        trend_bonus = scoring.get('trend_bonus', 0)
+        volume_bonus = scoring.get('volume_bonus', 0)
         factors_raw = scoring.get('factors_raw', {})
         factors_score = scoring.get('factors_score', {})
 
-        # 综合评分（展示计算公式）
+        # 综合评分
         report.append(f"### 📊 综合评分：{score:.1f} 分（{score_grade}）")
         report.append("")
-        report.append(f"> **计算公式**：最终评分 = 趋势得分 × 位置修正系数")
-        report.append(f"> `{trend_score:.1f} × {position_modifier:.2f} = {score:.1f}`")
+        report.append(f"> **计算公式**：趋势分 + 趋势加成 + 成交量加成")
+        report.append(f"> `{trend_score:.1f} + {trend_bonus:.1f} + {volume_bonus:.1f} = {score:.1f}`")
         report.append("")
 
         # 趋势得分分解
@@ -1519,70 +3226,34 @@ class StockAnalyzer:
         report.append("| 因子 | 权重 | 得分 | 说明 |")
         report.append("|------|------|------|------|")
 
-        # 新的因子定义（与 scoring_system.py TREND_FACTOR_WEIGHTS 一致）
         factor_info = {
-            'trend_strength': ('趋势强度', 0.20, '股价相对MA20位置，3-8%最佳'),
-            'ma_slope': ('均线斜率', 0.20, '斜率向上且陡峭为佳'),
-            'macd_momentum': ('MACD动量', 0.20, '柱状图扩大为佳'),
-            'money_flow': ('资金流向', 0.20, 'OBV持续流入为佳'),
-            'volume_ratio': ('成交量', 0.10, '温和放量1.2-2倍为佳'),
-            'candlestick_pattern': ('K线形态', 0.10, '位置敏感评分，低位看涨加分'),
+            'trend_strength': ('趋势强度', 0.30, '股价相对MA20位置'),
+            'ma_slope': ('均线斜率', 0.10, '斜率向上为佳'),
+            'macd_momentum': ('MACD动量', 0.30, '金叉/柱状图扩大'),
+            'money_flow': ('资金流向', 0.20, 'OBV持续流入'),
+            'volume_ratio': ('成交量', 0.10, '放量确认'),
         }
 
         for key, (name, weight, desc) in factor_info.items():
-            score_val = factors_score.get(key, 0)
-            # factors_score 已经是 0-100 的分数
+            score_val = factors_score.get(key, 50)
             report.append(f"| {name} | {weight*100:.0f}% | {score_val:.1f} | {desc} |")
 
         report.append("")
 
-        # 位置修正系数说明
-        report.append("### 📐 位置修正系数")
+        # 趋势确认加成说明
+        report.append("### 📈 趋势确认加成")
+        report.append("")
+        report.append("| 加成项 | 条件 | 加分 |")
+        report.append("|--------|------|------|")
+        report.append(f"| 多头排列 | MA5 > MA10 > MA20 | +10分 |")
+        report.append(f"| DMI趋势 | PDI > MDI 且 ADX > 25 | +5分 |")
+        report.append(f"| MACD确认 | DIF > DEA 且 DIF > 0 | +5分 |")
+        report.append(f"| 放量确认 | 成交量 > 1.5倍均量 | +3分 |")
+        report.append("")
+        report.append(f"**当前加成：** +{trend_bonus:.1f}分")
         report.append("")
 
-        # 修正系数分解展示
-        warnings = scoring.get('warnings', [])
-        if warnings and position_modifier < 1.0:
-            report.append("**系数分解：**")
-            report.append("")
-            report.append(f"- 基础系数：1.00")
-            for warning in warnings[:4]:  # 最多显示4个惩罚项
-                report.append(f"- {warning}")
-            report.append(f"- **最终系数：{position_modifier:.2f}**")
-            report.append("")
-
-        report.append(f"**当前修正系数：{position_modifier:.2f}**")
-        report.append("")
-
-        # 修正系数解读
-        if position_modifier >= 0.95:
-            risk_level = "🟢 安全区"
-            risk_desc = "入场位置安全，可正常操作"
-        elif position_modifier >= 0.75:
-            risk_level = "🟡 适中区"
-            risk_desc = "位置适中，需谨慎"
-        elif position_modifier >= 0.5:
-            risk_level = "🟠 警戒区"
-            risk_desc = "技术指标超买，风险增加"
-        else:
-            risk_level = "🔴 危险区"
-            risk_desc = "严重超买，不建议追高"
-
-        report.append(f"| 风险等级 | 修正系数 | 说明 |")
-        report.append(f"|----------|----------|------|")
-        report.append(f"| {risk_level} | {position_modifier:.2f} | {risk_desc} |")
-        report.append("")
-
-        # 修正系数参考表
-        report.append("| 位置状态 | 修正系数范围 | 典型触发条件 |")
-        report.append("|----------|--------------|--------------|")
-        report.append("| 🟢 安全区 | 0.95~1.00 | 布林中下轨，RSI 30-50 |")
-        report.append("| 🟡 适中区 | 0.75~0.95 | 布林中上轨，RSI 50-65 |")
-        report.append("| 🟠 警戒区 | 0.50~0.75 | 布林上轨附近，RSI 65-75 |")
-        report.append("| 🔴 危险区 | <0.50 | 布林上轨外，RSI>75，WR<10 |")
-        report.append("")
-
-        # 红黑榜（基于新因子，包含K线形态）
+        # 红黑榜
         report.append("### 🔴🟢 红黑榜")
         report.append("")
 
@@ -1592,14 +3263,12 @@ class StockAnalyzer:
             ('macd_momentum', 'MACD动量', factors_score.get('macd_momentum', 50)),
             ('money_flow', '资金流向', factors_score.get('money_flow', 50)),
             ('volume_ratio', '成交量', factors_score.get('volume_ratio', 50)),
-            ('candlestick_pattern', 'K线形态', factors_score.get('candlestick_pattern', 50)),
         ]
 
-        # 确保分数是百分制
         factor_scores_list = [(k, n, v*100 if v <= 1.0 else v) for k, n, v in factor_scores_list]
         factor_scores_list.sort(key=lambda x: x[2], reverse=True)
 
-        # 红榜（得分高的）
+        # 红榜
         strong_factors = [f for f in factor_scores_list if f[2] >= 70]
         if strong_factors:
             report.append("**🟢 核心支撑：**")
@@ -1607,7 +3276,7 @@ class StockAnalyzer:
                 report.append(f"- {name}（得分{val:.0f}分）")
             report.append("")
 
-        # 黑榜（得分低的）
+        # 黑榜
         weak_factors = [f for f in factor_scores_list if f[2] <= 40]
         if weak_factors:
             report.append("**🔴 主要拖累：**")
@@ -1840,7 +3509,20 @@ class StockAnalyzer:
 
         if is_extreme_risk:
             # 极端风险：不显示入场区间，显示风险提示
-            report.append("| ⚠️ 风险提示 | **当前不宜入场** | 指标严重超买，追高风险极高 |")
+            # 关键修复：根据实际风险类型显示不同的提示信息
+            is_oversold = position_info.get('is_oversold', False)
+            is_overbought = position_info.get('is_overbought', False)
+
+            if '熔断' in action_guide:
+                risk_desc = "触发熔断机制，形态信号强烈，建议回避"
+            elif is_overbought:
+                risk_desc = "指标严重超买，追高风险极高"
+            elif is_oversold and position_modifier < 0.5:
+                risk_desc = "下跌趋势风险，技术指标偏弱，抄底需谨慎"
+            else:
+                risk_desc = "风险较高，建议观望等待"
+
+            report.append(f"| ⚠️ 风险提示 | **当前不宜入场** | {risk_desc} |")
             report.append("")
             report.append(f"| 建议操作 | 观望/止盈 | 等待回调至安全区间 |")
             if ma20 > 0 and ma20 < close:
@@ -1981,12 +3663,23 @@ class StockAnalyzer:
                 'advice': '放弃或极小仓位试探，切勿重仓抄底'
             })
 
-        # 风险2：追高风险（位置危险）
-        if position_modifier < 0.5:
+        # 风险2：追高风险（位置危险 + 技术指标超买）- 关键修复：需要真正超买
+        # position_modifier低可能是因为下跌趋势风险，必须检查实际超买状态
+        is_extreme_overbought = position_info.get('is_extreme_overbought', False)
+        is_overbought = position_info.get('is_overbought', False)
+
+        if is_extreme_overbought and position_modifier < 0.5:
             high_risks.append({
                 'title': '追高被套',
                 'desc': '当前位置严重超买，技术指标处于极端高位。短期回调概率大，追高风险极高。',
                 'advice': '观望等待回调，或极小仓位试探'
+            })
+        elif position_modifier < 0.5 and not is_overbought:
+            # 修正系数低但不是超买，可能是下跌趋势风险
+            high_risks.append({
+                'title': '下跌趋势风险',
+                'desc': '当前处于下跌趋势中，技术指标偏弱。即使位置较低，也存在继续下跌风险。',
+                'advice': '观望为主，等待趋势企稳信号'
             })
 
         # ========== 中风险检测 ==========
@@ -2009,9 +3702,19 @@ class StockAnalyzer:
                 'advice': '等待放量确认后再入场'
             })
 
-        # 风险5：顶部背离风险（MACD背离）
+        # 风险5：顶部背离风险（MACD背离）- 关键修复：需要真正在高位
+        # position_modifier低可能是因为下跌趋势风险，而不是因为价格在高位
+        is_overbought = position_info.get('is_overbought', False)
+        boll_pctb = position_info.get('boll_pctb', 0.5)
+        wr = position_info.get('wr', 50)
+
+        # 真正的高位：布林带位置>70%或WR<30（超买）
+        is_price_high = boll_pctb > 0.7 or wr < 30 or is_overbought
+
+        # 获取MACD动量得分
         macd_momentum = factors_score.get('macd_momentum', 50)
-        if position_modifier < 0.7 and macd_momentum < 40:
+
+        if is_price_high and macd_momentum < 40:
             medium_risks.append({
                 'title': '顶部背离',
                 'desc': '价格处于高位但MACD动能减弱。存在顶背离可能，趋势可能反转。',
@@ -2079,8 +3782,742 @@ class StockAnalyzer:
         report.append("")
         return report
 
+    # ==================== 增强分析功能 ====================
 
-# Example usage
+    def analyze_stock_enhanced(
+        self,
+        symbol: str,
+        days: int = 360,
+        include_chip: bool = True,
+        include_talib_patterns: bool = True,
+        include_strategies: bool = True
+    ) -> str:
+        """
+        增强版股票分析 - 整合筹码分布、K线形态、策略信号
+
+        Args:
+            symbol: 股票代码
+            days: 分析天数
+            include_chip: 是否包含筹码分布分析
+            include_talib_patterns: 是否包含TA-Lib形态识别
+            include_strategies: 是否包含策略信号
+
+        Returns:
+            增强版分析报告
+        """
+        print(f"开始增强分析 {symbol}...")
+
+        # 获取股票数据
+        df = self.get_stock_data(symbol, days)
+        if df.empty:
+            return f"无法获取 {symbol} 的数据"
+
+        # 计算技术指标
+        df_with_indicators = self.calculate_technical_indicators(df)
+
+        # 运行交易策略（原有功能）
+        strategies_results = self.run_trading_strategies(df_with_indicators, symbol)
+
+        # 生成增强版报告
+        report = self.generate_enhanced_report(
+            df_with_indicators,
+            strategies_results,
+            symbol,
+            include_chip=include_chip,
+            include_talib_patterns=include_talib_patterns,
+            include_strategies=include_strategies
+        )
+
+        return report
+
+    def generate_enhanced_report(
+        self,
+        df: pd.DataFrame,
+        strategies_results: Dict,
+        symbol: str,
+        include_chip: bool = True,
+        include_talib_patterns: bool = True,
+        include_strategies: bool = True
+    ) -> str:
+        """
+        生成增强版分析报告
+
+        整合：
+        - 原有技术分析
+        - 筹码分布分析
+        - TA-Lib 61种K线形态
+        - 10种经典策略信号
+        """
+        if df.empty:
+            return "无数据可生成报告"
+
+        latest_data = df.iloc[-1]
+        report = []
+
+        # 基本信息
+        report.append(f"# 股票增强技术分析报告：{symbol}")
+        report.append("")
+        report.append(f"**分析日期：** {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        report.append(f"**分析周期：** {len(df)} 个交易日")
+        report.append("")
+
+        # ============ 第一部分：核心结论区 ============
+        scoring = strategies_results.get('scoring', {})
+        score = scoring.get('score', 50) if scoring and 'error' not in scoring else 50
+        position_modifier = scoring.get('position_modifier', 1.0) if scoring else 1.0
+
+        # 使用增强的位置判断
+        position_info = self._determine_position_status(latest_data, position_modifier)
+        position_info['price_ratio_display'] = position_info['price_ratio'] * 50
+
+        # 评分等级
+        if score >= 80:
+            rating = "🌟 优秀"
+            action = "积极关注"
+        elif score >= 65:
+            rating = "👍 良好"
+            action = "可以参与"
+        elif score >= 50:
+            rating = "➖ 中等"
+            action = "谨慎观望"
+        elif score >= 35:
+            rating = "⚠️ 偏弱"
+            action = "控制风险"
+        else:
+            rating = "❌ 较差"
+            action = "暂时回避"
+
+        report.append("## 📊 核心结论")
+        report.append("")
+        report.append("| 评分 | 等级 | 建议操作 |")
+        report.append("|------|------|----------|")
+        report.append(f"| **{score:.1f}分** | {rating} | {action} |")
+        report.append("")
+
+        # 位置状态
+        position_desc = {
+            'high': '高位区域',
+            'low': '低位区域',
+            'middle': '中位区域'
+        }.get(position_info.get('position', 'middle'), '中位区域')
+
+        report.append(f"**位置状态：** {position_desc}")
+
+        # 改进：区分"全面超买"和"短线偏热"
+        if position_info.get('is_extreme_overbought'):
+            report.append("- 🔴 全面超买，多个指标共振，注意回调风险")
+        elif position_info.get('is_overbought'):
+            report.append("- ⚠️ 技术超买，注意回调风险")
+        elif position_info.get('is_short_term_hot'):
+            # 新增：短线偏热但不是全面超买
+            wr = position_info.get('wr', 50)
+            report.append(f"- 📊 短线偏热（WR={wr:.0f}），但整体并非全面超买")
+
+        if position_info.get('is_extreme_oversold'):
+            report.append("- 🟢 全面超卖，多个指标共振，存在反弹机会")
+        elif position_info.get('is_oversold'):
+            report.append("- 📉 技术超卖，可能存在反弹机会")
+
+        # 显示均线乖离率信息
+        bias20 = position_info.get('bias20', 0)
+        if abs(bias20) > 0.01:
+            report.append(f"- 📈 MA20乖离率：{bias20*100:+.2f}%")
+        report.append("")
+
+        # ============ 第二部分：筹码分布分析 ============
+        if include_chip:
+            report.extend(self._generate_chip_distribution_section(df, latest_data))
+
+        # ============ 第三部分：K线形态分析 ============
+        if include_talib_patterns:
+            report.extend(self._generate_talib_patterns_section(df))
+
+        # ============ 第四部分：经典策略信号 ============
+        if include_strategies:
+            report.extend(self._generate_strategies_signals_section(df, symbol))
+
+        # ============ 第五部分：因子评分 ============
+        if scoring and 'error' not in scoring:
+            report.extend(self._generate_factor_groups_score(scoring, strategies_results))
+
+        # ============ 第六部分：交易计划 ============
+        report.extend(self._generate_trading_plan_enhanced(scoring, position_info, latest_data, df))
+
+        # ============ 附录：技术指标详情 ============
+        report.append("---")
+        report.append("")
+        report.append("## 📈 附录：技术指标详情")
+        report.append("")
+        report.extend(self._generate_indicators_table(latest_data, position_info))
+
+        report.append("")
+        report.append("> **免责声明：** 本分析仅供学习参考，不构成投资建议。投资决策应基于全面研究和独立判断。")
+        report.append("")
+
+        return "\n".join(report)
+
+    def _generate_chip_distribution_section(self, df: pd.DataFrame, latest_data: pd.Series) -> List[str]:
+        """生成筹码分布分析部分"""
+        report = []
+
+        try:
+            from quanttool.factors.chip_distribution import (
+                ChipDistributionCalculator,
+                get_chip_assessment
+            )
+
+            calculator = ChipDistributionCalculator(lookback_days=210)
+            result = calculator.calculate(df)
+
+            report.append("## 🎯 筹码分布分析")
+            report.append("")
+            report.append("| 指标 | 数值 | 解读 |")
+            report.append("|------|------|------|")
+            report.append(f"| 筹码集中度 | {result.concentration_ratio:.1f}% | {'高度集中' if result.concentration_ratio >= 70 else '较为集中' if result.concentration_ratio >= 50 else '分散'} |")
+            report.append(f"| 平均持仓成本 | ¥{result.avg_cost:.2f} | 主力成本参考 |")
+            report.append(f"| 获利盘比例 | {result.profit_ratio:.1f}% | {'获利盘较多' if result.profit_ratio > 70 else '获利盘适中' if result.profit_ratio > 30 else '获利盘较少'} |")
+            report.append(f"| 上方套牢压力 | {result.upper_pressure:.1f}% | {'压力大' if result.upper_pressure > 50 else '压力一般'} |")
+            report.append(f"| 下方支撑强度 | {result.lower_support:.1f}% | {'支撑强' if result.lower_support > 50 else '支撑一般'} |")
+            report.append(f"| 筹码评分 | {result.score:.1f}分 | {'优秀' if result.score >= 70 else '良好' if result.score >= 50 else '一般'} |")
+            report.append("")
+
+            # 支撑阻力位
+            if result.support_levels:
+                support_str = ', '.join([f'¥{p:.2f}' for p in result.support_levels[:3]])
+                report.append(f"**支撑位：** {support_str}")
+
+            if result.resistance_levels:
+                resistance_str = ', '.join([f'¥{p:.2f}' for p in result.resistance_levels[:3]])
+                report.append(f"**阻力位：** {resistance_str}")
+
+            if result.peak_prices:
+                peak_str = ', '.join([f'¥{p:.2f}' for p in result.peak_prices[:3]])
+                report.append(f"**筹码峰：** {peak_str}")
+
+            report.append("")
+
+            # 定性评估
+            assessment = get_chip_assessment(result)
+            report.append(f"**综合评估：** {assessment}")
+            report.append("")
+
+        except Exception as e:
+            report.append("## 🎯 筹码分布分析")
+            report.append("")
+            report.append(f"*筹码分布分析暂不可用：{str(e)}*")
+            report.append("")
+
+        return report
+
+    def _generate_talib_patterns_section(self, df: pd.DataFrame) -> List[str]:
+        """生成TA-Lib K线形态分析部分（改进版：区分最新和历史）"""
+        report = []
+
+        try:
+            from quanttool.factors.talib_patterns import (
+                TalibPatternRecognizer,
+                get_pattern_assessment,
+                TALIB_AVAILABLE
+            )
+
+            if not TALIB_AVAILABLE:
+                report.append("## 📊 K线形态分析（TA-Lib 61种）")
+                report.append("")
+                report.append("*TA-Lib 未安装，无法使用此功能。请执行：pip install TA-Lib*")
+                report.append("")
+                return report
+
+            recognizer = TalibPatternRecognizer()
+            result = recognizer.recognize_all(df, lookback=5)
+
+            report.append("## 📊 K线形态分析（TA-Lib 61种形态）")
+            report.append("")
+
+            if result.total_patterns == 0:
+                report.append("最近5个交易日未识别到明显K线形态。")
+                report.append("")
+                return report
+
+            # 按类型分组
+            bullish = [p for p in result.patterns if p.type == 'bullish']
+            bearish = [p for p in result.patterns if p.type == 'bearish']
+            neutral = [p for p in result.patterns if p.type == 'neutral']
+
+            # 区分最新形态和历史形态
+            all_dates = sorted(set(p.date for p in result.patterns if p.date), reverse=True)
+            latest_date = all_dates[0] if all_dates else None
+
+            latest_patterns = [p for p in result.patterns if p.date == latest_date] if latest_date else []
+            historical_patterns = [p for p in result.patterns if p.date != latest_date] if latest_date else result.patterns
+
+            # 形态统计（改进：明确说明统计范围）
+            report.append("**形态统计（最近5日扫描）：**")
+            report.append(f"- 看涨形态：{result.bullish_count}个（方向明确）")
+            report.append(f"- 看跌形态：{result.bearish_count}个（方向明确）")
+            report.append(f"- 中性形态：{result.neutral_count}个（如十字星、纺锤等）")
+            report.append(f"- 综合信号：{result.composite_signal:.1f}（仅统计方向明确形态）")
+            report.append("")
+
+            # 最新形态
+            if latest_patterns:
+                report.append(f"**🔥 最新形态（{latest_date}）：**")
+                report.append("")
+
+                latest_bullish = [p for p in latest_patterns if p.type == 'bullish']
+                latest_bearish = [p for p in latest_patterns if p.type == 'bearish']
+                latest_neutral = [p for p in latest_patterns if p.type == 'neutral']
+
+                if latest_bullish:
+                    report.append("📈 看涨：")
+                    for p in latest_bullish:
+                        report.append(f"  - **{p.name_cn}**（{p.strength}）")
+                if latest_bearish:
+                    report.append("📉 看跌：")
+                    for p in latest_bearish:
+                        report.append(f"  - **{p.name_cn}**（{p.strength}）")
+                if latest_neutral:
+                    report.append("➖ 中性：")
+                    for p in latest_neutral[:3]:
+                        report.append(f"  - **{p.name_cn}**（{p.strength}）")
+                report.append("")
+
+            # 历史形态
+            if historical_patterns:
+                report.append("**📅 历史命中形态：**")
+                report.append("")
+
+                hist_bullish = [p for p in historical_patterns if p.type == 'bullish']
+                hist_bearish = [p for p in historical_patterns if p.type == 'bearish']
+
+                if hist_bullish:
+                    report.append("📈 看涨：")
+                    for p in hist_bullish[:5]:
+                        date_str = p.date if p.date else "未知"
+                        report.append(f"  - **{p.name_cn}**（{date_str}）")
+                if hist_bearish:
+                    report.append("📉 看跌：")
+                    for p in hist_bearish[:5]:
+                        date_str = p.date if p.date else "未知"
+                        report.append(f"  - **{p.name_cn}**（{date_str}）")
+                report.append("")
+
+            # 综合评估
+            assessment = get_pattern_assessment(result)
+            report.append(f"**综合评估：** {assessment}")
+
+            # 说明
+            if bullish and bearish:
+                report.append("")
+                report.append("📌 **说明：** 最新形态对当日交易参考价值更高，历史形态反映近期市场状态。")
+
+            report.append("")
+
+        except Exception as e:
+            report.append("## 📊 K线形态分析（TA-Lib）")
+            report.append("")
+            report.append(f"*K线形态分析出错：{str(e)}*")
+            report.append("")
+
+        return report
+
+    def _generate_strategies_signals_section(self, df: pd.DataFrame, symbol: str = None) -> List[str]:
+        """生成经典策略信号部分（展示所有10个策略）"""
+        report = []
+
+        try:
+            from quanttool.strategies.classic_strategies import (
+                VolumeBreakoutStrategy,
+                MADAlignmentStrategy,
+                PlatformBreakoutStrategy,
+                NoLargeDrawdownStrategy,
+                YearLinePullbackStrategy,
+                ApronStrategy,
+                HighNarrowFlagStrategy,
+                VolumeLimitDownStrategy,
+                LowATRGrowthStrategy,
+                FundamentalSelectionStrategy,
+            )
+
+            report.append("## 📋 经典策略信号")
+            report.append("")
+            report.append("| 策略名称 | 最新信号 | 信号说明 |")
+            report.append("|----------|----------|----------|")
+
+            # 所有10个策略
+            strategies = [
+                ("放量上涨", VolumeBreakoutStrategy()),
+                ("均线多头", MADAlignmentStrategy()),
+                ("突破平台", PlatformBreakoutStrategy()),
+                ("无大幅回撤", NoLargeDrawdownStrategy()),
+                ("回踩年线", YearLinePullbackStrategy()),
+                ("停机坪", ApronStrategy()),
+                ("高而窄旗形", HighNarrowFlagStrategy()),
+                ("放量跌停", VolumeLimitDownStrategy()),
+                ("低ATR成长", LowATRGrowthStrategy()),
+                ("基本面选股", FundamentalSelectionStrategy()),
+            ]
+
+            buy_signals = 0
+            sell_signals = 0
+            hold_signals = 0
+
+            for name, strategy in strategies:
+                # 为基本面策略传递股票代码
+                if name == "基本面选股" and symbol:
+                    strategy.initialize({'symbol': symbol})
+                else:
+                    strategy.initialize({})
+
+                try:
+                    signal = strategy.get_signal(df.iloc[-1], df)
+                    direction = signal.get('direction', 'hold')
+                    reason = signal.get('reason', '')
+
+                    if direction == 'buy':
+                        signal_display = '🟢 买入'
+                        buy_signals += 1
+                    elif direction == 'sell':
+                        signal_display = '🔴 卖出'
+                        sell_signals += 1
+                    else:
+                        signal_display = '➖ 持有'
+                        hold_signals += 1
+
+                    # 简化信号说明
+                    if reason == 'no_signal':
+                        reason_desc = "未触发"
+                    elif reason == 'insufficient_data':
+                        reason_desc = "数据不足"
+                    elif reason == 'requires_fundamental_data':
+                        reason_desc = "需基本面数据"
+                    else:
+                        reason_desc = reason
+
+                    report.append(f"| {name} | {signal_display} | {reason_desc} |")
+
+                except Exception as e:
+                    report.append(f"| {name} | ⚠️ 错误 | {str(e)[:20]} |")
+                    hold_signals += 1
+
+            report.append("")
+
+            # 策略信号汇总
+            total = len(strategies)
+            report.append("**策略信号汇总：**")
+            report.append(f"- 买入信号：{buy_signals}个")
+            report.append(f"- 卖出信号：{sell_signals}个")
+            report.append(f"- 持有/观望：{hold_signals}个")
+
+            if buy_signals >= 5:
+                report.append("- 🚀 **多策略共振看多**")
+            elif sell_signals >= 5:
+                report.append("- ⚠️ **多策略共振看空**")
+            elif buy_signals >= 3:
+                report.append(f"- 📈 {buy_signals}个买入信号，偏多格局")
+            elif sell_signals >= 3:
+                report.append(f"- 📉 {sell_signals}个卖出信号，偏空格局")
+            elif buy_signals == sell_signals and buy_signals > 0:
+                report.append("- ➖ 多空均衡，观望为主")
+            elif buy_signals > 0:
+                report.append(f"- 📊 {buy_signals}个买入信号，信号较弱")
+            elif sell_signals > 0:
+                report.append(f"- 📊 {sell_signals}个卖出信号，信号较弱")
+            else:
+                report.append("- ➖ 所有策略观望，无明显方向")
+
+            report.append("")
+
+        except Exception as e:
+            report.append("## 📋 经典策略信号")
+            report.append("")
+            report.append(f"*策略信号分析出错：{str(e)}*")
+            report.append("")
+
+        return report
+
+    def _generate_trading_plan_enhanced(
+        self,
+        scoring: Dict,
+        position_info: Dict,
+        latest_data: pd.Series,
+        df: pd.DataFrame
+    ) -> List[str]:
+        """生成增强版交易计划（改进：根据具体情况给出精细建议）"""
+        report = []
+
+        report.append("## 📝 交易计划建议")
+        report.append("")
+
+        score = scoring.get('score', 50) if scoring else 50
+        position_modifier = scoring.get('position_modifier', 1.0) if scoring else 1.0
+        close = latest_data.get('close', 0)
+        ma20 = latest_data.get('ma_20', 0)
+        ma50 = latest_data.get('ma_50', 0)
+        boll_lower = latest_data.get('boll_lower', 0)
+
+        # 获取位置和趋势信息
+        position = position_info.get('position', 'middle')
+        is_overbought = position_info.get('is_overbought', False)
+        is_oversold = position_info.get('is_oversold', False)
+        warnings = scoring.get('warnings', []) if scoring else []
+
+        # 判断趋势方向
+        is_downtrend = ma20 < ma50 and close < ma20
+        is_uptrend = ma20 > ma50 and close > ma20
+
+        # 根据评分、位置、趋势综合给出建议
+        if score >= 70:
+            report.append("**操作建议：** 🟢 积极关注")
+            report.append(f"- 入场参考：突破前高或回踩MA20（¥{ma20:.2f}）")
+            report.append(f"- 止损位：¥{boll_lower:.2f}（布林带下轨）")
+            report.append("- 仓位建议：可适当加仓")
+        elif score >= 55:
+            report.append("**操作建议：** 🟡 可以参与")
+            report.append(f"- 入场参考：等待确认信号")
+            report.append(f"- 止损位：¥{boll_lower:.2f}")
+            report.append("- 仓位建议：正常仓位")
+        elif score >= 40:
+            report.append("**操作建议：** 🟠 谨慎观望")
+            # 改进：根据具体情况给出建议
+            if is_downtrend:
+                report.append("- 中期趋势未转强，等待均线修复")
+                report.append(f"- 关注MA20（¥{ma20:.2f}）能否有效突破")
+            else:
+                report.append("- 等待更明确的信号")
+            report.append("- 仓位建议：轻仓或观望")
+        else:
+            # 改进：区分"评分低但可观察"和"评分低需回避"
+            if is_downtrend and not is_oversold:
+                report.append("**操作建议：** 🔴 暂时回避")
+                report.append("- 中期趋势偏弱，不建议主动入场")
+                report.append("- 若后续放量突破关键阻力，再考虑转积极")
+            elif is_oversold:
+                report.append("**操作建议：** 🟡 观察等待")
+                report.append("- 技术面偏弱但已超卖，关注企稳信号")
+                report.append(f"- 若放量站稳关键支撑，可轻仓试多")
+            else:
+                report.append("**操作建议：** 🟠 暂不入场")
+                report.append("- 技术面偏弱，风险收益比不足")
+                report.append("- 等待趋势或位置改善")
+
+        report.append("")
+
+        # 持仓者建议（改进：更精细）
+        report.append("**已持仓者建议：**")
+        if score >= 55:
+            report.append("- 可继续持有，关注趋势是否延续")
+        elif score >= 40:
+            report.append(f"- 观察关键支撑位（如¥{boll_lower:.2f}）是否有效")
+            report.append("- 跌破关键支撑再考虑减仓")
+        else:
+            if is_downtrend:
+                report.append("- 建议减仓或止损，等待趋势修复")
+            elif is_oversold:
+                report.append("- 观察是否出现企稳反弹信号")
+                report.append("- 若继续破位，再考虑止损")
+            else:
+                report.append("- 建议减仓，等待更好的入场时机")
+
+        report.append("")
+
+        # 风险提示（改进：更具体）
+        if is_overbought:
+            report.append("⚠️ **风险提示：** 技术指标超买，短期回调风险较高")
+        if is_oversold:
+            report.append("📉 **机会提示：** 技术指标超卖，关注企稳反弹信号")
+
+        # 显示主要警告
+        if warnings:
+            critical_warnings = [w for w in warnings if '⚠️' in w or '🔴' in w or '风险' in w]
+            if critical_warnings:
+                report.append("")
+                report.append("**关键风险：**")
+                for w in critical_warnings[:2]:
+                    report.append(f"- {w}")
+
+        report.append("")
+
+        return report
+
+    def _generate_indicators_table(self, latest_data: pd.Series, position_info: Dict) -> List[str]:
+        """生成技术指标表格（扩展版：包含所有用到的指标）"""
+        report = []
+
+        report.append("| 指标 | 数值 | 状态/解读 |")
+        report.append("|------|------|----------|")
+
+        close = latest_data.get('close', 0)
+
+        # ============ 趋势指标 ============
+        # 均线系统
+        ma5 = latest_data.get('ma_5', 0)
+        ma10 = latest_data.get('ma_10', 0)
+        ma20 = latest_data.get('ma_20', 0)
+        ma50 = latest_data.get('ma_50', 0)
+        ma100 = latest_data.get('ma_100', 0)
+
+        if ma20 > ma50:
+            ma_status = "多头排列"
+        elif ma20 < ma50:
+            ma_status = "空头排列"
+        else:
+            ma_status = "震荡"
+        report.append(f"| **均线系统** | MA5:¥{ma5:.2f} MA10:¥{ma10:.2f} MA20:¥{ma20:.2f} MA50:¥{ma50:.2f} | {ma_status} |")
+
+        # BIAS 乖离率
+        bias6 = latest_data.get('bias_6', 0)
+        bias12 = latest_data.get('bias_12', 0)
+        bias24 = latest_data.get('bias_24', 0)
+        bias20 = (close / ma20 - 1) * 100 if ma20 > 0 else 0
+        if abs(bias20) > 8:
+            bias_status = "极端偏离"
+        elif abs(bias20) > 5:
+            bias_status = "偏离较大"
+        else:
+            bias_status = "正常区间"
+        report.append(f"| BIAS乖离率 | BIAS6:{bias6:.2f}% BIAS12:{bias12:.2f}% BIAS20:{bias20:.2f}% | {bias_status} |")
+
+        # MACD
+        macd_val = latest_data.get('macd', 0)
+        macd_signal = latest_data.get('macd_signal', 0)
+        macd_hist = latest_data.get('macd_hist', 0)
+        if macd_val > 0 and macd_hist > 0:
+            macd_desc = "多头增强"
+        elif macd_val > 0:
+            macd_desc = "多头减弱"
+        elif macd_val < 0 and macd_hist < 0:
+            macd_desc = "空头增强"
+        else:
+            macd_desc = "空头减弱"
+        report.append(f"| MACD | DIF:{macd_val:.4f} DEA:{macd_signal:.4f} 柱:{macd_hist:.4f} | {macd_desc} |")
+
+        # DMI趋势指标
+        pdi = latest_data.get('dmi_pdi', latest_data.get('pdi', 0))
+        mdi = latest_data.get('dmi_mdi', latest_data.get('mdi', 0))
+        adx = latest_data.get('dmi_adx', latest_data.get('adx', 0))
+        dmi_diff = abs(pdi - mdi)
+        if adx > 25:
+            if dmi_diff > 0.5:
+                dmi_desc = f"趋势强({'上涨' if pdi > mdi else '下跌'})"
+            else:
+                dmi_desc = "趋势强但多空平衡"
+        elif adx > 20:
+            dmi_desc = "趋势中等"
+        else:
+            dmi_desc = "趋势弱/震荡"
+        report.append(f"| DMI趋势 | PDI:{pdi:.1f} MDI:{mdi:.1f} ADX:{adx:.1f} | {dmi_desc} |")
+
+        # ============ 动能指标 ============
+        # RSI
+        rsi_val = latest_data.get('rsi_24', 50)
+        if rsi_val > 80:
+            rsi_desc = "严重超买"
+        elif rsi_val > 70:
+            rsi_desc = "超买区"
+        elif rsi_val < 20:
+            rsi_desc = "严重超卖"
+        elif rsi_val < 30:
+            rsi_desc = "超卖区"
+        else:
+            rsi_desc = "中性"
+        report.append(f"| RSI(24) | {rsi_val:.2f} | {rsi_desc} |")
+
+        # KDJ
+        k = latest_data.get('kdj_k', 50)
+        d = latest_data.get('kdj_d', 50)
+        j = latest_data.get('kdj_j', 50)
+        if j > 100:
+            kdj_desc = "严重超买"
+        elif j > 80:
+            kdj_desc = "超买"
+        elif j < 0:
+            kdj_desc = "严重超卖"
+        elif j < 20:
+            kdj_desc = "超卖"
+        else:
+            kdj_desc = "正常"
+        report.append(f"| KDJ | K:{k:.1f} D:{d:.1f} J:{j:.1f} | {kdj_desc} |")
+
+        # WR威廉指标
+        wr = latest_data.get('wr_14', latest_data.get('wr', 50))
+        if wr < 10:
+            wr_desc = "严重超买"
+        elif wr < 20:
+            wr_desc = "超买"
+        elif wr > 90:
+            wr_desc = "严重超卖"
+        elif wr > 80:
+            wr_desc = "超卖"
+        else:
+            wr_desc = "正常"
+        report.append(f"| WR(14) | {wr:.2f} | {wr_desc} |")
+
+        # CCI顺势指标
+        cci = latest_data.get('cci', 0)
+        if cci > 100:
+            cci_desc = "超买/上涨趋势"
+        elif cci < -100:
+            cci_desc = "超卖/下跌趋势"
+        else:
+            cci_desc = "震荡区间"
+        report.append(f"| CCI | {cci:.2f} | {cci_desc} |")
+
+        # ============ 波动指标 ============
+        # 布林带
+        boll_upper = latest_data.get('boll_upper', close)
+        boll_mid = latest_data.get('boll_mid', close)
+        boll_lower = latest_data.get('boll_lower', close)
+        boll_pct = (close - boll_lower) / (boll_upper - boll_lower) if boll_upper != boll_lower else 0.5
+        boll_width = (boll_upper - boll_lower) / boll_mid * 100 if boll_mid > 0 else 0
+        if boll_pct > 0.9:
+            boll_desc = f"上轨附近(超买) 带宽{boll_width:.1f}%"
+        elif boll_pct < 0.1:
+            boll_desc = f"下轨附近(超卖) 带宽{boll_width:.1f}%"
+        else:
+            boll_desc = f"位置{boll_pct*100:.0f}% 带宽{boll_width:.1f}%"
+        report.append(f"| 布林带 | 上:¥{boll_upper:.2f} 中:¥{boll_mid:.2f} 下:¥{boll_lower:.2f} | {boll_desc} |")
+
+        # ATR真实波幅
+        atr = latest_data.get('atr_14', 0)
+        atr_pct = atr / close * 100 if close > 0 else 0
+        if atr_pct < 1.5:
+            atr_desc = "低波动(可能变盘)"
+        elif atr_pct > 4:
+            atr_desc = "高波动"
+        else:
+            atr_desc = "正常波动"
+        report.append(f"| ATR(14) | ¥{atr:.3f} ({atr_pct:.2f}%) | {atr_desc} |")
+
+        # ============ 成交量指标 ============
+        # 成交量
+        volume = latest_data.get('volume', 0)
+        vol_ma5 = latest_data.get('vol_ma5', volume)
+        vol_ma20 = latest_data.get('vol_ma20', volume)
+        vol_ratio = volume / vol_ma5 if vol_ma5 > 0 else 1.0
+        if vol_ratio > 2:
+            vol_desc = f"放量({vol_ratio:.1f}倍)"
+        elif vol_ratio < 0.5:
+            vol_desc = f"缩量({vol_ratio:.1f}倍)"
+        else:
+            vol_desc = f"量比{vol_ratio:.2f}"
+        report.append(f"| 成交量 | {volume/10000:.0f}手 MA5:{vol_ma5/10000:.0f} MA20:{vol_ma20/10000:.0f} | {vol_desc} |")
+
+        # OBV能量潮
+        obv = latest_data.get('obv', 0)
+        obv_ma = latest_data.get('obv_ma', obv)
+        obv_desc = "资金流入" if obv > obv_ma else "资金流出"
+        report.append(f"| OBV | {obv/10000:.1f}万 MA:{obv_ma/10000:.1f}万 | {obv_desc} |")
+
+        # ============ 价格信息 ============
+        report.append(f"| 当日价格 | 开:¥{latest_data.get('open', 0):.2f} 高:¥{latest_data.get('high', 0):.2f} 低:¥{latest_data.get('low', 0):.2f} 收:¥{close:.2f} | - |")
+
+        report.append("")
+
+        return report
+
+        report.append("")
+
+        return report
 if __name__ == "__main__":
     analyzer = StockAnalyzer()
 

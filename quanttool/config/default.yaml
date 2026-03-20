@@ -50,6 +50,23 @@ storage:
   runs_dir: "./runs"
   reports_dir: "./reports"
 
+# Notification settings
+notification:
+  # WeChat notification via Serverchan (https://sct.ftqq.com/)
+  wechat:
+    enabled: false
+    sendkey: ${SERVERCHAN_SENDKEY}
+  # Email notification via SMTP
+  email:
+    enabled: false
+    smtp_server: ${SMTP_SERVER}
+    smtp_port: 465
+    username: ${SMTP_USERNAME}
+    password: ${SMTP_PASSWORD}
+    to_emails: []
+    from_name: "QuantTool"
+    use_ssl: true
+
 # Logging settings
 logging:
   level: "INFO"

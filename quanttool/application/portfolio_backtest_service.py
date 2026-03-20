@@ -10,6 +10,7 @@ import numpy as np
 
 from quanttool.infrastructure.stores.meta_db import MetaDB
 from quanttool.infrastructure.data_providers.data_fetcher import EnhancedDataFetcher
+from quanttool.infrastructure.data_providers.incremental_data_manager import IncrementalDataManager, DataType
 from quanttool.core.logging import get_logger
 
 
@@ -35,9 +36,65 @@ class PortfolioBacktestService:
         self,
         db_path: str = "./quanttool.db",
         data_fetcher: Optional[EnhancedDataFetcher] = None,
+        use_incremental: bool = True,
     ):
         self.db = MetaDB(db_path)
         self.data_fetcher = data_fetcher or EnhancedDataFetcher()
+        self.use_incremental = use_incremental
+
+        # 增量数据管理器
+        self._incremental_manager: Optional[IncrementalDataManager] = None
+        if use_incremental:
+            try:
+                self._incremental_manager = IncrementalDataManager()
+            except Exception as e:
+                logger.warning(f"增量数据管理器初始化失败: {e}")
+                self._incremental_manager = None
+
+    def _get_stock_data(
+        self,
+        symbol: str,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> Optional[pd.DataFrame]:
+        """
+        获取股票数据（优先使用增量数据管理器）
+
+        Args:
+            symbol: 股票代码
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            DataFrame 或 None
+        """
+        # 优先使用增量数据管理器
+        if self._incremental_manager:
+            try:
+                df = self._incremental_manager.get_data(
+                    symbol,
+                    start_date,
+                    end_date,
+                    self.data_fetcher,
+                    data_type=DataType.STOCK_BAR,
+                )
+                if df is not None and not df.empty:
+                    return df
+            except Exception as e:
+                logger.warning(f"增量获取失败 {symbol}: {e}，回退到直接获取")
+
+        # 回退到直接获取
+        try:
+            df_dict = self.data_fetcher.get_bars(
+                [symbol],
+                start_date=start_date.strftime("%Y-%m-%d"),
+                end_date=end_date.strftime("%Y-%m-%d"),
+                timeframe="1d"
+            )
+            return df_dict.get(symbol, pd.DataFrame())
+        except Exception as e:
+            logger.error(f"获取数据失败 {symbol}: {e}")
+            return None
 
     def create_portfolio_from_scan(
         self,
@@ -169,18 +226,15 @@ class PortfolioBacktestService:
             # Get current price
             try:
                 # Get data up to the target date
-                end_date = date_str
-                start_date = (date - timedelta(days=30)).strftime("%Y-%m-%d")
+                end_date_dt = date
+                start_date_dt = date - timedelta(days=30)
 
-                df_dict = self.data_fetcher.get_bars(
-                    [symbol], start_date=start_date, end_date=end_date, timeframe="1d"
-                )
+                df = self._get_stock_data(symbol, start_date_dt, end_date_dt)
 
-                if symbol not in df_dict or df_dict[symbol].empty:
+                if df is None or df.empty:
                     logger.warning(f"No data for {symbol} on {date_str}")
                     continue
 
-                df = df_dict[symbol]
                 # Get the last available price up to target date
                 mask = df.index <= pd.Timestamp(date)
                 if not mask.any():
@@ -308,18 +362,15 @@ class PortfolioBacktestService:
 
             try:
                 # Get exit price
-                end_date = exit_date_str
-                start_date = (exit_date - timedelta(days=30)).strftime("%Y-%m-%d")
+                end_date_dt = exit_date
+                start_date_dt = exit_date - timedelta(days=30)
 
-                df_dict = self.data_fetcher.get_bars(
-                    [symbol], start_date=start_date, end_date=end_date, timeframe="1d"
-                )
+                df = self._get_stock_data(symbol, start_date_dt, end_date_dt)
 
-                if symbol not in df_dict or df_dict[symbol].empty:
+                if df is None or df.empty:
                     logger.warning(f"No data for {symbol} on {exit_date_str}")
                     continue
 
-                df = df_dict[symbol]
                 mask = df.index <= pd.Timestamp(exit_date)
                 if not mask.any():
                     continue
