@@ -1576,10 +1576,10 @@ async def get_stock_risk(symbol: str, days: int = 250) -> Dict[str, Any]:
         days: 计算周期（天数）
     """
     try:
-        from quanttool.infrastructure.data_providers.data_fetcher import DataFetcher
+        from quanttool.infrastructure.data_providers.data_fetcher import EnhancedDataFetcher
         import numpy as np
 
-        fetcher = DataFetcher()
+        fetcher = EnhancedDataFetcher()
         df_dict = fetcher.get_bars([symbol], datetime.now() - timedelta(days=days * 2), datetime.now(), '1d')
 
         if symbol not in df_dict or df_dict[symbol].empty:
@@ -1701,8 +1701,8 @@ async def get_stock_feasibility(symbol: str) -> Dict[str, Any]:
         constraints = ASShareConstraints()
 
         # 获取实时行情
-        from quanttool.infrastructure.data_providers.data_fetcher import DataFetcher
-        fetcher = DataFetcher()
+        from quanttool.infrastructure.data_providers.data_fetcher import EnhancedDataFetcher
+        fetcher = EnhancedDataFetcher()
 
         try:
             quote = fetcher.get_realtime_quote(symbol)
@@ -1779,14 +1779,14 @@ async def get_stock_backtest_compare(symbol: str, days: int = 250) -> Dict[str, 
         days: 回测周期（天数）
     """
     try:
-        from quanttool.infrastructure.data_providers.data_fetcher import DataFetcher
+        from quanttool.infrastructure.data_providers.data_fetcher import EnhancedDataFetcher
         from quanttool.strategies.ma_cross import MACrossStrategy
         from quanttool.strategies.rsi import RSIStrategy
-        from quanttool.strategies.bollinger import BollingerStrategy
+        from quanttool.strategies.bollinger import BollingerBandStrategy
         from quanttool.backtest.engine import BacktestEngine
         import numpy as np
 
-        fetcher = DataFetcher()
+        fetcher = EnhancedDataFetcher()
         df_dict = fetcher.get_bars([symbol], datetime.now() - timedelta(days=days * 2), datetime.now(), '1d')
 
         if symbol not in df_dict or df_dict[symbol].empty:
@@ -1803,7 +1803,7 @@ async def get_stock_backtest_compare(symbol: str, days: int = 250) -> Dict[str, 
         strategies_config = [
             ("MA金叉策略", MACrossStrategy, {"short_window": 5, "long_window": 20}),
             ("RSI策略", RSIStrategy, {"rsi_period": 14, "oversold": 30, "overbought": 70}),
-            ("布林带策略", BollingerStrategy, {"period": 20, "std_dev": 2}),
+            ("布林带策略", BollingerBandStrategy, {"period": 20, "std_dev": 2}),
         ]
 
         for strategy_name, strategy_class, params in strategies_config:

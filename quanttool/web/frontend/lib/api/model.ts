@@ -1,4 +1,4 @@
-import api from '../api';
+import { api } from './index';
 import type { TrainParams, ModelInfo, PredictionResult, TrainingProgress, ApiModelInfo } from '@/types/model';
 
 // 将 API 返回的模型数据转换为前端格式
