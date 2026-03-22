@@ -225,14 +225,12 @@ export default function AnalyzePage() {
 
   const tabs: { key: TabType; label: string; icon: string }[] = [
     { key: 'overview', label: '概览', icon: '📊' },
-    { key: 'factors', label: '因子评分', icon: '🎯' },
     { key: 'kline', label: 'K线图', icon: '📈' },
     { key: 'indicators', label: '技术指标', icon: '📉' },
     { key: 'chip', label: '筹码分布', icon: '🎲' },
     { key: 'flow', label: '资金流向', icon: '💰' },
     { key: 'risk', label: '风险评估', icon: '⚠️' },
     { key: 'backtest', label: '回测对比', icon: '🔄' },
-    { key: 'signals', label: '交易信号', icon: '📡' },
   ];
 
   return (
@@ -459,6 +457,13 @@ export default function AnalyzePage() {
                     </Card>
                   </div>
                 </div>
+
+                {/* 前往因子研究 */}
+                <div className="flex justify-center">
+                  <Button variant="secondary" onClick={() => window.location.href = '/factors'}>
+                    详细因子分析
+                  </Button>
+                </div>
               </div>
             )}
 
@@ -566,114 +571,6 @@ export default function AnalyzePage() {
               </div>
             )}
 
-            {activeTab === 'factors' && (
-              <div className="space-y-6">
-                {/* 因子评分详情 */}
-                <Card title="因子评分">
-                  {factorScores ? (
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                      <div className="text-center p-4 bg-gray-50 rounded-lg">
-                        <div className="text-3xl font-bold text-primary">{factorScores.momentum}</div>
-                        <div className="text-text-muted text-sm mt-1">动量因子</div>
-                      </div>
-                      <div className="text-center p-4 bg-gray-50 rounded-lg">
-                        <div className="text-3xl font-bold text-success">{factorScores.value}</div>
-                        <div className="text-text-muted text-sm mt-1">价值因子</div>
-                      </div>
-                      <div className="text-center p-4 bg-gray-50 rounded-lg">
-                        <div className="text-3xl font-bold text-warning">{factorScores.quality}</div>
-                        <div className="text-text-muted text-sm mt-1">质量因子</div>
-                      </div>
-                      <div className="text-center p-4 bg-gray-50 rounded-lg">
-                        <div className="text-3xl font-bold text-info">{factorScores.growth}</div>
-                        <div className="text-text-muted text-sm mt-1">成长因子</div>
-                      </div>
-                      <div className="text-center p-4 bg-primary/10 rounded-lg border-2 border-primary">
-                        <div className="text-3xl font-bold text-primary">{factorScores.overall}</div>
-                        <div className="text-text-muted text-sm mt-1">综合评分</div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-center py-10 text-text-muted">暂无因子数据</div>
-                  )}
-                </Card>
-
-                {/* 交易可行性 */}
-                <Card title="交易可行性检查">
-                  {tradingFeasibility ? (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className={`p-4 rounded-lg ${tradingFeasibility.can_buy ? 'bg-green-50' : 'bg-red-50'}`}>
-                          <div className="text-lg font-bold mb-1">买入</div>
-                          <Badge variant={tradingFeasibility.can_buy ? 'success' : 'danger'}>
-                            {tradingFeasibility.can_buy ? '允许' : '禁止'}
-                          </Badge>
-                        </div>
-                        <div className={`p-4 rounded-lg ${tradingFeasibility.can_sell ? 'bg-green-50' : 'bg-red-50'}`}>
-                          <div className="text-lg font-bold mb-1">卖出</div>
-                          <Badge variant={tradingFeasibility.can_sell ? 'success' : 'danger'}>
-                            {tradingFeasibility.can_sell ? '允许' : '禁止'}
-                          </Badge>
-                        </div>
-                        <div className="p-4 rounded-lg bg-gray-50">
-                          <div className="text-lg font-bold mb-1">涨跌停状态</div>
-                          <Badge variant={
-                            tradingFeasibility.limit_status === 'limit_up' ? 'success' :
-                            tradingFeasibility.limit_status === 'limit_down' ? 'danger' : 'default'
-                          }>
-                            {tradingFeasibility.limit_status === 'normal' ? '正常' :
-                             tradingFeasibility.limit_status === 'limit_up' ? '涨停' : '跌停'}
-                          </Badge>
-                        </div>
-                        <div className="p-4 rounded-lg bg-gray-50">
-                          <div className="text-lg font-bold mb-1">ST标识</div>
-                          <Badge variant={tradingFeasibility.is_st ? 'danger' : 'success'}>
-                            {tradingFeasibility.is_st ? 'ST股' : '正常'}
-                          </Badge>
-                        </div>
-                      </div>
-
-                      {/* 交易成本估算 */}
-                      <div className="mt-4 p-4 bg-gray-50 rounded-lg">
-                        <h4 className="font-semibold mb-2">交易成本估算</h4>
-                        <div className="grid grid-cols-2 gap-4 text-sm">
-                          <div>
-                            <span className="text-text-muted">预计滑点：</span>
-                            <span className="font-medium">{formatPercent(tradingFeasibility.slippage_rate)}</span>
-                          </div>
-                          <div>
-                            <span className="text-text-muted">佣金费率：</span>
-                            <span className="font-medium">{formatPercent(tradingFeasibility.commission_rate)}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 原因说明 */}
-                      {tradingFeasibility.reason && (
-                        <div className="p-4 bg-yellow-50 rounded-lg">
-                          <div className="text-yellow-800">{tradingFeasibility.reason}</div>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-center py-10 text-text-muted">暂无交易可行性数据</div>
-                  )}
-                </Card>
-
-                {/* 前往因子研究页面 */}
-                <div className="text-center">
-                  <Button variant="secondary" onClick={() => window.location.href = '/factors'}>
-                    详细因子分析
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'signals' && analysis && (
-              <Card title="交易信号">
-                <SignalPanel signals={analysis.signals} />
-              </Card>
-            )}
           </>
         )}
       </div>

@@ -644,13 +644,15 @@ async def analyze_stock_enhanced(request: EnhancedAnalyzeRequest) -> Dict[str, A
             except Exception as e:
                 logger.warning(f"筹码分布计算失败: {e}")
 
-        # 5. 生成分析报告
+        # 5. 生成分析报告（传递预计算数据避免重复获取）
         report = analyzer.analyze_stock_enhanced(
             request.symbol,
             request.days,
             include_chip=request.include_chip,
             include_talib_patterns=request.include_patterns,
-            include_strategies=request.include_strategies
+            include_strategies=request.include_strategies,
+            precomputed_data={'df': df, 'df_with_indicators': df_with_indicators},
+            fast_mode=True  # 快速模式，跳过耗时的市场检测和趋势评分
         )
 
         return {

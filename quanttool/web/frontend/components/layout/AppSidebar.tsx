@@ -5,11 +5,11 @@ import { useAppStore } from '@/stores/useAppStore';
 import { cn } from '@/lib/utils';
 import { formatDate } from '@/lib/utils';
 
-const sidebarItems = [
+const coreItems = [
   {
-    key: 'factors',
-    label: '因子研究',
-    href: '/factors',
+    key: 'analyze',
+    label: '股票分析',
+    href: '/analyze',
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
@@ -17,15 +17,39 @@ const sidebarItems = [
     ),
   },
   {
-    key: 'risk',
-    label: '组合风控',
-    href: '/risk',
+    key: 'backtest',
+    label: '策略回测',
+    href: '/backtest',
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
       </svg>
     ),
   },
+  {
+    key: 'monitor',
+    label: '实时监控',
+    href: '/monitor',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+      </svg>
+    ),
+  },
+  {
+    key: 'model',
+    label: 'ML模型',
+    href: '/model',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+      </svg>
+    ),
+  },
+];
+
+const smartItems = [
   {
     key: 'scan',
     label: '智能选股',
@@ -46,6 +70,26 @@ const sidebarItems = [
       </svg>
     ),
   },
+  {
+    key: 'factors',
+    label: '因子研究',
+    href: '/factors',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+      </svg>
+    ),
+  },
+  {
+    key: 'risk',
+    label: '组合风控',
+    href: '/risk',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+      </svg>
+    ),
+  },
 ];
 
 export default function AppSidebar() {
@@ -61,36 +105,61 @@ export default function AppSidebar() {
         sidebarCollapsed ? 'w-16' : 'w-56'
       )}
     >
-      {/* Quick Access */}
-      <div className="p-3">
-        <h3
-          className={cn(
-            'text-xs font-medium text-text-muted uppercase tracking-wider mb-2',
-            sidebarCollapsed && 'hidden'
-          )}
-        >
-          快速入口
-        </h3>
-        <nav className="space-y-1">
-          {sidebarItems.map((item) => (
-            <Link
-              key={item.key}
-              href={item.href}
-              onClick={() => setActivePage(item.key)}
-              className={cn(
-                'flex items-center gap-3 px-3 py-2 rounded-lg transition-colors',
-                activePage === item.key
-                  ? 'bg-primary/20 text-primary'
-                  : 'text-text-secondary hover:text-text-primary hover:bg-bg-tertiary'
-              )}
-              title={sidebarCollapsed ? item.label : undefined}
-            >
-              {item.icon}
-              {!sidebarCollapsed && <span className="text-sm">{item.label}</span>}
-            </Link>
-          ))}
-        </nav>
-      </div>
+      {/* Core Functions */}
+      {!sidebarCollapsed && (
+        <div className="p-3 pt-4">
+          <h3 className="text-xs font-medium text-text-muted uppercase tracking-wider mb-2">
+            核心功能
+          </h3>
+        </div>
+      )}
+      <nav className="px-3 space-y-1">
+        {coreItems.map((item) => (
+          <Link
+            key={item.key}
+            href={item.href}
+            onClick={() => setActivePage(item.key)}
+            className={cn(
+              'flex items-center gap-3 px-3 py-2 rounded-lg transition-colors',
+              activePage === item.key
+                ? 'bg-primary/20 text-primary'
+                : 'text-text-secondary hover:text-text-primary hover:bg-bg-tertiary'
+            )}
+            title={sidebarCollapsed ? item.label : undefined}
+          >
+            {item.icon}
+            {!sidebarCollapsed && <span className="text-sm">{item.label}</span>}
+          </Link>
+        ))}
+      </nav>
+
+      {/* Smart Features */}
+      {!sidebarCollapsed && (
+        <div className="p-3 pt-4 border-t border-border-primary mt-2">
+          <h3 className="text-xs font-medium text-text-muted uppercase tracking-wider mb-2">
+            智能功能
+          </h3>
+        </div>
+      )}
+      <nav className={cn('px-3 space-y-1', sidebarCollapsed && 'mt-2')}>
+        {smartItems.map((item) => (
+          <Link
+            key={item.key}
+            href={item.href}
+            onClick={() => setActivePage(item.key)}
+            className={cn(
+              'flex items-center gap-3 px-3 py-2 rounded-lg transition-colors',
+              activePage === item.key
+                ? 'bg-primary/20 text-primary'
+                : 'text-text-secondary hover:text-text-primary hover:bg-bg-tertiary'
+            )}
+            title={sidebarCollapsed ? item.label : undefined}
+          >
+            {item.icon}
+            {!sidebarCollapsed && <span className="text-sm">{item.label}</span>}
+          </Link>
+        ))}
+      </nav>
 
       {/* Recent History */}
       {!sidebarCollapsed && history.length > 0 && (

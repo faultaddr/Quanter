@@ -10,10 +10,10 @@ import { useAppStore } from '@/stores/useAppStore';
 import { monitorApi } from '@/lib/api/monitor';
 import type { RealtimeQuote } from '@/types/api';
 
-const quickActions = [
+const coreActions = [
   {
     title: '股票分析',
-    description: '查看K线图、技术指标、筹码分布和交易信号',
+    description: 'K线图、技术指标、筹码分布和交易信号',
     href: '/analyze',
     icon: (
       <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -24,7 +24,7 @@ const quickActions = [
   },
   {
     title: '策略回测',
-    description: '验证交易策略的历史表现，对比多种策略收益',
+    description: '验证交易策略的历史表现',
     href: '/backtest',
     icon: (
       <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -34,19 +34,8 @@ const quickActions = [
     color: 'success',
   },
   {
-    title: 'ML模型',
-    description: '训练GBM模型，管理模型生命周期',
-    href: '/model',
-    icon: (
-      <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-      </svg>
-    ),
-    color: 'warning',
-  },
-  {
     title: '实时监控',
-    description: 'WebSocket实时行情，自定义监控列表',
+    description: 'WebSocket实时行情推送',
     href: '/monitor',
     icon: (
       <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -57,19 +46,55 @@ const quickActions = [
     color: 'danger',
   },
   {
+    title: 'ML模型',
+    description: '训练GBM模型，管理生命周期',
+    href: '/model',
+    icon: (
+      <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+      </svg>
+    ),
+    color: 'warning',
+  },
+];
+
+const smartActions = [
+  {
+    title: '智能选股',
+    description: '基于技术指标和因子筛选',
+    href: '/scan',
+    icon: (
+      <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+      </svg>
+    ),
+    color: 'info',
+  },
+  {
+    title: '智能荐股',
+    description: 'GBM模型预测未来收益',
+    href: '/picks',
+    icon: (
+      <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+      </svg>
+    ),
+    color: 'primary',
+  },
+  {
     title: '因子研究',
-    description: '因子有效性检验、IC/IR分析、分层回测',
+    description: '因子有效性检验与IC/IR分析',
     href: '/factors',
     icon: (
       <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
       </svg>
     ),
-    color: 'info',
+    color: 'success',
   },
   {
     title: '组合风控',
-    description: '行业暴露检查、黑名单监控、仓位收缩',
+    description: '行业暴露与黑名单监控',
     href: '/risk',
     icon: (
       <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -131,29 +156,60 @@ export default function HomePage() {
           <p className="text-text-muted mt-1">快速查看市场动态和常用功能入口</p>
         </div>
 
-        {/* Quick Actions */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {quickActions.map((action) => (
-            <Link
-              key={action.href}
-              href={action.href}
-              className="block group"
-            >
-              <Card className="h-full card-hover cursor-pointer">
-                <div className="flex items-start gap-4">
-                  <div className={`p-3 rounded-lg bg-${action.color}/20 text-${action.color}`}>
-                    {action.icon}
+        {/* Core Functions */}
+        <div>
+          <h2 className="text-lg font-semibold text-text-primary mb-3">核心功能</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {coreActions.map((action) => (
+              <Link
+                key={action.href}
+                href={action.href}
+                className="block group"
+              >
+                <Card className="h-full card-hover cursor-pointer">
+                  <div className="flex items-start gap-4">
+                    <div className={`p-3 rounded-lg bg-${action.color}/20 text-${action.color}`}>
+                      {action.icon}
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="font-medium text-text-primary group-hover:text-primary transition-colors">
+                        {action.title}
+                      </h3>
+                      <p className="text-sm text-text-muted mt-1">{action.description}</p>
+                    </div>
                   </div>
-                  <div className="flex-1">
-                    <h3 className="font-medium text-text-primary group-hover:text-primary transition-colors">
-                      {action.title}
-                    </h3>
-                    <p className="text-sm text-text-muted mt-1">{action.description}</p>
+                </Card>
+              </Link>
+            ))}
+          </div>
+        </div>
+
+        {/* Smart Features */}
+        <div>
+          <h2 className="text-lg font-semibold text-text-primary mb-3">智能功能</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {smartActions.map((action) => (
+              <Link
+                key={action.href}
+                href={action.href}
+                className="block group"
+              >
+                <Card className="h-full card-hover cursor-pointer">
+                  <div className="flex items-start gap-4">
+                    <div className={`p-3 rounded-lg bg-${action.color}/20 text-${action.color}`}>
+                      {action.icon}
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="font-medium text-text-primary group-hover:text-primary transition-colors">
+                        {action.title}
+                      </h3>
+                      <p className="text-sm text-text-muted mt-1">{action.description}</p>
+                    </div>
                   </div>
-                </div>
-              </Card>
-            </Link>
-          ))}
+                </Card>
+              </Link>
+            ))}
+          </div>
         </div>
 
         {/* Market Indices */}

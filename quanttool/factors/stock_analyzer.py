@@ -557,9 +557,14 @@ class StockAnalyzer:
         print("技术指标计算完成。")
         return df
 
-    def run_trading_strategies(self, df: pd.DataFrame, symbol: str = "") -> Dict:
+    def run_trading_strategies(self, df: pd.DataFrame, symbol: str = "", fast_mode: bool = False) -> Dict:
         """
         Run various trading strategies and scoring system on the given data
+
+        Args:
+            df: DataFrame with stock data and technical indicators
+            symbol: Stock symbol
+            fast_mode: If True, skip time-consuming calculations (market detection, trend scoring)
         """
         if df.empty:
             return {}
@@ -590,29 +595,41 @@ class StockAnalyzer:
         print("正在计算多维度评分（百分制）...")
         scoring = ScoringSystem(stop_loss_pct=0.05)
 
-        # 新增：双重市场状态检测
-        print("正在检测双重市场状态...")
-        market_detector = IndexMarketDetector(default_index='hs300')
-        dual_market_state = market_detector.get_dual_market_state(df)
-        results['dual_market_state'] = {
-            'index_regime': dual_market_state.index_regime.value,
-            'stock_regime': dual_market_state.stock_regime.value,
-            'combined_signal': dual_market_state.combined_signal.value,
-            'confidence': dual_market_state.confidence,
-            'index_code': dual_market_state.index_code,
-            'index_name': dual_market_state.index_name,
-        }
+        # 快速模式下跳过耗时的市场状态检测
+        if not fast_mode:
+            # 新增：双重市场状态检测
+            print("正在检测双重市场状态...")
+            market_detector = IndexMarketDetector(default_index='hs300')
+            dual_market_state = market_detector.get_dual_market_state(df)
+            results['dual_market_state'] = {
+                'index_regime': dual_market_state.index_regime.value,
+                'stock_regime': dual_market_state.stock_regime.value,
+                'combined_signal': dual_market_state.combined_signal.value,
+                'confidence': dual_market_state.confidence,
+                'index_code': dual_market_state.index_code,
+                'index_name': dual_market_state.index_name,
+            }
 
-        # 根据综合信号调整评分系统的市场状态
-        if dual_market_state.combined_signal == CombinedSignal.CASH:
-            # 空仓信号，设置熊市权重
-            scoring.set_market_regime('bear')
-        elif dual_market_state.combined_signal == CombinedSignal.STRONG_BUY:
-            # 强买入信号，设置牛市权重
-            scoring.set_market_regime('bull')
-        elif dual_market_state.combined_signal == CombinedSignal.WAIT:
-            # 观望信号，设置震荡市权重
-            scoring.set_market_regime('sideway')
+            # 根据综合信号调整评分系统的市场状态
+            if dual_market_state.combined_signal == CombinedSignal.CASH:
+                # 空仓信号，设置熊市权重
+                scoring.set_market_regime('bear')
+            elif dual_market_state.combined_signal == CombinedSignal.STRONG_BUY:
+                # 强买入信号，设置牛市权重
+                scoring.set_market_regime('bull')
+            elif dual_market_state.combined_signal == CombinedSignal.WAIT:
+                # 观望信号，设置震荡市权重
+                scoring.set_market_regime('sideway')
+        else:
+            # 快速模式：设置默认市场状态
+            results['dual_market_state'] = {
+                'index_regime': 'sideway',
+                'stock_regime': 'sideway',
+                'combined_signal': 'wait',
+                'confidence': 0.5,
+                'index_code': 'hs300',
+                'index_name': '沪深300',
+            }
 
         # 获取日期信息
         date_col = 'trade_date' if 'trade_date' in df.columns else ('timestamp' if 'timestamp' in df.columns else 'date')
@@ -687,62 +704,90 @@ class StockAnalyzer:
             'is_high': position_ratio > 0.70 or bias20 > 0.05 or boll_pctb > 0.8,
         }
 
-        # 新增：趋势评分系统（纯趋势强度评分）
-        print("正在计算趋势评分...")
-        try:
-            trend_system = TrendScoringSystem()
-            trend_result = trend_system.calculate_score(df)
-            results['trend_scoring'] = {
-                'final_score': trend_result.final_score,
-                'trend_total_score': trend_result.trend_total_score,
-                'timing_coefficient': trend_result.timing_coefficient,
-                'ma_structure_score': trend_result.ma_structure_score,
-                'price_momentum_score': trend_result.price_momentum_score,
-                'volume_score': trend_result.volume_score,
-                'relative_strength_score': trend_result.relative_strength_score,
-                'timing_type': trend_result.timing_type,
-                'passed_hard_filter': trend_result.passed_hard_filter,
-                'hard_filter_reason': trend_result.hard_filter_reason,
-                'details': trend_result.details,
-            }
-            print(f"趋势评分: {trend_result.final_score:.1f}分 (时机系数: {trend_result.timing_coefficient:.2f})")
-        except Exception as e:
-            print(f"趋势评分计算失败: {e}")
-            results['trend_scoring'] = None
+        # 快速模式下跳过耗时的趋势评分和市场状态检测
+        if not fast_mode:
+            # 新增：趋势评分系统（纯趋势强度评分）
+            print("正在计算趋势评分...")
+            try:
+                trend_system = TrendScoringSystem()
+                trend_result = trend_system.calculate_score(df)
+                results['trend_scoring'] = {
+                    'final_score': trend_result.final_score,
+                    'trend_total_score': trend_result.trend_total_score,
+                    'timing_coefficient': trend_result.timing_coefficient,
+                    'ma_structure_score': trend_result.ma_structure_score,
+                    'price_momentum_score': trend_result.price_momentum_score,
+                    'volume_score': trend_result.volume_score,
+                    'relative_strength_score': trend_result.relative_strength_score,
+                    'timing_type': trend_result.timing_type,
+                    'passed_hard_filter': trend_result.passed_hard_filter,
+                    'hard_filter_reason': trend_result.hard_filter_reason,
+                    'details': trend_result.details,
+                }
+                print(f"趋势评分: {trend_result.final_score:.1f}分 (时机系数: {trend_result.timing_coefficient:.2f})")
+            except Exception as e:
+                print(f"趋势评分计算失败: {e}")
+                results['trend_scoring'] = None
 
-        # 新增：市场状态检测和自适应阈值
-        try:
-            threshold_manager = AdaptiveThresholdManager()
-            adaptive_config = threshold_manager.get_adaptive_thresholds(df)
-            results['market_regime'] = {
-                'regime': adaptive_config.market_regime.value,
-                'volatility_level': adaptive_config.volatility_level.value,
-                'buy_threshold': adaptive_config.buy_threshold,
-                'sell_threshold': adaptive_config.sell_threshold,
-                'confidence': adaptive_config.confidence,
-            }
-            print(f"市场状态: {adaptive_config.market_regime.value} | 波动率: {adaptive_config.volatility_level.value}")
-        except Exception as e:
-            print(f"市场状态检测失败: {e}")
-            results['market_regime'] = None
+            # 新增：市场状态检测和自适应阈值
+            try:
+                threshold_manager = AdaptiveThresholdManager()
+                adaptive_config = threshold_manager.get_adaptive_thresholds(df)
+                results['market_regime'] = {
+                    'regime': adaptive_config.market_regime.value,
+                    'volatility_level': adaptive_config.volatility_level.value,
+                    'buy_threshold': adaptive_config.buy_threshold,
+                    'sell_threshold': adaptive_config.sell_threshold,
+                    'confidence': adaptive_config.confidence,
+                }
+                print(f"市场状态: {adaptive_config.market_regime.value} | 波动率: {adaptive_config.volatility_level.value}")
+            except Exception as e:
+                print(f"市场状态检测失败: {e}")
+                results['market_regime'] = None
 
-        # 新增：风险控制建议
-        try:
-            risk_controller = RiskController()
-            signal_strength = results['scoring'].get('score', 50) / 100
-            stop_loss_result = risk_controller.calculate_dynamic_stop_loss(
-                df, close, signal_strength=signal_strength
-            )
-            results['risk_control'] = {
-                'stop_price': stop_loss_result.stop_price,
-                'stop_type': stop_loss_result.stop_type.value,
-                'distance_percent': stop_loss_result.distance_percent,
-                'confidence': stop_loss_result.confidence,
-            }
-            print(f"风险控制: 建议止损位 ¥{stop_loss_result.stop_price:.2f} ({stop_loss_result.stop_type.value})")
-        except Exception as e:
-            print(f"风险控制计算失败: {e}")
-            results['risk_control'] = None
+            # 快速模式下添加默认值
+            if fast_mode:
+                results['trend_scoring'] = {
+                    'final_score': 50.0,
+                    'trend_total_score': 50.0,
+                    'timing_coefficient': 1.0,
+                    'ma_structure_score': 50.0,
+                    'price_momentum_score': 50.0,
+                    'volume_score': 50.0,
+                    'relative_strength_score': 50.0,
+                    'timing_type': 'neutral',
+                    'passed_hard_filter': True,
+                    'hard_filter_reason': '',
+                    'details': {},
+                }
+                if not results.get('market_regime'):
+                    results['market_regime'] = {
+                        'regime': 'sideway',
+                        'volatility_level': 'medium',
+                        'buy_threshold': 50,
+                        'sell_threshold': 70,
+                        'confidence': 0.5,
+                    }
+
+        # 快速模式下跳过风险控制计算
+        if not fast_mode:
+            # 新增：风险控制建议
+            try:
+                risk_controller = RiskController()
+                signal_strength = results['scoring'].get('score', 50) / 100
+                stop_loss_result = risk_controller.calculate_dynamic_stop_loss(
+                    df, close, signal_strength=signal_strength
+                )
+                results['risk_control'] = {
+                    'stop_price': stop_loss_result.stop_price,
+                    'stop_type': stop_loss_result.stop_type.value,
+                    'distance_percent': stop_loss_result.distance_percent,
+                    'confidence': stop_loss_result.confidence,
+                }
+                print(f"风险控制: 建议止损位 ¥{stop_loss_result.stop_price:.2f} ({stop_loss_result.stop_type.value})")
+            except Exception as e:
+                print(f"风险控制计算失败: {e}")
+                results['risk_control'] = None
 
         print(f"评分计算完成。综合评分: {results['scoring'].get('score', 0):.1f}分")
         print(f"筛选结果: {results['scoring'].get('screening_action', 'unknown')} - {results['scoring'].get('screening_reason', '')}")
@@ -3790,7 +3835,9 @@ class StockAnalyzer:
         days: int = 360,
         include_chip: bool = True,
         include_talib_patterns: bool = True,
-        include_strategies: bool = True
+        include_strategies: bool = True,
+        precomputed_data: dict = None,
+        fast_mode: bool = False
     ) -> str:
         """
         增强版股票分析 - 整合筹码分布、K线形态、策略信号
@@ -3801,22 +3848,35 @@ class StockAnalyzer:
             include_chip: 是否包含筹码分布分析
             include_talib_patterns: 是否包含TA-Lib形态识别
             include_strategies: 是否包含策略信号
+            precomputed_data: 预计算的数据 {'df': DataFrame, 'df_with_indicators': DataFrame}
+            fast_mode: 是否使用快速模式（跳过耗时的市场检测和趋势评分）
 
         Returns:
             增强版分析报告
         """
         print(f"开始增强分析 {symbol}...")
 
-        # 获取股票数据
-        df = self.get_stock_data(symbol, days)
-        if df.empty:
-            return f"无法获取 {symbol} 的数据"
+        # 复用预计算数据，避免重复获取和计算
+        if precomputed_data is not None:
+            df = precomputed_data.get('df')
+            df_with_indicators = precomputed_data.get('df_with_indicators')
+            if df is None or df_with_indicators is None:
+                # 如果预计算数据不完整，重新计算
+                df = self.get_stock_data(symbol, days)
+                if df.empty:
+                    return f"无法获取 {symbol} 的数据"
+                df_with_indicators = self.calculate_technical_indicators(df)
+        else:
+            # 获取股票数据
+            df = self.get_stock_data(symbol, days)
+            if df.empty:
+                return f"无法获取 {symbol} 的数据"
 
-        # 计算技术指标
-        df_with_indicators = self.calculate_technical_indicators(df)
+            # 计算技术指标
+            df_with_indicators = self.calculate_technical_indicators(df)
 
-        # 运行交易策略（原有功能）
-        strategies_results = self.run_trading_strategies(df_with_indicators, symbol)
+        # 运行交易策略（快速模式下跳过耗时的计算）
+        strategies_results = self.run_trading_strategies(df_with_indicators, symbol, fast_mode=fast_mode)
 
         # 生成增强版报告
         report = self.generate_enhanced_report(

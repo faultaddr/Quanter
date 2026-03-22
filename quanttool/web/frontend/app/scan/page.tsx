@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import PageContainer from '@/components/layout/PageContainer';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -24,11 +25,13 @@ import { formatDate, formatNumber, formatPercent, getChangeColorClass } from '@/
 import type { ScanResult } from '@/types/api';
 
 export default function ScanPage() {
+  const router = useRouter();
   const setActivePage = useAppStore((state) => state.setActivePage);
   const addHistory = useAppStore((state) => state.addHistory);
   const toast = useToast();
 
   const [market, setMarket] = useState('all');
+  const [selectedSignals, setSelectedSignals] = useState<string[]>([]);
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [results, setResults] = useState<ScanResult[]>([]);
@@ -129,10 +132,26 @@ export default function ScanPage() {
             </label>
             <div className="flex flex-wrap gap-2">
               {['MACD金叉', 'KDJ超卖', '放量突破', '均线多头', 'RSI超卖', '突破新高'].map((signal) => (
-                <Button key={signal} size="sm" variant="secondary">
+                <Button
+                  key={signal}
+                  size="sm"
+                  variant={selectedSignals.includes(signal) ? 'primary' : 'secondary'}
+                  onClick={() => {
+                    setSelectedSignals(prev =>
+                      prev.includes(signal)
+                        ? prev.filter(s => s !== signal)
+                        : [...prev, signal]
+                    );
+                  }}
+                >
                   {signal}
                 </Button>
               ))}
+              {selectedSignals.length > 0 && (
+                <Button size="sm" variant="ghost" onClick={() => setSelectedSignals([])}>
+                  清除
+                </Button>
+              )}
             </div>
           </div>
 
@@ -227,7 +246,19 @@ export default function ScanPage() {
               </TableHeader>
               <TableBody>
                 {results.map((item) => (
-                  <TableRow key={item.symbol} hoverable>
+                  <TableRow
+                    key={item.symbol}
+                    hoverable
+                    className="cursor-pointer"
+                    onClick={() => {
+                      addHistory({
+                        type: 'stock',
+                        title: `${item.name} (${item.symbol})`,
+                        path: `/analyze?symbol=${item.symbol}`
+                      });
+                      router.push(`/analyze?symbol=${item.symbol}`);
+                    }}
+                  >
                     <TableCell className="font-mono">{item.symbol}</TableCell>
                     <TableCell>{item.name}</TableCell>
                     <TableCell className="text-right">{formatNumber(item.price)}</TableCell>
