@@ -202,7 +202,8 @@ export default function AnalyzePage() {
     const kline = analysis.kline;
     const latest = kline[kline.length - 1];
     const first = kline[0];
-    const periodReturn = ((latest.close - first.close) / first.close) * 100;
+    // 不乘以100，让 formatPercent 函数处理
+    const periodReturn = (latest.close - first.close) / first.close;
 
     const highs = kline.map(k => k.high);
     const lows = kline.map(k => k.low);
@@ -218,8 +219,8 @@ export default function AnalyzePage() {
       periodHigh,
       periodLow,
       avgVolume,
-      rangeFromHigh: ((latest.close - periodHigh) / periodHigh) * 100,
-      rangeFromLow: ((latest.close - periodLow) / periodLow) * 100,
+      rangeFromHigh: (latest.close - periodHigh) / periodHigh,
+      rangeFromLow: (latest.close - periodLow) / periodLow,
     };
   }, [analysis?.kline]);
 

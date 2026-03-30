@@ -38,6 +38,8 @@ export interface BacktestMetrics {
 // 匹配后端返回格式
 export interface BacktestResult {
   strategy: string;
+  strategy_display?: string;
+  error?: string;
   symbols?: string[];
   start_date: string;
   end_date: string;

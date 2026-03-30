@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import Input from '@/components/ui/Input';
-import { useDebounce } from '@/hooks/useDebounce';
+import Button from '@/components/ui/Button';
 import { stockApi } from '@/lib/api/stock';
 import { cn } from '@/lib/utils';
 
@@ -24,103 +24,70 @@ export default function StockSearch({
   className,
 }: StockSearchProps) {
   const [keyword, setKeyword] = useState('');
-  const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
-  const [showDropdown, setShowDropdown] = useState(false);
-  const debouncedKeyword = useDebounce(keyword, 300);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const searchStocks = useCallback(async (query: string) => {
+  const searchStock = useCallback(async (query: string) => {
     if (!query.trim()) {
-      setResults([]);
+      setError('请输入股票代码');
       return;
     }
 
     setLoading(true);
+    setError(null);
     try {
-      const data = await stockApi.search(query);
-      setResults(data || []);
-    } catch (error) {
-      console.error('Search error:', error);
-      setResults([]);
+      const results = await stockApi.search(query);
+      if (!results || results.length === 0) {
+        setError('未找到匹配的股票');
+        return;
+      }
+      // 直接选择第一个结果
+      const result = results[0];
+      onSelect(result.symbol, result.name);
+      setKeyword('');
+    } catch (err) {
+      console.error('Search error:', err);
+      setError('搜索失败，请重试');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [onSelect]);
 
-  useEffect(() => {
-    searchStocks(debouncedKeyword);
-  }, [debouncedKeyword, searchStocks]);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setShowDropdown(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const handleSelect = (result: SearchResult) => {
-    setKeyword('');
-    setResults([]);
-    setShowDropdown(false);
-    onSelect(result.symbol, result.name);
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      searchStock(keyword);
+    }
   };
 
   return (
-    <div ref={containerRef} className={cn('relative', className)}>
+    <div className={cn('relative flex gap-2', className)}>
       <Input
+        ref={inputRef}
         value={keyword}
         onChange={(e) => {
           setKeyword(e.target.value);
-          setShowDropdown(true);
+          setError(null);
         }}
-        onFocus={() => setShowDropdown(true)}
+        onKeyDown={handleKeyDown}
         placeholder={placeholder}
+        className="flex-1"
         icon={
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
         }
       />
-
-      {/* Dropdown */}
-      {showDropdown && (keyword.trim() || results.length > 0) && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-bg-secondary border border-border-primary rounded-lg shadow-lg z-50 max-h-80 overflow-auto">
-          {loading ? (
-            <div className="p-4 text-center text-text-muted">
-              <svg className="animate-spin w-5 h-5 mx-auto" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-            </div>
-          ) : results.length > 0 ? (
-            <ul>
-              {results.map((result) => (
-                <li
-                  key={result.symbol}
-                  className="px-4 py-2 hover:bg-bg-tertiary cursor-pointer transition-colors"
-                  onClick={() => handleSelect(result)}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-text-primary">{result.name}</span>
-                    <span className="text-text-muted text-sm">{result.symbol}</span>
-                  </div>
-                  {result.market && (
-                    <div className="text-xs text-text-muted mt-0.5">{result.market}</div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          ) : keyword.trim() ? (
-            <div className="p-4 text-center text-text-muted">
-              未找到匹配的股票
-            </div>
-          ) : null}
-        </div>
+      <Button
+        onClick={() => searchStock(keyword)}
+        loading={loading}
+        disabled={!keyword.trim()}
+      >
+        搜索
+      </Button>
+      {error && (
+        <span className="absolute -bottom-6 left-0 text-sm text-danger whitespace-nowrap">{error}</span>
       )}
     </div>
   );
