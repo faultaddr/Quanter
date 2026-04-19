@@ -11,14 +11,14 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from tqdm import tqdm
-from ...domain.interfaces.data_provider import IDataProvider
-from ...core.errors import DataProviderError, ConfigurationError
-from ...core.registry import registry, ComponentType
-from ...core.logging import get_logger
-from ..cache import LocalDataCache
+from ....domain.interfaces.data_provider import IDataProvider
+from ....core.errors import DataProviderError, ConfigurationError
+from ....core.registry import registry, ComponentType
+from ....core.logging import get_logger
+from ...cache import LocalDataCache
 
 # 导入反爬虫防护模块
-from .anti_crawler import (
+from ..anti_crawler import (
     UserAgentManager,
     HeaderGenerator,
     DelayController,

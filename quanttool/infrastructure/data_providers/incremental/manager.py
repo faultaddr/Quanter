@@ -5,7 +5,7 @@ The interface remains the same for backward compatibility.
 """
 
 # Re-export from the synchronous wrapper
-from .incremental_data_manager_sync import (
+from .sync_manager import (
     IncrementalDataManager,
     DataType,
     DataRange,
@@ -20,6 +20,6 @@ __all__ = [
 ]
 
 # Log the migration
-from ...core.logging import get_logger
+from ....core.logging import get_logger
 logger = get_logger(__name__)
 logger.info("IncrementalDataManager using PostgreSQL backend")

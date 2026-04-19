@@ -798,7 +798,7 @@ class FundamentalSelectionStrategy(IStrategy):
         """获取数据获取器实例"""
         if self._data_fetcher is None:
             try:
-                from ..infrastructure.data_providers.data_fetcher import create_data_fetcher_with_credentials
+                from ..infrastructure.data_providers.historical.enhanced_fetcher import create_data_fetcher_with_credentials
                 self._data_fetcher = create_data_fetcher_with_credentials()
             except Exception as e:
                 logger.error(f"无法创建数据获取器: {str(e)}")

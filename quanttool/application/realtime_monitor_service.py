@@ -141,8 +141,8 @@ class RealtimeMonitorService:
     def _init_realtime_providers(self) -> None:
         """初始化实时数据提供者"""
         try:
-            from ..infrastructure.data_providers.realtime_data_provider import get_realtime_provider
-            from ..infrastructure.data_providers.incremental_minute_provider import get_incremental_minute_provider
+            from ..infrastructure.data_providers.realtime.realtime_provider import get_realtime_provider
+            from ..infrastructure.data_providers.incremental.minute_provider import get_incremental_minute_provider
 
             self._realtime_provider = get_realtime_provider()
             self._minute_provider = get_incremental_minute_provider()

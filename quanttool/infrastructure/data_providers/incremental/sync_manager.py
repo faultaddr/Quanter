@@ -8,14 +8,14 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 import pandas as pd
 
-from .incremental_data_manager_async import (
+from .async_manager import (
     AsyncIncrementalDataManager,
     DataType,
     DataRange,
     get_async_incremental_manager
 )
-from ..database.config import DatabaseConfig
-from ..database.sync_loop import run_async
+from ...database.config import DatabaseConfig
+from ...database.sync_loop import run_async
 
 
 class IncrementalDataManager:

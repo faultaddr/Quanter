@@ -30,7 +30,7 @@ import threading
 import pandas as pd
 import numpy as np
 
-from .realtime_types import safe_float, safe_int, normalize_symbol
+from ..realtime.types import safe_float, safe_int, normalize_symbol
 
 logger = logging.getLogger(__name__)
 

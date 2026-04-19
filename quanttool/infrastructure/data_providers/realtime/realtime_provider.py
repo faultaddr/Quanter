@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from .realtime_types import (
+from .types import (
     RealtimeQuote,
     RealtimeSource,
     MinuteBar,

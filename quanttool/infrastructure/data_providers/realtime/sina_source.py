@@ -25,7 +25,7 @@ from urllib.parse import quote
 
 import requests
 
-from .realtime_types import (
+from .types import (
     RealtimeQuote,
     RealtimeSource,
     CircuitBreaker,

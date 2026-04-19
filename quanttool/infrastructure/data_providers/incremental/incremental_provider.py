@@ -9,11 +9,11 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 import pandas as pd
 
-from ...domain.interfaces.data_provider import IDataProvider
-from ...core.registry import registry, ComponentType
-from ...core.logging import get_logger
-from .incremental_data_manager import IncrementalDataManager, DataType
-from .data_fetcher import EnhancedDataFetcher
+from ....domain.interfaces.data_provider import IDataProvider
+from ....core.registry import registry, ComponentType
+from ....core.logging import get_logger
+from .manager import IncrementalDataManager, DataType
+from ..historical.enhanced_fetcher import EnhancedDataFetcher
 
 logger = get_logger(__name__)
 

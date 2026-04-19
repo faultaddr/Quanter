@@ -24,7 +24,7 @@ from typing import Optional, Dict, Any, List, Tuple, Generator
 from datetime import datetime
 from dataclasses import dataclass
 
-from .realtime_types import (
+from .types import (
     RealtimeQuote,
     RealtimeSource,
     CircuitBreaker,
