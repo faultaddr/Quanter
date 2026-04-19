@@ -1516,7 +1516,7 @@ async def get_stock_flow(symbol: str, days: int = 30) -> Dict[str, Any]:
         days: 获取天数
     """
     try:
-        from quanttool.infrastructure.data_providers.data_fetcher import EnhancedDataFetcher
+        from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import EnhancedDataFetcher
 
         fetcher = EnhancedDataFetcher()
         end_date = datetime.now().strftime('%Y%m%d')
@@ -1578,7 +1578,7 @@ async def get_stock_risk(symbol: str, days: int = 250) -> Dict[str, Any]:
         days: 计算周期（天数）
     """
     try:
-        from quanttool.infrastructure.data_providers.data_fetcher import EnhancedDataFetcher
+        from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import EnhancedDataFetcher
         import numpy as np
 
         fetcher = EnhancedDataFetcher()
@@ -1703,7 +1703,7 @@ async def get_stock_feasibility(symbol: str) -> Dict[str, Any]:
         constraints = ASShareConstraints()
 
         # 获取实时行情
-        from quanttool.infrastructure.data_providers.data_fetcher import EnhancedDataFetcher
+        from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import EnhancedDataFetcher
         fetcher = EnhancedDataFetcher()
 
         try:
@@ -1781,7 +1781,7 @@ async def get_stock_backtest_compare(symbol: str, days: int = 250) -> Dict[str, 
         days: 回测周期（天数）
     """
     try:
-        from quanttool.infrastructure.data_providers.data_fetcher import EnhancedDataFetcher
+        from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import EnhancedDataFetcher
         from quanttool.strategies.ma_cross import MACrossStrategy
         from quanttool.strategies.rsi import RSIStrategy
         from quanttool.strategies.bollinger import BollingerBandStrategy

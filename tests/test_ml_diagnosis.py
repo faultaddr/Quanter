@@ -174,7 +174,7 @@ print("=" * 70)
 
 try:
     from quanttool.strategies.ml_stock_selection_strategy import MLStockSelectionStrategy
-    from quanttool.infrastructure.data_providers.data_fetcher import AshareFetcher
+    from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import AshareFetcher
 
     # 获取一只股票的数据
     print("\n获取测试数据...")

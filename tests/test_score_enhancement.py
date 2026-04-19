@@ -27,7 +27,7 @@ from quanttool.factors.scoring_system import ScoringSystem
 from quanttool.backtest.engine import BacktestEngine
 
 # 数据获取
-from quanttool.infrastructure.data_providers.data_fetcher import create_data_fetcher_with_credentials
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import create_data_fetcher_with_credentials
 
 
 def generate_mock_data(days: int = 250) -> pd.DataFrame:

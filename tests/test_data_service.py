@@ -143,7 +143,7 @@ class TestDataServiceIntegration:
     @pytest.mark.integration
     def test_pull_data_csv_provider(self):
         """Test pulling data from CSV provider."""
-        from quanttool.infrastructure.data_providers.csv_provider import CSVProvider
+        from quanttool.infrastructure.data_providers.historical.csv_provider import CSVProvider
 
         service = DataService()
         provider = CSVProvider('./mock_data')

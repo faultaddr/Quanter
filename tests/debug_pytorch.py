@@ -67,7 +67,7 @@ try:
     project_root = Path(__file__).parent.parent
     sys.path.insert(0, str(project_root))
 
-    from quanttool.infrastructure.data_providers.data_fetcher import AshareFetcher
+    from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import AshareFetcher
     from quanttool.strategies.qlib_strategy import QlibFeatureEngineer
     import pandas as pd
     import numpy as np

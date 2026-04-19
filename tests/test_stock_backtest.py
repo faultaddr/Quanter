@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 
 from quanttool.strategies.trend_momentum_strategy import TrendMomentumStrategy
 from quanttool.backtest.engine import BacktestEngine
-from quanttool.infrastructure.data_providers.data_fetcher import AshareFetcher
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import AshareFetcher
 
 
 # 目标股票列表

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 
-from quanttool.infrastructure.data_providers.data_fetcher import create_data_fetcher_with_credentials
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import create_data_fetcher_with_credentials
 from quanttool.factors.breakout_scoring_system import BreakoutScoringSystem
 from quanttool.factors.trend_scoring_system import TrendScoringSystem
 

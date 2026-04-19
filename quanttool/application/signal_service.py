@@ -10,7 +10,7 @@ from ..domain.models import Signal
 from ..core.registry import registry, ComponentType
 from ..core.logging import get_logger
 from ..core.timeutils import get_next_trading_bar_timestamp
-from ..infrastructure.data_providers.incremental_data_manager import IncrementalDataManager, DataType
+from ..infrastructure.data_providers.incremental.manager import IncrementalDataManager, DataType
 
 
 logger = get_logger(__name__)

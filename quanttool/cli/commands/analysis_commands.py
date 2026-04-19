@@ -27,7 +27,7 @@ from quanttool.strategies.adaptive_threshold import (
     MarketRegime,
     CombinedSignal,
 )
-from quanttool.infrastructure.data_providers.data_fetcher import create_data_fetcher_with_credentials
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import create_data_fetcher_with_credentials
 from quanttool.infrastructure.stores.meta_db import MetaDB
 import pandas as pd
 import json

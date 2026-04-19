@@ -20,7 +20,7 @@ import numpy as np
 
 from quanttool.strategies.qlib_strategy import QlibStrategy
 from quanttool.backtest.engine import BacktestEngine
-from quanttool.infrastructure.data_providers.data_fetcher import AshareFetcher
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import AshareFetcher
 
 
 # 获取沪深300成分股

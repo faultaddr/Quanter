@@ -28,7 +28,7 @@ from quanttool.strategies.qlib.pytorch_models import create_pytorch_sequence_mod
 from quanttool.strategies.qlib.advanced_models import create_advanced_model
 from quanttool.strategies.qlib.data_adapter import create_qlib_dataset_from_dataframe, create_ts_compatible_dataset
 from quanttool.backtest.engine import BacktestEngine
-from quanttool.infrastructure.data_providers.data_fetcher import AshareFetcher
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import AshareFetcher
 
 
 # ============================================================================

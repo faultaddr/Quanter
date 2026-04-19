@@ -16,7 +16,7 @@ from datetime import datetime
 
 from quanttool.strategies.trend_strategy import TrendStrategy
 from quanttool.backtest.engine import BacktestEngine
-from quanttool.infrastructure.data_providers.data_fetcher import AshareFetcher
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import AshareFetcher
 
 
 TARGET_STOCKS = ['000876', '600515', '688131', '600600', '600460', '688271', '001965']

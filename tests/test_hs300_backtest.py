@@ -26,7 +26,7 @@ import time
 
 from quanttool.strategies.qlib_strategy import QlibStrategy
 from quanttool.backtest.engine import BacktestEngine
-from quanttool.infrastructure.data_providers.data_fetcher import AshareFetcher
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import AshareFetcher
 
 
 # 沪深 300 部分成分股（按行业分布选取代表性股票）

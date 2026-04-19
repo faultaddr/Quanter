@@ -24,7 +24,7 @@ import argparse
 
 from quanttool.factors.trend_scoring_system import TrendScoringSystem, TrendScoreResult, analyze_trend_quality
 from quanttool.strategies.trend_strategy import TrendStrategy, AdaptiveTrendStrategy
-from quanttool.infrastructure.data_providers.data_fetcher import create_data_fetcher_with_credentials
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import create_data_fetcher_with_credentials
 
 
 class TestTrendScoringSystem:

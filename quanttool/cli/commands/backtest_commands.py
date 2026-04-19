@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import datetime
 from ...application.backtest_service import BacktestService
 from ...application.data_service import DataService
-from ...infrastructure.data_providers.tushare_provider import TuShareProvider
+from ...infrastructure.data_providers.historical.tushare_provider import TuShareProvider
 from ...infrastructure.stores.parquet_store import ParquetStore
 
 

@@ -14,7 +14,7 @@ except ImportError:
     AIOHTTP_AVAILABLE = False
 
 if AIOHTTP_AVAILABLE:
-    from quanttool.infrastructure.data_providers.async_data_fetcher import (
+    from quanttool.infrastructure.data_providers.incremental.async_fetcher import (
         AsyncDataFetcher,
         fetch_symbols,
         fetch_symbols_async
@@ -132,10 +132,10 @@ class TestParallelFetchIntegration:
     def data_fetcher(self):
         """Create a DataFetcher instance for testing."""
         try:
-            from quanttool.infrastructure.data_providers.data_fetcher import (
-                create_data_fetcher_with_credentials
+            from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import (
+                EnhancedDataFetcher
             )
-            return create_data_fetcher_with_credentials()
+            return EnhancedDataFetcher()
         except Exception:
             pytest.skip("Data fetcher credentials not available")
 

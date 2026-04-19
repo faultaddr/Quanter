@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from quanttool.strategies.score_strategy import ScoreStrategy, EnhancedScoreStrategy
 from quanttool.factors.scoring_system import ScoringSystem
 from quanttool.backtest.engine import BacktestEngine
-from quanttool.infrastructure.data_providers.data_fetcher import AshareFetcher
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import AshareFetcher
 from quanttool.optimization.weight_optimizer import DynamicWeightOptimizer
 from quanttool.risk.risk_controller import RiskController
 from quanttool.validation.score_validator import ScoreValidator

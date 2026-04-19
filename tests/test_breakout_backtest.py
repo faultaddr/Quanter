@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from quanttool.factors.breakout_scoring_system import BreakoutScoringSystem, analyze_breakout_quality
 from quanttool.factors.scoring_system import ScoringSystem
 from quanttool.strategies.score_strategy import ScoreStrategy
-from quanttool.infrastructure.data_providers.data_fetcher import create_data_fetcher_with_credentials
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import create_data_fetcher_with_credentials
 
 
 def fetch_real_data(symbol: str, days: int = 365) -> pd.DataFrame:

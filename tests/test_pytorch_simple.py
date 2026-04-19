@@ -24,7 +24,7 @@ print("=" * 60)
 
 from quanttool.strategies.qlib_strategy import QlibStrategy
 from quanttool.backtest.engine import BacktestEngine
-from quanttool.infrastructure.data_providers.data_fetcher import AshareFetcher
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import AshareFetcher
 
 print("✅ 模块导入成功")
 

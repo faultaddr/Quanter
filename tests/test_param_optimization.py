@@ -21,7 +21,7 @@ from itertools import product
 from quanttool.strategies.score_strategy import ScoreStrategy
 from quanttool.factors.scoring_system import ScoringSystem
 from quanttool.backtest.engine import BacktestEngine
-from quanttool.infrastructure.data_providers.data_fetcher import AshareFetcher
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import AshareFetcher
 
 
 def fetch_real_data(symbol: str, days: int = 365) -> pd.DataFrame:

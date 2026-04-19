@@ -8,9 +8,9 @@ import tempfile
 import shutil
 from pathlib import Path
 
-from quanttool.infrastructure.data_providers.csv_provider import CSVProvider
-from quanttool.infrastructure.data_providers.tushare_provider import TuShareProvider
-from quanttool.infrastructure.data_providers.ashare_provider import AShareProvider
+from quanttool.infrastructure.data_providers.historical.csv_provider import CSVProvider
+from quanttool.infrastructure.data_providers.historical.tushare_provider import TuShareProvider
+from quanttool.infrastructure.data_providers.historical.ashare_provider import AShareProvider
 
 
 class TestCSVProvider:

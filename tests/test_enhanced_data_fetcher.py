@@ -11,7 +11,7 @@ from unittest.mock import patch, MagicMock
 # 添加项目根目录到Python路径
 sys.path.insert(0, '/root/CuferPan/quanttool')
 
-from quanttool.infrastructure.data_providers.data_fetcher import EnhancedDataFetcher, create_data_fetcher_with_credentials
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import EnhancedDataFetcher, create_data_fetcher_with_credentials
 
 
 class TestEnhancedDataFetcher:

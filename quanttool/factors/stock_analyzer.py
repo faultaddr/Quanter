@@ -21,7 +21,7 @@ from quanttool.factors.talib_patterns import (
     draw_candlestick_chart, draw_pattern_illustration
 )
 from quanttool.factors.screening import StockScreener, ScreenResult
-from quanttool.infrastructure.data_providers.data_fetcher import create_data_fetcher_with_credentials
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import create_data_fetcher_with_credentials
 from quanttool.strategies.adaptive_threshold import (
     AdaptiveThresholdManager, MarketRegime, VolatilityLevel,
     IndexMarketDetector, DualMarketState, CombinedSignal

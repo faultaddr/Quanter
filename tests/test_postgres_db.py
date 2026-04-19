@@ -213,7 +213,7 @@ class TestAsyncIncrementalDataManager:
     @pytest.fixture
     async def manager(self, tmp_path):
         """Create an AsyncIncrementalDataManager instance for testing."""
-        from quanttool.infrastructure.data_providers.incremental_data_manager_async import AsyncIncrementalDataManager
+        from quanttool.infrastructure.data_providers.incremental.async_manager import AsyncIncrementalDataManager
         from quanttool.infrastructure.database.schema import init_database
 
         # Initialize schema
