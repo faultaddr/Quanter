@@ -94,6 +94,8 @@ class StockAnalyzer:
 
         # Cache for batch-fetched data
         self._batch_data_cache: Dict[str, pd.DataFrame] = {}
+        # Cache for batch-fetched realtime prices (avoids N+1 per-stock HTTP calls)
+        self._realtime_price_cache: Dict[str, float] = {}
 
     def get_stock_data(
         self,
@@ -375,6 +377,32 @@ class StockAnalyzer:
     def clear_batch_cache(self):
         """Clear the in-memory batch data cache."""
         self._batch_data_cache.clear()
+
+    def preload_realtime_prices(self, symbols: List[str]) -> int:
+        """批量预获取实时价格，存入缓存避免 N+1 请求。
+
+        Args:
+            symbols: 股票代码列表（已标准化的格式，如 SH600000）
+
+        Returns:
+            成功获取的价格数量
+        """
+        if not self.fetcher:
+            return 0
+
+        normalized = [self._normalize_symbol(s) for s in symbols]
+        # 过滤掉已缓存的
+        to_fetch = [s for s in normalized if s not in self._realtime_price_cache]
+        if not to_fetch:
+            return len(self._realtime_price_cache)
+
+        try:
+            prices = self.fetcher.get_realtime_prices(to_fetch)
+            self._realtime_price_cache.update(prices)
+            return len(prices)
+        except Exception as e:
+            print(f"⚠️ 批量获取实时价格失败: {e}")
+            return 0
 
     def preload_data_for_scan(
         self,
@@ -775,8 +803,18 @@ class StockAnalyzer:
             try:
                 risk_controller = RiskController()
                 signal_strength = results['scoring'].get('score', 50) / 100
+                # 止损止盈需基于实时价格
+                entry_price = close
+                if self.fetcher:
+                    try:
+                        normalized = self._normalize_symbol(symbol)
+                        rp = self.fetcher.get_realtime_price(normalized)
+                        if rp and rp > 0:
+                            entry_price = rp
+                    except Exception:
+                        pass
                 stop_loss_result = risk_controller.calculate_dynamic_stop_loss(
-                    df, close, signal_strength=signal_strength
+                    df, entry_price, signal_strength=signal_strength
                 )
                 results['risk_control'] = {
                     'stop_price': stop_loss_result.stop_price,
@@ -824,6 +862,22 @@ class StockAnalyzer:
         latest = df.iloc[-1]
         close = latest.get('close', 0)
 
+        # 止损止盈需基于实时价格，优先使用批量缓存
+        if self.fetcher:
+            try:
+                normalized = self._normalize_symbol(symbol)
+                if normalized in self._realtime_price_cache:
+                    cached_price = self._realtime_price_cache[normalized]
+                    if cached_price and cached_price > 0:
+                        close = cached_price
+                else:
+                    realtime_price = self.fetcher.get_realtime_price(normalized)
+                    if realtime_price and realtime_price > 0:
+                        close = realtime_price
+                        self._realtime_price_cache[normalized] = realtime_price
+            except Exception:
+                pass
+
         # 初始化上下文
         context = AnalysisContext(
             symbol=symbol,
@@ -857,16 +911,58 @@ class StockAnalyzer:
         candlestick_result = recognize_talib_patterns(df, lookback=5)
         context.candlestick_patterns = candlestick_result.get('patterns', [])
 
-        # 6. 存储筛选结果
+        # 6. K线形态筛选（替换硬编码）
+        screener = StockScreener()
+        screening_outcome = screener.screen(df, context.classic_score.factors_raw)
         context.screening_result = {
-            'result': 'pass',
-            'reasons': [],
+            'result': screening_outcome.result.value,
+            'score_modifier': screening_outcome.score_modifier,
+            'reasons': screening_outcome.reasons,
+            'details': screening_outcome.details,
         }
 
-        # 7. 存储最后一行数据
-        context.df_last_row = latest.to_dict() if hasattr(latest, 'to_dict') else dict(latest)
+        # 7. 运行传统策略信号（RSI/MACD/MA/BOLL）
+        strategies = TradingStrategies()
+        strategy_signals = {}
+        try:
+            rsi_signal = strategies.rsi_strategy(df)
+            macd_signal = strategies.macd_strategy(df)
+            ma_signal = strategies.ma_crossover_strategy(df)
+            boll_signal = strategies.bollinger_bands_strategy(df)
+            strategy_signals['rsi'] = strategies.evaluate_current_signal(rsi_signal, 'RSI策略')
+            strategy_signals['macd'] = strategies.evaluate_current_signal(macd_signal, 'MACD策略')
+            strategy_signals['ma'] = strategies.evaluate_current_signal(ma_signal, '均线交叉策略')
+            strategy_signals['boll'] = strategies.evaluate_current_signal(boll_signal, '布林带策略')
+        except Exception as e:
+            strategy_signals['error'] = str(e)
+        context.strategy_signals = strategy_signals
 
-        # 8. 生成最终推荐（单点决策）
+        # 7.5 获取基本面数据
+        try:
+            from ..infrastructure.data_providers.fundamental_provider import FundamentalDataProvider
+            from ..factors.fundamental_rating import FundamentalRating
+            from .analysis_context import FundamentalData
+
+            fd_provider = FundamentalDataProvider()
+            fd_dict = fd_provider.get_fundamental_summary(symbol)
+            fd = FundamentalData()
+            for k, v in fd_dict.items():
+                if hasattr(fd, k):
+                    setattr(fd, k, v)
+            context.fundamental_data = fd
+            print(f"基本面数据: PE={fd.pe_ttm or 'N/A'}, ROE={fd.roe or 'N/A'}%, 数据源={fd.data_source}")
+        except Exception as e:
+            print(f"基本面数据获取失败: {e}")
+
+        # 8. 存储最后一行数据 + 流动性指标
+        last_row = latest.to_dict() if hasattr(latest, 'to_dict') else dict(latest)
+        # 计算20日日均成交额供推荐引擎使用
+        amt_col = 'amount' if 'amount' in df.columns else ('amt' if 'amt' in df.columns else None)
+        if amt_col:
+            last_row['amt_ma20'] = df[amt_col].tail(20).mean()
+        context.df_last_row = last_row
+
+        # 9. 生成最终推荐（单点决策）
         recommendation_engine = RecommendationEngine()
         context.final_recommendation = recommendation_engine.generate_recommendation(context)
 
@@ -894,15 +990,23 @@ class StockAnalyzer:
                 open_T1=None
             )
 
+            # 计算位置修正系数
+            latest = df.iloc[-1]
+            factors_raw = result.get('factors_raw', {})
+            position_modifier, pos_warnings, _ = scoring._calculate_position_modifier(latest, factors_raw)
+
+            # 合并警告
+            all_warnings = result.get('warnings', []) + pos_warnings
+
             return ClassicScore(
                 score=result.get('score', 50),
                 trend_score=result.get('trend_score', 50),
-                position_modifier=result.get('position_modifier', 1.0),
+                position_modifier=position_modifier,
                 score_grade=result.get('score_grade', '一般'),
                 factors_score=result.get('factors_score', {}),
-                factors_raw=result.get('factors_raw', {}),
+                factors_raw=factors_raw,
                 execution=result.get('execution', {}),
-                warnings=result.get('warnings', []),
+                warnings=all_warnings,
             )
         except Exception as e:
             print(f"经典评分计算失败: {e}")
@@ -1248,10 +1352,15 @@ class StockAnalyzer:
         report.append("| 评分系统 | 最终评分 | 状态 | 说明 |")
         report.append("|----------|----------|------|------|")
 
-        # 经典评分
+        # 经典评分（显示修正后分数）
         classic = context.classic_score
-        classic_status = "✅ 通过" if classic.score >= 50 else "❌ 未通过"
-        report.append(f"| 经典评分 | {classic.score:.1f}分 | {classic_status} | 趋势分{classic.trend_score:.1f} × 位置系数{classic.position_modifier:.2f} |")
+        classic_adjusted = classic.score * classic.position_modifier
+        classic_status = "✅ 通过" if classic_adjusted >= 50 else "❌ 未通过"
+        if classic.position_modifier < 1.0:
+            classic_note = f"原始{classic.score:.1f} × 位置系数{classic.position_modifier:.2f}(越高越安全)"
+        else:
+            classic_note = f"趋势分{classic.trend_score:.1f}"
+        report.append(f"| 经典评分 | {classic_adjusted:.1f}分 | {classic_status} | {classic_note} |")
 
         # 趋势评分
         trend = context.trend_score
@@ -1335,7 +1444,7 @@ class StockAnalyzer:
         report.append(f"- **价格位置**: {position_emoji.get(position.position, '⚪')} {position.position}")
         report.append(f"- **长期位置**: {position_emoji.get(position.long_term_position, '⚪')} {position.long_term_position}")
         report.append(f"- **短期位置**: {position_emoji.get(position.short_term_position, '⚪')} {position.short_term_position}")
-        report.append(f"- **位置修正系数**: {position.position_modifier:.2f}")
+        report.append(f"- **位置修正系数**: {position.position_modifier:.2f} (1.0=安全, 越低风险越大, 用于修正评分)")
         report.append(f"- **原因**: {position.reason}")
         report.append("")
 
@@ -1356,6 +1465,92 @@ class StockAnalyzer:
         if stop_loss.take_profit_price > 0:
             report.append(f"- **建议止盈位**: ¥{stop_loss.take_profit_price:.2f}")
             report.append(f"- **盈亏比**: {stop_loss.risk_reward_ratio:.1f}:1")
+        report.append("")
+
+        # 基本面评估
+        fd = context.fundamental_data
+        if fd.data_source:  # 有基本面数据时才展示
+            report.extend(self._generate_fundamental_section(fd))
+
+        return report
+
+    def _generate_fundamental_section(self, fd) -> List[str]:
+        """生成基本面评估报告"""
+        from .fundamental_rating import FundamentalRating
+        report = []
+
+        report.append("### 📊 基本面评估")
+        report.append("")
+
+        # 估值指标
+        report.append("#### 估值指标")
+        report.append("")
+        pe_str = f"{fd.pe_ttm:.1f}x" if fd.pe_ttm else "N/A"
+        pb_str = f"{fd.pb:.2f}" if fd.pb else "N/A"
+        cap_str = f"{fd.total_market_cap:.1f}亿" if fd.total_market_cap else "N/A"
+        fcap_str = f"{fd.float_market_cap:.1f}亿" if fd.float_market_cap else "N/A"
+        report.append(f"| PE(TTM) | PB | 总市值 | 流通市值 |")
+        report.append(f"|---------|-----|--------|---------|")
+        report.append(f"| {pe_str} | {pb_str} | {cap_str} | {fcap_str} |")
+        report.append("")
+
+        # 盈利能力
+        report.append("#### 盈利能力")
+        report.append("")
+        roe_str = f"{fd.roe:.1f}%" if fd.roe else "N/A"
+        gm_str = f"{fd.gross_margin:.1f}%" if fd.gross_margin else "N/A"
+        pm_str = f"{fd.profit_margin:.1f}%" if fd.profit_margin else "N/A"
+        eps_str = f"{fd.eps:.2f}" if fd.eps else "N/A"
+        deps_str = f"{fd.deduct_eps:.2f}" if fd.deduct_eps else "N/A"
+        report.append(f"| ROE | 毛利率 | 净利率 | EPS | 扣非EPS |")
+        report.append(f"|-----|--------|--------|-----|---------|")
+        report.append(f"| {roe_str} | {gm_str} | {pm_str} | {eps_str} | {deps_str} |")
+        report.append("")
+
+        # 成长性
+        report.append("#### 成长性")
+        report.append("")
+        rev_str = f"{fd.annual_revenue:.1f}" if fd.annual_revenue else "N/A"
+        rev_yoy_str = f"{fd.revenue_yoy:+.1f}%" if fd.revenue_yoy is not None else "N/A"
+        prof_str = f"{fd.annual_profit:.1f}" if fd.annual_profit else "N/A"
+        prof_yoy_str = f"{fd.profit_yoy:+.1f}%" if fd.profit_yoy is not None else "N/A"
+        report.append(f"| 年营收(亿) | 营收同比 | 年净利(亿) | 净利同比 |")
+        report.append(f"|-----------|---------|-----------|---------|")
+        report.append(f"| {rev_str} | {rev_yoy_str} | {prof_str} | {prof_yoy_str} |")
+        report.append("")
+
+        # 近5年财务趋势
+        if fd.annual_history:
+            report.append("#### 近5年财务趋势")
+            report.append("")
+            report.append("| 年度 | 营收(亿) | 净利(亿) | EPS | ROE | 扣非EPS |")
+            report.append("|------|---------|---------|-----|-----|---------|")
+            for h in fd.annual_history:
+                yr = h.get('year', '')
+                rv = h.get('revenue', 'N/A')
+                pf = h.get('profit', 'N/A')
+                ep = h.get('eps', 'N/A')
+                re = h.get('roe', 'N/A')
+                de = h.get('deduct_eps', 'N/A')
+                rv_s = f"{rv:.1f}" if isinstance(rv, (int, float)) else rv
+                pf_s = f"{pf:.1f}" if isinstance(pf, (int, float)) else pf
+                ep_s = f"{ep:.2f}" if isinstance(ep, (int, float)) else ep
+                re_s = f"{re:.1f}%" if isinstance(re, (int, float)) else re
+                de_s = f"{de:.2f}" if isinstance(de, (int, float)) else de
+                report.append(f"| {yr} | {rv_s} | {pf_s} | {ep_s} | {re_s} | {de_s} |")
+            report.append("")
+
+        # 基本面评级
+        rating = FundamentalRating().rate(fd.to_dict())
+        stars = lambda s: "★" * s + "☆" * (5 - s)
+        report.append("#### 基本面评级")
+        report.append("")
+        report.append(f"**综合评分: {rating.total_score:.0f}/100 — {rating.total_label}**")
+        report.append("")
+        report.append(f"- 盈利能力: {stars(rating.profitability.stars)} {rating.profitability.score:.0f}/25 — {rating.profitability.label}")
+        report.append(f"- 成长性: {stars(rating.growth.stars)} {rating.growth.score:.0f}/25 — {rating.growth.label}")
+        report.append(f"- 估值: {stars(rating.valuation.stars)} {rating.valuation.score:.0f}/25 — {rating.valuation.label}")
+        report.append(f"- 财务安全: {stars(rating.safety.stars)} {rating.safety.score:.0f}/25 — {rating.safety.label}")
         report.append("")
 
         return report
@@ -1425,6 +1620,32 @@ class StockAnalyzer:
                 report.append(f"- {warning}")
             report.append("")
 
+        # 策略信号共振
+        strategy_signals = context.strategy_signals
+        if strategy_signals and 'error' not in strategy_signals:
+            report.append("### 📊 策略信号共振")
+            report.append("")
+            report.append("| 策略 | 当前信号 | 置信度 | 操作建议 |")
+            report.append("|------|----------|--------|----------|")
+            for key in ['rsi', 'macd', 'ma', 'boll']:
+                sig = strategy_signals.get(key, {})
+                if sig and 'error' not in sig:
+                    name = sig.get('strategy', key)
+                    signal = sig.get('current_signal', '-')
+                    confidence = sig.get('confidence', '-')
+                    action = sig.get('action', '-')
+                    report.append(f"| {name} | {signal} | {confidence} | {action} |")
+            report.append("")
+
+            # 筛选结果
+            screening = context.screening_result
+            if screening and screening.get('result') != 'pass':
+                result_map = {'pass': '通过', 'filter': '过滤', 'warning': '警示'}
+                report.append(f"- **筛选结果**: {result_map.get(screening['result'], screening['result'])}")
+                if screening.get('reasons'):
+                    report.append(f"- **筛选原因**: {'; '.join(screening['reasons'])}")
+                report.append("")
+
         return report
 
     def _generate_technical_indicators_table(
@@ -1444,18 +1665,25 @@ class StockAnalyzer:
         rsi_val = latest.get('rsi_24', 50)
         if rsi_val > 70:
             rsi_desc = "超买区"
+        elif rsi_val > 60:
+            rsi_desc = "偏强"
         elif rsi_val < 30:
             rsi_desc = "超卖区"
+        elif rsi_val < 40:
+            rsi_desc = "偏弱"
         else:
             rsi_desc = "中性"
         report.append(f"| RSI(24) | {rsi_val:.2f} | {rsi_desc} |")
 
         # MACD
         macd_val = latest.get('macd', 0)
-        macd_desc = "多头" if macd_val > 0 else "空头"
+        if abs(macd_val) < 0.02:
+            macd_desc = "零轴附近"
+        elif macd_val > 0:
+            macd_desc = "多头"
+        else:
+            macd_desc = "空头"
         report.append(f"| MACD | {macd_val:.2f} | {macd_desc} |")
-
-        # KDJ
         k = latest.get('kdj_k', 0)
         d = latest.get('kdj_d', 0)
         j = latest.get('kdj_j', 0)
@@ -1466,10 +1694,8 @@ class StockAnalyzer:
         ma20 = latest.get('ma_20', 0)
         ma50 = latest.get('ma_50', 0)
         ma200 = latest.get('ma_200', 0)
-        ma200_str = f"{ma200:.2f}" if not pd.isna(ma200) else "无数据"
+        ma200_str = f"¥{ma200:.2f}" if not pd.isna(ma200) else "无数据"
         report.append(f"| 移动平均线 | MA20: ¥{ma20:.2f} / MA50: ¥{ma50:.2f} / MA200: {ma200_str} | 趋势参考 |")
-
-        # 布林带
         boll_upper = latest.get('boll_upper', close)
         boll_mid = latest.get('boll_mid', close)
         boll_lower = latest.get('boll_lower', close)
@@ -1481,7 +1707,16 @@ class StockAnalyzer:
         bias_6 = latest.get('bias_6', 0)
         bias_12 = latest.get('bias_12', 0)
         bias_24 = latest.get('bias_24', 0)
-        bias_desc = "超买" if bias_6 > 5 else "超卖" if bias_6 < -5 else "正常"
+        # 分指标评估：任一指标超阈值即标注，避免平均后掩盖
+        max_abs_bias = max(abs(bias_6), abs(bias_12), abs(bias_24))
+        if max_abs_bias > 8:
+            bias_desc = "极端偏离"
+        elif abs(bias_6) > 5 or abs(bias_12) > 5 or abs(bias_24) > 5:
+            bias_desc = "偏离较大"
+        elif abs(bias_6) > 3 or abs(bias_12) > 3 or abs(bias_24) > 3:
+            bias_desc = "轻微偏离"
+        else:
+            bias_desc = "正常区间"
         report.append(f"| BIAS(乖离率) | BIAS6: {bias_6:.2f}% / BIAS12: {bias_12:.2f}% / BIAS24: {bias_24:.2f}% | {bias_desc} |")
 
         # DMI 动向指标
@@ -1506,20 +1741,24 @@ class StockAnalyzer:
 
         # CCI 顺势指标
         cci = latest.get('cci', 0)
-        if cci > 100:
+        if cci > 200:
+            cci_desc = "极度超买"
+        elif cci > 100:
             cci_desc = "超买区"
+        elif cci < -200:
+            cci_desc = "极度超卖"
         elif cci < -100:
             cci_desc = "超卖区"
         else:
             cci_desc = "正常区间"
         report.append(f"| CCI(顺势指标) | {cci:.2f} | {cci_desc} |")
 
-        # WR 威廉指标
+        # WR 威廉指标（0-100范围：>80超卖，<20超买）
         wr = latest.get('wr', 0)
         wr_6 = latest.get('wr_6', 0)
-        if wr < -80:
+        if wr > 80:
             wr_desc = "超卖区"
-        elif wr > -20:
+        elif wr < 20:
             wr_desc = "超买区"
         else:
             wr_desc = "正常区间"
@@ -1528,12 +1767,25 @@ class StockAnalyzer:
         # TRIX 三重平滑移动平均
         trix = latest.get('trix', 0)
         trix_ma = latest.get('trix_ma', 0)
-        trix_desc = "多头" if trix > trix_ma else "空头"
+        if trix > trix_ma:
+            if trix > 0:
+                trix_desc = "多头"
+            else:
+                trix_desc = "弱多(零轴下方)"
+        else:
+            if trix < 0:
+                trix_desc = "空头"
+            else:
+                trix_desc = "弱空(零轴上方)"
         report.append(f"| TRIX | TRIX: {trix:.4f} / TRMA: {trix_ma:.4f} | {trix_desc} |")
 
-        # OBV 能量潮
+        # OBV 能量潮（累积指标，正值不代表当前流入）
         obv = latest.get('obv', 0)
-        obv_desc = "资金流入" if obv > 0 else "资金流出"
+        obv_ma = latest.get('obv_ma', 0)
+        if obv_ma and obv_ma > 0:
+            obv_desc = "OBV>均线(偏多)" if obv > obv_ma else "OBV<均线(偏空)"
+        else:
+            obv_desc = "累积正值" if obv > 0 else "累积负值"
         report.append(f"| OBV(能量潮) | {obv:,.0f} | {obv_desc} |")
 
         # MFI 资金流量指标
@@ -1904,7 +2156,12 @@ class StockAnalyzer:
 
         # MACD
         macd_val = latest_data['macd']
-        macd_desc = "多头" if macd_val > 0 else "空头"
+        if abs(macd_val) < 0.02:
+            macd_desc = "零轴附近"
+        elif macd_val > 0:
+            macd_desc = "多头"
+        else:
+            macd_desc = "空头"
         report.append(f"| MACD | {macd_val:.2f} | {macd_desc} |")
 
         # KDJ
@@ -1917,7 +2174,7 @@ class StockAnalyzer:
         ma50 = position_info.get('ma50', 0)
         close = position_info.get('close', 0)
         ma200 = latest_data.get('ma_200', np.nan)
-        ma200_str = f"{ma200:.2f}" if not pd.isna(ma200) else "无数据"
+        ma200_str = f"¥{ma200:.2f}" if not pd.isna(ma200) else "无数据"
         report.append(f"| 移动平均线 | MA20: ¥{ma20:.2f} / MA50: ¥{ma50:.2f} / MA200: {ma200_str} | 趋势参考 |")
 
         # BOLL
@@ -1965,11 +2222,14 @@ class StockAnalyzer:
         bias6 = latest_data['bias_6']
         bias12 = latest_data['bias_12']
         bias24 = latest_data['bias_24']
-        bias_avg = (bias6 + bias12 + bias24) / 3
-        if bias_avg > 5:
-            bias_desc = "超买偏离"
-        elif bias_avg < -5:
-            bias_desc = "超卖偏离"
+        # 分指标评估：任一指标超阈值即标注
+        max_abs_bias = max(abs(bias6), abs(bias12), abs(bias24))
+        if max_abs_bias > 8:
+            bias_desc = "极端偏离"
+        elif abs(bias6) > 5 or abs(bias12) > 5 or abs(bias24) > 5:
+            bias_desc = "偏离较大"
+        elif abs(bias6) > 3 or abs(bias12) > 3 or abs(bias24) > 3:
+            bias_desc = "轻微偏离"
         else:
             bias_desc = "正常区间"
         report.append(f"| BIAS | BIAS6: {bias6:.2f}% / BIAS12: {bias12:.2f}% / BIAS24: {bias24:.2f}% | {bias_desc} |")
@@ -4429,10 +4689,14 @@ class StockAnalyzer:
         bias12 = latest_data.get('bias_12', 0)
         bias24 = latest_data.get('bias_24', 0)
         bias20 = (close / ma20 - 1) * 100 if ma20 > 0 else 0
-        if abs(bias20) > 8:
+        # 分指标评估：任一指标超阈值即标注
+        max_abs_bias = max(abs(bias6), abs(bias12), abs(bias20), abs(bias24))
+        if max_abs_bias > 8:
             bias_status = "极端偏离"
-        elif abs(bias20) > 5:
+        elif abs(bias6) > 5 or abs(bias12) > 5 or abs(bias20) > 5 or abs(bias24) > 5:
             bias_status = "偏离较大"
+        elif abs(bias6) > 3 or abs(bias12) > 3 or abs(bias20) > 3 or abs(bias24) > 3:
+            bias_status = "轻微偏离"
         else:
             bias_status = "正常区间"
         report.append(f"| BIAS乖离率 | BIAS6:{bias6:.2f}% BIAS12:{bias12:.2f}% BIAS20:{bias20:.2f}% | {bias_status} |")

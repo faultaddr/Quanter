@@ -323,7 +323,17 @@ def normalize_symbol(symbol: str) -> Tuple[str, int]:
     code = symbol.strip()
     code = code.replace('.SH', '').replace('.SZ', '')
     code = code.replace('.sh', '').replace('.sz', '')
-    code = code.replace('sh', '').replace('sz', '')
+
+    # 先提取市场前缀（如果有），避免去掉后无法区分指数和股票
+    explicit_sh = code.lower().startswith('sh')
+    explicit_sz = code.lower().startswith('sz')
+    code = code.replace('sh', '').replace('sz', '').replace('SH', '').replace('SZ', '')
+
+    # 有明确市场前缀的，直接使用
+    if explicit_sh:
+        return code, 1
+    if explicit_sz:
+        return code, 0
 
     # 指数代码特殊处理
     # 深证指数: 399xxx - 深圳

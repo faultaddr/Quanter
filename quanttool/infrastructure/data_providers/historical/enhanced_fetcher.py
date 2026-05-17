@@ -40,6 +40,8 @@ for _proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy',
                    'ALL_PROXY', 'all_proxy']:
     if _proxy_var in os.environ:
         del os.environ[_proxy_var]
+# Bypass all proxies including macOS system proxy (SCDynamicStore)
+os.environ['NO_PROXY'] = '*'
 
 # Try to import AkShare, but make it optional
 try:
@@ -58,6 +60,18 @@ except ImportError:
     bs = None
 
 logger = get_logger(__name__)
+
+
+def _is_index_code(symbol: str) -> bool:
+    """判断是否为指数代码"""
+    code = symbol.replace('.SH', '').replace('.SZ', '').strip()
+    # 上证指数: 000001-000999, 880xxx, 999xxx
+    # 深证指数: 399001-399999
+    if code.startswith(('000', '880', '999')) and len(code) == 6:
+        return True
+    if code.startswith('399') and len(code) == 6:
+        return True
+    return False
 
 
 def _safe_json_loads(content: bytes) -> Any:
@@ -193,12 +207,23 @@ class AshareFetcher:
     @staticmethod
     def _normalize_code(code: str) -> str:
         """标准化股票代码为新浪/腾讯格式"""
+        # 保存原始后缀信息（用于指数代码的正确市场判断）
+        is_sh = '.SH' in code.upper() or '.XSHG' in code.upper()
+        is_sz = '.SZ' in code.upper() or '.XSHE' in code.upper()
+
         # 处理聚宽格式 000001.XSHG -> sh000001
         code = code.replace('.XSHG', '').replace('.XSHE', '')
         code = code.replace('.SH', '').replace('.SZ', '')
 
         if code.startswith(('sh', 'sz', 'SH', 'SZ')):
             return code.lower()
+
+        # 如果原始代码明确标记了市场，优先使用
+        # 例如 000300.SH -> sh000300（沪深300指数，上证市场）
+        if is_sh:
+            return f'sh{code}'
+        if is_sz:
+            return f'sz{code}'
 
         # 根据代码判断市场
         if code.startswith(('5', '6', '9')):
@@ -777,6 +802,146 @@ class EnhancedDataFetcher(IDataProvider):
             logger.error(f"Error fetching AkShare data for {symbol}: {str(e)}")
             return pd.DataFrame()
 
+    def _fetch_index_from_akshare(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """从 AkShare 获取指数数据（使用 index_zh_a_hist 接口）"""
+        if not self.use_akshare or not AKSHARE_AVAILABLE:
+            return pd.DataFrame()
+
+        try:
+            # 去掉后缀，AkShare 指数接口只需要纯数字代码
+            if '.' in symbol:
+                base_symbol = symbol.split('.')[0]
+            else:
+                base_symbol = symbol
+
+            start_formatted = start_date.replace('-', '')
+            end_formatted = end_date.replace('-', '')
+
+            logger.debug(f"Fetching index {symbol} from AkShare using index_zh_a_hist")
+
+            max_retries = 1
+            df = pd.DataFrame()
+            last_error = None
+
+            for attempt in range(max_retries):
+                try:
+                    df = ak.index_zh_a_hist(
+                        symbol=base_symbol,
+                        period="daily",
+                        start_date=start_formatted,
+                        end_date=end_formatted,
+                    )
+                    if not df.empty:
+                        break
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"AkShare index attempt {attempt + 1} failed: {str(e)}")
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+
+            if df.empty:
+                error_msg = str(last_error) if last_error else "No data returned"
+                logger.warning(f"No AkShare index data for {symbol}: {error_msg}")
+                return pd.DataFrame()
+
+            # 列名映射：AkShare 指数接口与个股接口相同
+            column_mapping = {
+                "日期": "timestamp",
+                "开盘": "open",
+                "收盘": "close",
+                "最高": "high",
+                "最低": "low",
+                "成交量": "volume",
+                "成交额": "amount"
+            }
+
+            df = df.rename(columns=column_mapping)
+
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            df["timeframe"] = "1d"
+            df["symbol"] = symbol
+
+            expected_cols = [
+                "timestamp", "open", "high", "low", "close", "volume",
+                "amount", "timeframe", "symbol"
+            ]
+            available_cols = [col for col in expected_cols if col in df.columns]
+            df = df[available_cols]
+
+            df.sort_values("timestamp", inplace=True)
+            df.reset_index(drop=True, inplace=True)
+
+            logger.debug(f"Fetched {len(df)} index bars from AkShare for {symbol}")
+            return df
+
+        except Exception as e:
+            logger.error(f"Error fetching AkShare index data for {symbol}: {str(e)}")
+            return pd.DataFrame()
+
+    def _fetch_index_from_tushare(self, symbol: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        """从 TuShare 获取指数数据（使用 index_daily 接口）"""
+        if not self._tushare_initialized:
+            self.initialize()
+
+        try:
+            start_ts = start_date.strftime("%Y%m%d")
+            end_ts = end_date.strftime("%Y%m%d")
+
+            # TuShare 指数代码格式：000300.SH
+            tushare_symbol = symbol
+            if '.' not in symbol:
+                if len(symbol) == 6:
+                    if symbol.startswith(('5', '6', '9', '000')):
+                        tushare_symbol = f"{symbol}.SH"
+                    else:
+                        tushare_symbol = f"{symbol}.SZ"
+
+            if self._tushare_request_count >= 50:
+                elapsed = time.time() - self._tushare_last_reset
+                if elapsed < 60:
+                    sleep_time = 60 - elapsed
+                    logger.debug(f"TuShare rate limit, waiting {sleep_time:.1f}s")
+                    time.sleep(sleep_time)
+                self._tushare_request_count = 0
+                self._tushare_last_reset = time.time()
+
+            df = self.pro_api.index_daily(
+                ts_code=tushare_symbol, start_date=start_ts, end_date=end_ts
+            )
+
+            if df.empty:
+                logger.warning(f"No TuShare index data for {tushare_symbol}")
+                return pd.DataFrame()
+
+            self._tushare_request_count += 1
+
+            df.rename(
+                columns={
+                    "ts_code": "symbol",
+                    "trade_date": "timestamp",
+                    "vol": "volume"
+                },
+                inplace=True,
+            )
+
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            df["timeframe"] = "1d"
+            df["symbol"] = symbol
+
+            expected_cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'amount', 'timeframe', 'symbol']
+            available_cols = [col for col in expected_cols if col in df.columns]
+            df = df[available_cols]
+
+            df.sort_values('timestamp', inplace=True)
+            df.reset_index(drop=True, inplace=True)
+
+            logger.debug(f"Fetched {len(df)} index bars from TuShare for {symbol}")
+            return df
+
+        except Exception as e:
+            logger.warning(f"TuShare index fetch failed for {symbol}: {str(e)}")
+            return pd.DataFrame()
+
     def _fetch_from_baostock(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         """Fetch data from BaoStock as fallback (thread-safe)."""
         if not BAOSTOCK_AVAILABLE:
@@ -918,6 +1083,34 @@ class EnhancedDataFetcher(IDataProvider):
             try:
                 df = pd.DataFrame()
 
+                # 指数专用路径
+                if _is_index_code(symbol):
+                    # 1. AkShare index_zh_a_hist（最佳指数数据源）
+                    if self.use_akshare and AKSHARE_AVAILABLE:
+                        logger.debug(f"Fetching index {symbol} from AkShare index API")
+                        df = self._fetch_index_from_akshare(symbol, start_str, end_str)
+                        if not df.empty:
+                            results[symbol] = df
+                            continue
+
+                    # 2. Ashare（修复后的 _normalize_code 支持指数）
+                    logger.debug(f"Fetching index {symbol} from Ashare")
+                    df = self._fetch_from_ashare(symbol, start_str, end_str)
+                    if not df.empty:
+                        results[symbol] = df
+                        continue
+
+                    # 3. TuShare index_daily
+                    logger.debug(f"Falling back to TuShare index API for {symbol}")
+                    df = self._fetch_index_from_tushare(symbol, start_date, end_date)
+                    if not df.empty:
+                        results[symbol] = df
+                        continue
+
+                    logger.warning(f"All index data sources failed for {symbol}")
+                    continue
+
+                # 个股路径
                 # 1. 最高优先级：Ashare（免费、无需Token、双核心）
                 logger.debug(f"Fetching {symbol} from Ashare (primary source)")
                 df = self._fetch_from_ashare(symbol, start_str, end_str)
@@ -1989,7 +2182,7 @@ class EnhancedDataFetcher(IDataProvider):
     def realtime_provider(self):
         """获取实时数据提供者（延迟初始化）"""
         if not hasattr(self, '_realtime_provider') or self._realtime_provider is None:
-            from .realtime_data_provider import get_realtime_provider
+            from ..realtime.realtime_provider import get_realtime_provider
             self._realtime_provider = get_realtime_provider()
         return self._realtime_provider
 

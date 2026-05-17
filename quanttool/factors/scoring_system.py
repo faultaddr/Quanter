@@ -527,8 +527,9 @@ class ScoringSystem:
         elif volume_ratio > 1.2:
             volume_bonus = 1.5
 
-        # 5. 最终评分
-        final_score = trend_score + trend_bonus + volume_bonus
+        # 5. 最终评分（乘法系数避免高分膨胀）
+        bonus_multiplier = 1.0 + (trend_bonus / 100) + (volume_bonus / 100)
+        final_score = trend_score * bonus_multiplier
         final_score = max(0, min(100, final_score))
 
         # 6. 检测双触发信号

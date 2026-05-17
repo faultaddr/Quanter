@@ -93,7 +93,7 @@ class RealtimeDataProvider:
         """获取 Pytdx 提供者（延迟加载）"""
         if self._pytdx_provider is None and self._config.enable_pytdx:
             try:
-                from .pytdx_realtime_provider import PytdxRealtimeProvider
+                from .pytdx_source import PytdxRealtimeProvider
                 self._pytdx_provider = PytdxRealtimeProvider(
                     cache_ttl=self._config.cache_ttl
                 )
@@ -105,7 +105,7 @@ class RealtimeDataProvider:
     def _get_sina_provider(self):
         """获取 Sina 提供者（延迟加载）"""
         if self._sina_provider is None and self._config.enable_sina:
-            from .sina_realtime_provider import SinaRealtimeProvider
+            from .sina_source import SinaRealtimeProvider
             self._sina_provider = SinaRealtimeProvider(
                 cache_ttl=self._config.cache_ttl
             )

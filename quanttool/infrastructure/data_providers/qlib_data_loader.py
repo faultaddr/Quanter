@@ -226,25 +226,18 @@ class QlibDataLoader:
             fields: 需要加载的字段，默认 ['open', 'close', 'high', 'low', 'volume']
             use_adjclose: 是否使用前复权价格（与行情软件一致），默认 False
                 - False: 使用后复权价格（$close），适合技术分析和回测
-                - True: 使用前复权价格（$adjclose），与行情软件显示一致
+                - True: 使用前复权价格，与行情软件显示一致
+                  计算方式：前复权 = $close / $factor[latest]
 
         Returns:
             DataFrame，索引为日期
 
         价格说明:
-            qlib 数据包含两种复权价格：
-            - $close: 后复权价格，保持历史价格连续性，适合技术分析和回测
-            - $adjclose: 前复权价格，与行情软件显示一致，但会因分红送股而调整
-            - $factor: 复权因子，可用于计算原始价格
-
-        示例:
-            # 获取与行情软件一致的价格
-            df = loader.load_stock_data('SH600000', use_adjclose=True)
-            print(df['close'])  # 约 110 元（前复权）
-
-            # 获取适合回测的价格（默认）
-            df = loader.load_stock_data('SH600000', use_adjclose=False)
-            print(df['close'])  # 约 4.3 元（后复权）
+            qlib 数据的复权关系：
+            - $close: 后复权价格，保持历史价格连续性
+            - $factor: 复权因子，raw_price = $close / $factor
+            - $adjclose: qlib 内置字段，数据有误（数值膨胀），不可直接使用
+            - 正确前复权 = $close / $factor[latest]，与行情软件一致
         """
         if not self._initialized:
             if not self.init_qlib():
@@ -278,16 +271,17 @@ class QlibDataLoader:
             # 重命名列：移除 $ 前缀
             df.columns = [col.lstrip('$') if col.startswith('$') else col for col in df.columns]
 
-            # 处理前复权价格
-            if use_adjclose and 'adjclose' in df.columns and 'close' in df.columns:
-                # 计算复权比例：adjclose / close
-                # 用这个比例调整 open/high/low
-                adj_ratio = df['adjclose'] / df['close']
-                df['open'] = df['open'] * adj_ratio
-                df['high'] = df['high'] * adj_ratio
-                df['low'] = df['low'] * adj_ratio
-                # 将 adjclose 作为 close
-                df['close'] = df['adjclose']
+            # 处理前复权价格：使用 factor 计算正确的前复权价格
+            # qlib $adjclose 数据有误（累积了所有复权因子，数值膨胀数十倍）
+            # 正确公式：前复权 = $close / $factor[latest_day]
+            if use_adjclose and 'factor' in df.columns and 'close' in df.columns:
+                latest_factor = df['factor'].iloc[-1]
+                if latest_factor > 0:
+                    adj_ratio = 1.0 / latest_factor
+                    df['open'] = df['open'] * adj_ratio
+                    df['high'] = df['high'] * adj_ratio
+                    df['low'] = df['low'] * adj_ratio
+                    df['close'] = df['close'] * adj_ratio
 
             # 设置日期索引
             if 'date' in df.columns:
