@@ -61,30 +61,50 @@ export const backtestApi = {
       }
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
+      let buffer = '';
+
+      const handleLine = (line: string) => {
+        if (!line.startsWith('data: ')) {
+          return;
+        }
+
+        try {
+          const data = JSON.parse(line.slice(6));
+          console.log('[SSE] Received:', data.type, data.result?.strategy || '');
+          if (data.type === 'strategy_complete') {
+            onStrategyComplete(data.result);
+          } else if (data.type === 'done') {
+            onDone(data.results);
+          }
+        } catch (e) {
+          console.error('Parse SSE error:', e);
+        }
+      };
+
+      const flushBuffer = (final: boolean) => {
+        let newlineIndex = buffer.indexOf('\n');
+        while (newlineIndex !== -1) {
+          const line = buffer.slice(0, newlineIndex).replace(/\r$/, '');
+          buffer = buffer.slice(newlineIndex + 1);
+          handleLine(line);
+          newlineIndex = buffer.indexOf('\n');
+        }
+
+        if (final && buffer.length > 0) {
+          handleLine(buffer.replace(/\r$/, ''));
+          buffer = '';
+        }
+      };
 
       function read() {
         reader?.read().then(({ done, value }) => {
           if (done) {
+            buffer += decoder.decode();
+            flushBuffer(true);
             return;
           }
-          const chunk = decoder.decode(value);
-          const lines = chunk.split('\n');
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                console.log('[SSE] Received:', data.type, data.result?.strategy || '');
-                if (data.type === 'strategy_complete') {
-                  onStrategyComplete(data.result);
-                } else if (data.type === 'done') {
-                  onDone(data.results);
-                }
-              } catch (e) {
-                console.error('Parse SSE error:', e);
-              }
-            }
-          }
+          buffer += decoder.decode(value, { stream: true });
+          flushBuffer(false);
           read();
         });
       }

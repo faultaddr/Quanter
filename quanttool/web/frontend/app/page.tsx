@@ -128,6 +128,7 @@ export default function HomePage() {
   const [marketIndices, setMarketIndices] = useState<RealtimeQuote[]>([]);
   const [loading, setLoading] = useState(true);
   const [marketError, setMarketError] = useState<string | null>(null);
+  const showInitialLoading = loading && marketIndices.length === 0;
 
   const fetchMarketIndices = useCallback(async () => {
     setLoading(true);
@@ -239,9 +240,9 @@ export default function HomePage() {
             </div>
           }
         >
-          {loading ? (
+          {showInitialLoading ? (
             <div className="text-center py-8 text-text-muted">加载中...</div>
-          ) : marketError ? (
+          ) : marketError && marketIndices.length === 0 ? (
             <div className="text-center py-8">
               <div className="text-warning">{marketError}</div>
               <Button size="sm" variant="ghost" className="mt-3" onClick={fetchMarketIndices}>
