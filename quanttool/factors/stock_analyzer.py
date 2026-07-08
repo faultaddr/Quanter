@@ -35,7 +35,9 @@ from quanttool.factors.analysis_context import (
     UnifiedMarketState, FinalRecommendation, ScoringSystemType,
     ClassicScore, TrendScore, BreakoutScore
 )
+from quanttool.factors.analysis_orchestrator import AnalysisOrchestrator
 from quanttool.factors.recommendation_engine import RecommendationEngine
+from quanttool.factors.reports import StockReportGenerator
 from quanttool.factors.unified_stop_loss import UnifiedStopLossCalculator
 
 
@@ -96,6 +98,8 @@ class StockAnalyzer:
         self._batch_data_cache: Dict[str, pd.DataFrame] = {}
         # Cache for batch-fetched realtime prices (avoids N+1 per-stock HTTP calls)
         self._realtime_price_cache: Dict[str, float] = {}
+        self.analysis_orchestrator = AnalysisOrchestrator()
+        self.stock_report_generator = StockReportGenerator()
 
     def get_stock_data(
         self,
@@ -878,101 +882,12 @@ class StockAnalyzer:
             except Exception:
                 pass
 
-        # 初始化上下文
-        context = AnalysisContext(
-            symbol=symbol,
+        return self.analysis_orchestrator.build_context(
+            df,
+            symbol,
+            primary_system=primary_system,
             current_price=close,
-            analysis_date=datetime.now()
         )
-
-        # 1. 运行三套评分系统
-        print("正在计算三套评分系统...")
-
-        # 经典评分
-        context.classic_score = self._run_classic_scoring(df, symbol)
-
-        # 趋势评分
-        context.trend_score = self._run_trend_scoring(df)
-
-        # 突破评分
-        context.breakout_score = self._run_breakout_scoring(df)
-
-        # 2. 构建统一市场状态
-        context.market_state = self._build_unified_market_state(df)
-
-        # 3. 构建位置评估
-        context.position_assessment = self._build_position_assessment(df, context.classic_score)
-
-        # 4. 计算统一止损
-        stop_loss_calculator = UnifiedStopLossCalculator()
-        context.stop_loss_config = stop_loss_calculator.calculate(df, context)
-
-        # 5. 存储K线形态
-        candlestick_result = recognize_talib_patterns(df, lookback=5)
-        context.candlestick_patterns = candlestick_result.get('patterns', [])
-
-        # 6. K线形态筛选（替换硬编码）
-        screener = StockScreener()
-        screening_outcome = screener.screen(df, context.classic_score.factors_raw)
-        context.screening_result = {
-            'result': screening_outcome.result.value,
-            'score_modifier': screening_outcome.score_modifier,
-            'reasons': screening_outcome.reasons,
-            'details': screening_outcome.details,
-        }
-
-        # 7. 运行传统策略信号（RSI/MACD/MA/BOLL）
-        strategies = TradingStrategies()
-        strategy_signals = {}
-        try:
-            rsi_signal = strategies.rsi_strategy(df)
-            macd_signal = strategies.macd_strategy(df)
-            ma_signal = strategies.ma_crossover_strategy(df)
-            boll_signal = strategies.bollinger_bands_strategy(df)
-            strategy_signals['rsi'] = strategies.evaluate_current_signal(rsi_signal, 'RSI策略')
-            strategy_signals['macd'] = strategies.evaluate_current_signal(macd_signal, 'MACD策略')
-            strategy_signals['ma'] = strategies.evaluate_current_signal(ma_signal, '均线交叉策略')
-            strategy_signals['boll'] = strategies.evaluate_current_signal(boll_signal, '布林带策略')
-        except Exception as e:
-            strategy_signals['error'] = str(e)
-        context.strategy_signals = strategy_signals
-
-        # 7.5 获取基本面数据
-        try:
-            from ..infrastructure.data_providers.fundamental_provider import FundamentalDataProvider
-            from ..factors.fundamental_rating import FundamentalRating
-            from .analysis_context import FundamentalData
-
-            fd_provider = FundamentalDataProvider()
-            fd_dict = fd_provider.get_fundamental_summary(symbol)
-            fd = FundamentalData()
-            for k, v in fd_dict.items():
-                if hasattr(fd, k):
-                    setattr(fd, k, v)
-            context.fundamental_data = fd
-            print(f"基本面数据: PE={fd.pe_ttm or 'N/A'}, ROE={fd.roe or 'N/A'}%, 数据源={fd.data_source}")
-        except Exception as e:
-            print(f"基本面数据获取失败: {e}")
-
-        # 8. 存储最后一行数据 + 流动性指标
-        last_row = latest.to_dict() if hasattr(latest, 'to_dict') else dict(latest)
-        # 计算20日日均成交额供推荐引擎使用
-        amt_col = 'amount' if 'amount' in df.columns else ('amt' if 'amt' in df.columns else None)
-        if amt_col:
-            last_row['amt_ma20'] = df[amt_col].tail(20).mean()
-        context.df_last_row = last_row
-
-        # 9. 生成最终推荐（单点决策）
-        recommendation_engine = RecommendationEngine()
-        context.final_recommendation = recommendation_engine.generate_recommendation(context)
-
-        print(f"评分完成: 经典={context.classic_score.score:.1f}分, "
-              f"趋势={context.trend_score.final_score:.1f}分, "
-              f"突破={context.breakout_score.final_score:.1f}分")
-        print(f"最终推荐: {context.final_recommendation.get_action_display()} "
-              f"(主系统: {context.final_recommendation.primary_system.value})")
-
-        return context
 
     def _run_classic_scoring(self, df: pd.DataFrame, symbol: str) -> ClassicScore:
         """运行经典评分系统"""
@@ -1246,45 +1161,7 @@ class StockAnalyzer:
 
         使用同一个 FinalRecommendation 对象，确保报告各部分一致
         """
-        if df.empty:
-            return "No data available for report generation"
-
-        report = []
-        rec = context.final_recommendation
-
-        # 基本信息
-        report.append(f"# 股票技术分析报告：{symbol}")
-        report.append("")
-        report.append(f"**分析日期：** {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        report.append(f"**主评分系统：** {rec.primary_system.value}")
-        report.append("")
-
-        # ========== 第一部分：核心结论 ==========
-        report.extend(self._generate_core_conclusion_v2(context))
-
-        # ========== 第二部分：三系统评分对比 ==========
-        report.extend(self._generate_three_system_analysis(context))
-
-        # ========== 第三部分：市场状态与风险 ==========
-        report.extend(self._generate_market_risk_section(context))
-
-        # ========== 第四部分：交易执行计划 ==========
-        report.extend(self._generate_trading_plan_v2(context))
-
-        # 附录：原始技术指标
-        report.append("---")
-        report.append("")
-        report.append("## 附录：原始技术指标")
-        report.append("")
-
-        latest = df.iloc[-1]
-        report.extend(self._generate_technical_indicators_table(latest, context))
-
-        report.append("")
-        report.append("> **免责声明：** 本分析仅供学习参考，不构成投资建议。投资决策应基于全面研究和独立判断。")
-        report.append("")
-
-        return "\n".join(report)
+        return self.stock_report_generator.generate(df, context, symbol)
 
     def _generate_core_conclusion_v2(self, context: AnalysisContext) -> List[str]:
         """生成核心结论（使用统一推荐）"""

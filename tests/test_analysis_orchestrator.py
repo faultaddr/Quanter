@@ -181,3 +181,54 @@ class StockReportGeneratorTests(unittest.TestCase):
         self.assertIn("## 第二部分：三系统评分对比", report)
         self.assertIn("## 第四部分：交易执行计划", report)
         self.assertIn("测试推荐", report)
+
+
+class StockAnalyzerFacadeDelegationTests(unittest.TestCase):
+    def test_stock_analyzer_build_context_delegates_to_orchestrator(self):
+        from quanttool.factors.analysis_context import AnalysisContext
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+
+        class FakeOrchestrator:
+            def __init__(self):
+                self.calls = []
+
+            def build_context(self, df, symbol, primary_system=ScoringSystemType.AUTO, current_price=None):
+                self.calls.append((symbol, current_price, primary_system))
+                return AnalysisContext(
+                    symbol=symbol,
+                    current_price=current_price,
+                    analysis_date=df["timestamp"].iloc[-1].to_pydatetime(),
+                )
+
+        df = make_indicator_ready_ohlcv(rows=260)
+        analyzer = StockAnalyzer.__new__(StockAnalyzer)
+        analyzer.fetcher = None
+        analyzer._realtime_price_cache = {}
+        analyzer.analysis_orchestrator = FakeOrchestrator()
+
+        context = analyzer.build_analysis_context(df, "000001.SZ")
+
+        self.assertEqual(context.symbol, "000001.SZ")
+        self.assertEqual(context.current_price, df["close"].iloc[-1])
+        self.assertEqual(len(analyzer.analysis_orchestrator.calls), 1)
+
+    def test_stock_analyzer_report_delegates_to_report_generator(self):
+        from quanttool.factors.analysis_context import AnalysisContext
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+
+        class FakeReportGenerator:
+            def generate(self, df, context, symbol):
+                return f"report:{symbol}:{context.current_price:.2f}:{len(df)}"
+
+        df = make_indicator_ready_ohlcv(rows=260)
+        analyzer = StockAnalyzer.__new__(StockAnalyzer)
+        analyzer.stock_report_generator = FakeReportGenerator()
+        context = AnalysisContext(
+            symbol="000001.SZ",
+            current_price=12.34,
+            analysis_date=df["timestamp"].iloc[-1].to_pydatetime(),
+        )
+
+        report = analyzer.generate_report_from_context(df, context, "000001.SZ")
+
+        self.assertEqual(report, "report:000001.SZ:12.34:260")
