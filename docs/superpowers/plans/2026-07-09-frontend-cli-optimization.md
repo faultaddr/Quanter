@@ -71,7 +71,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import typer
+import click
 from typer.testing import CliRunner
 
 
@@ -90,7 +90,10 @@ class CliOptimizationTests(unittest.TestCase):
 
         importlib.import_module("quanttool.cli.main")
 
-        self.assertNotIn("quanttool.factors.stock_analyzer", sys.modules)
+        self.assertFalse(
+            "quanttool.factors.stock_analyzer" in sys.modules,
+            "stock_analyzer should not be imported at CLI import time",
+        )
 
     def test_quick_analyze_uses_unified_context_and_writes_output(self):
         calls = []
@@ -150,7 +153,7 @@ class CliOptimizationTests(unittest.TestCase):
         with patch.dict(sys.modules, {"quanttool.factors.stock_analyzer": fake_module}):
             sys.modules.pop("quanttool.cli.main", None)
             cli_main = importlib.import_module("quanttool.cli.main")
-            with self.assertRaises(typer.ClickException) as ctx:
+            with self.assertRaises(click.ClickException) as ctx:
                 cli_main.analyze("000001", days=120, output=None)
 
         self.assertIn("boom", str(ctx.exception))
@@ -304,7 +307,9 @@ Replace the command body in `quanttool/cli/main.py` with:
         analyzer = StockAnalyzer()
         context, report = analyzer.analyze_stock_with_context(symbol, days)
     except Exception as exc:
-        raise typer.ClickException(str(exc)) from exc
+        import click
+
+        raise click.ClickException(str(exc)) from exc
 
     _echo_context_summary(context)
     typer.echo(report)
