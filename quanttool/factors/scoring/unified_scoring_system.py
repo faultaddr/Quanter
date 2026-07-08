@@ -51,15 +51,11 @@ class UnifiedScoringSystem:
             # 如果导入失败，保持空列表
             return
 
-        for strategy_class in (
-            TrendScoringStrategy,
-            BreakoutScoringStrategy,
-            MultiDimensionScoringStrategy,
-        ):
-            try:
-                self.strategies.append(strategy_class())
-            except Exception:
-                continue
+        self.strategies = [
+            TrendScoringStrategy(),
+            BreakoutScoringStrategy(),
+            MultiDimensionScoringStrategy(),
+        ]
 
     def add_strategy(self, strategy: ScoringStrategy) -> 'UnifiedScoringSystem':
         """添加评分策略

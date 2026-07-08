@@ -6,6 +6,14 @@ from tests.fixtures.algorithm_data import make_indicator_ready_ohlcv
 
 
 class UnifiedScoringContractTests(unittest.TestCase):
+    def test_default_scorer_loads_all_context_strategies(self):
+        scorer = UnifiedScoringSystem()
+
+        self.assertEqual(
+            {strategy.name for strategy in scorer.strategies},
+            {"multi_dimension", "trend", "breakout"},
+        )
+
     def test_default_scorer_returns_context_score_keys(self):
         scorer = UnifiedScoringSystem()
         scores = scorer.calculate_context_scores(
@@ -21,7 +29,10 @@ class UnifiedScoringContractTests(unittest.TestCase):
                 self.assertEqual(result.strategy_name, key)
                 self.assertGreaterEqual(result.final_score, 0)
                 self.assertLessEqual(result.final_score, 100)
+                self.assertNotIn("评分策略缺失", result.filter_reason)
                 self.assertIsInstance(result.to_dict(), dict)
+
+        self.assertIn("is_low_position", scores["breakout"].details)
 
     def test_multi_dimension_strategy_uses_legacy_calculate_all_scores(self):
         scorer = UnifiedScoringSystem()

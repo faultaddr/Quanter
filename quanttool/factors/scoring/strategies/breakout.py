@@ -48,14 +48,19 @@ class BreakoutScoringStrategy(ScoringStrategy):
         self.max_consolidation_days = max_consolidation_days
         self.max_range = max_range
         self.min_range = min_range
-        self._legacy_system = _LegacyBreakoutScoringSystem(
-            consolidation_params={
-                'min_days': min_consolidation_days,
-                'max_days': max_consolidation_days,
-                'max_range': max_range,
-                'min_range': min_range,
-            }
-        )
+        legacy_kwargs = {
+            key: kwargs[key]
+            for key in ("min_amount", "min_list_days")
+            if key in kwargs
+        }
+        self._legacy_system = _LegacyBreakoutScoringSystem(**legacy_kwargs)
+        self._legacy_system.CONSOLIDATION_PARAMS = {
+            **self._legacy_system.CONSOLIDATION_PARAMS,
+            'min_days': min_consolidation_days,
+            'max_days': max_consolidation_days,
+            'max_range': max_range,
+            'min_range': min_range,
+        }
 
     @property
     def name(self) -> str:
