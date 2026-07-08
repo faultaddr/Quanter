@@ -158,3 +158,26 @@ class AnalysisOrchestratorTests(unittest.TestCase):
             expected.position_modifier,
         )
         self.assertEqual(context.classic_score.warnings, expected.warnings)
+
+
+class StockReportGeneratorTests(unittest.TestCase):
+    def test_report_generator_renders_context_sections(self):
+        from quanttool.factors.analysis_orchestrator import AnalysisOrchestrator
+        from quanttool.factors.reports.stock_report import StockReportGenerator
+
+        df = make_indicator_ready_ohlcv(rows=260)
+        context = AnalysisOrchestrator(
+            scoring_system=FakeScoringSystem(),
+            recommendation_engine=FakeRecommendationEngine(),
+            stop_loss_calculator=FakeStopLossCalculator(),
+            market_state_builder=lambda data: UnifiedMarketState(confidence=0.75),
+            fundamental_provider=lambda symbol: FundamentalData(data_source="fake"),
+        ).build_context(df, "000001.SZ", current_price=12.34)
+
+        report = StockReportGenerator().generate(df, context, "000001.SZ")
+
+        self.assertIn("# 股票技术分析报告：000001.SZ", report)
+        self.assertIn("## 第一部分：核心结论", report)
+        self.assertIn("## 第二部分：三系统评分对比", report)
+        self.assertIn("## 第四部分：交易执行计划", report)
+        self.assertIn("测试推荐", report)
