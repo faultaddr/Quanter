@@ -82,56 +82,36 @@ QuantTool 是一个专业的 A 股量化交易分析平台，提供技术分析�
 ```
 QuantTool/
 ├── quanttool/
-│   ├── core/                    # 核心功能
-│   │   ├── errors.py           # 错误处理
-│   │   ├── logging.py          # 日志
-│   │   └── registry.py         # 组件注册
-│   │
-│   ├── domain/                  # 领域层
-│   │   ├── interfaces/         # 接口定义
-│   │   └── models/             # 数据模型
-│   │
 │   ├── application/             # 应用服务层
-│   │   ├── analysis_service.py
-│   │   ├── backtest_service.py
-│   │   └── factor_service.py
-│   │
-│   ├── infrastructure/          # 基础设施层
-│   │   ├── data_providers/     # 数据提供者
-│   │   │   ├── ashare_provider.py
-│   │   │   ├── akshare_minute_provider.py
-│   │   │   └── data_fetcher.py
-│   │   └── stores/             # 存储层
-│   │
-│   ├── strategies/              # 交易策略
-│   │   ├── ma_cross.py
-│   │   ├── breakout.py
-│   │   └── ...
-│   │
-│   ├── factors/                 # 因子库
-│   │   ├── factor_validator.py
-│   │   ├── factor_pipeline.py
-│   │   ├── factor_registry.py
-│   │   └── neutralizer.py
-│   │
-│   ├── optimization/            # 优化器
-│   │   └── weight_optimizer.py
-│   │
-│   ├── risk/                    # 风险管理
-│   │   └── risk_controller.py
-│   │
 │   ├── backtest/                # 回测引擎
-│   │   ├── engine.py
-│   │   └── ashare_constraints.py
-│   │
+│   ├── config/                  # 配置管理
+│   ├── core/                    # 错误、日志、注册表
+│   ├── domain/                  # 接口与领域模型
+│   ├── factors/                 # 因子库
+│   │   ├── scoring/             # 统一评分系统
+│   │   └── technical/           # 技术因子
+│   ├── infrastructure/          # 基础设施层
+│   │   ├── cache/
+│   │   ├── data_providers/
+│   │   │   ├── historical/
+│   │   │   ├── incremental/
+│   │   │   └── realtime/
+│   │   ├── database/
+│   │   ├── notifiers/
+│   │   └── stores/
+│   ├── ml/                      # 模型训练与特征
+│   ├── optimization/            # 优化器
+│   ├── reports/                 # 报告系统
+│   │   └── generators/
+│   ├── risk/                    # 风险管理
+│   ├── strategies/              # 交易策略
+│   ├── validation/              # 评分/因子验证
 │   ├── web/                     # Web 层
-│   │   ├── api/                # API 路由
-│   │   └── frontend/           # Next.js 前端
-│   │
+│   │   ├── api/                 # FastAPI 路由
+│   │   ├── frontend/            # Next.js 前端
+│   │   └── schemas/             # API 请求/响应模型
 │   └── cli/                     # 命令行工具
-│       └── main.py
-│
-└── tests/                       # 测试用例
+└── tests/                       # smoke tests 与后续单元测试
 ```
 
 ## 安装
@@ -150,7 +130,7 @@ git clone https://github.com/faultaddr/Quanter.git
 cd Quanter
 
 # 安装 Python 依赖
-pip install -e .
+python3 -m pip install -e .
 
 # 安装前端依赖
 cd quanttool/web/frontend
@@ -171,6 +151,23 @@ npm run dev
 ```
 
 访问 http://localhost:3000 打开 Web 界面。
+
+### 本地验证
+
+```bash
+# 后端 smoke tests
+.venv-mcp/bin/python -m unittest discover -s tests -v
+
+# Python 语法编译检查
+.venv-mcp/bin/python -m compileall -q quanttool
+
+# CLI 入口检查
+.venv-mcp/bin/python -m quanttool --help
+
+# 前端 lint
+cd quanttool/web/frontend
+npm run lint
+```
 
 ### 使用 Web 界面
 
@@ -238,14 +235,25 @@ print(f"收益率: {result.total_return:.2%}")
 ## 测试
 
 ```bash
-# 运行所有测试
-pytest tests/ -v
+# 当前最小测试基线（无需 pytest）
+python3 -m unittest discover -s tests -v
 
-# 运行覆盖率测试
+# 如果安装了 dev 依赖，也可以使用 pytest
+python3 -m pytest tests/ -v
+
+# 覆盖率测试
 pytest tests/ --cov=quanttool --cov-report=html
 ```
 
-当前测试覆盖：400+ 测试用例通过。
+当前仓库提供 smoke tests 作为基础质量闸门，后续功能应继续补充 pytest 单元测试和 Playwright E2E 测试。
+
+## 运行产物
+
+以下目录和文件属于本地运行或构建产物，不应提交到版本库：
+
+- `reports/`、`.cache/`、`quanttool.log`
+- `models/`、`mlruns/`、`qlib_data/`
+- `quanttool/web/frontend/.next/`、`node_modules/`、`*.tsbuildinfo`
 
 ## 许可证
 
