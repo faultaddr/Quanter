@@ -12,6 +12,9 @@
 
 - Do not delete legacy public imports for `quanttool.factors.stock_analyzer.StockAnalyzer`, `quanttool.factors.scoring_system.ScoringSystem`, `quanttool.factors.trend_scoring_system.TrendScoringSystem`, or `quanttool.factors.breakout_scoring_system.BreakoutScoringSystem`.
 - Do not change scoring thresholds, factor weights, recommendation rules, API paths, CLI commands, or report section text.
+- When extracting orchestration code, preserve the current `StockAnalyzer._build_position_assessment` behavior exactly; do not replace it with a simplified heuristic.
+- Preserve the current default fundamental-data loading behavior in `StockAnalyzer.build_analysis_context`; dependency injection may override it only for deterministic tests.
+- When moving report helpers into a subpackage, update imports to keep existing dependencies valid without changing rendered report text.
 - Do not touch `quanttool/backtest/engine.py`, `quanttool/strategies/qlib_strategy.py`, `quanttool/strategies/gbm_strategy.py`, or `quanttool/factors/ml_feature_engineer.py` in this phase.
 - Do not add runtime dependencies.
 - Tests must use deterministic local OHLCV fixtures and must not require qlib, databases, network data providers, or realtime行情.
@@ -813,11 +816,18 @@ Finish the file with the remaining helpers:
             return UnifiedMarketState()
 
     def _build_position_assessment(self, df: pd.DataFrame, classic_score: ClassicScore) -> PositionAssessment:
+        """Build position assessment using the current StockAnalyzer rules."""
+        if df.empty:
+            return PositionAssessment()
+
         latest = df.iloc[-1]
         close = latest.get("close", 0)
         ma20 = latest.get("ma_20", close)
         ma50 = latest.get("ma_50", close)
         ma200 = latest.get("ma_200", 0)
+
+        position_modifier = classic_score.position_modifier
+
         wr = latest.get("wr", 50)
         cci = latest.get("cci", 0)
         rsi = latest.get("rsi_24", 50)
@@ -828,27 +838,67 @@ Finish the file with the remaining helpers:
         is_extreme_oversold = wr > 90 or cci < -200 or rsi < 20 or boll_pctb < 0.05
         is_overbought = (wr < 20 or cci > 100 or rsi > 70 or boll_pctb > 0.85) and not is_extreme_overbought
         is_oversold = (wr > 80 or cci < -100 or rsi < 30 or boll_pctb < 0.15) and not is_extreme_oversold
+
         avg_ma = (ma20 + ma50) / 2 if ma20 > 0 and ma50 > 0 else close
         price_ratio = close / avg_ma if avg_ma > 0 else 1.0
         bias20 = (close / ma20 - 1) if ma20 > 0 else 0
-        position = "low" if is_oversold or is_extreme_oversold else "high" if is_overbought or is_extreme_overbought else "middle"
-        reason = f"位置评估: WR={wr:.1f}, RSI={rsi:.1f}, BOLL={boll_pctb:.2f}"
+
+        long_term_position = "mid"
+        short_term_position = "mid"
+
+        if len(df) >= 60:
+            high_60 = df["high"].iloc[-60:].max()
+            low_60 = df["low"].iloc[-60:].min()
+            if high_60 > low_60:
+                position_ratio = (close - low_60) / (high_60 - low_60)
+                if position_ratio < 0.35:
+                    long_term_position = "low"
+                elif position_ratio > 0.65:
+                    long_term_position = "high"
+
+        if is_extreme_oversold or is_oversold:
+            short_term_position = "low"
+        elif is_extreme_overbought or is_overbought:
+            short_term_position = "high"
+
+        if is_extreme_oversold or is_oversold:
+            position = "low"
+            reason = f"技术指标超卖（WR={wr:.1f}, RSI={rsi:.1f}）"
+        elif is_extreme_overbought or is_overbought:
+            position = "high"
+            reason = f"技术指标超买（WR={wr:.1f}, RSI={rsi:.1f}）"
+        elif boll_pctb < 0.25:
+            position = "low"
+            reason = f"布林带下轨附近（位置={boll_pctb*100:.0f}%）"
+        elif boll_pctb > 0.75:
+            position = "high"
+            reason = f"布林带上轨附近（位置={boll_pctb*100:.0f}%）"
+        elif price_ratio < 0.95:
+            position = "low"
+            reason = f"均线位置偏低（价格/均价={price_ratio:.2f}）"
+        elif price_ratio > 1.05:
+            position = "high"
+            reason = f"均线位置偏高（价格/均价={price_ratio:.2f}）"
+        else:
+            position = "middle"
+            reason = f"位置适中（修正系数={position_modifier:.2f}）"
+
         return PositionAssessment(
             position=position,
-            long_term_position="mid",
-            short_term_position=position if position in {"low", "high"} else "mid",
+            long_term_position=long_term_position,
+            short_term_position=short_term_position,
             is_overbought=is_overbought or is_extreme_overbought,
             is_oversold=is_oversold or is_extreme_oversold,
             is_extreme_overbought=is_extreme_overbought,
             is_extreme_oversold=is_extreme_oversold,
-            position_modifier=classic_score.position_modifier,
+            position_modifier=position_modifier,
             price_ratio=price_ratio,
             boll_pctb=boll_pctb,
             bias20=bias20,
             close=close,
             ma20=ma20,
             ma50=ma50,
-            ma200=0 if pd.isna(ma200) else ma200,
+            ma200=ma200 if not pd.isna(ma200) else 0,
             reason=reason,
         )
 
@@ -877,11 +927,24 @@ Finish the file with the remaining helpers:
         return signals
 
     def _load_fundamental_data(self, symbol: str) -> FundamentalData:
-        if self.fundamental_provider is None:
-            return FundamentalData()
+        if self.fundamental_provider is not None:
+            try:
+                return self.fundamental_provider(symbol)
+            except Exception:
+                return FundamentalData()
+
         try:
-            return self.fundamental_provider(symbol)
-        except Exception:
+            from quanttool.infrastructure.data_providers.fundamental_provider import FundamentalDataProvider
+
+            fd_dict = FundamentalDataProvider().get_fundamental_summary(symbol)
+            fd = FundamentalData()
+            for key, value in fd_dict.items():
+                if hasattr(fd, key):
+                    setattr(fd, key, value)
+            print(f"基本面数据: PE={fd.pe_ttm or 'N/A'}, ROE={fd.roe or 'N/A'}%, 数据源={fd.data_source}")
+            return fd
+        except Exception as exc:
+            print(f"基本面数据获取失败: {exc}")
             return FundamentalData()
 
     def _build_last_row(self, df: pd.DataFrame) -> dict:
@@ -1003,6 +1066,7 @@ from quanttool.factors.analysis_context import (
     ScoringSystemType,
     StopLossType as UnifiedStopLossType,
 )
+from quanttool.factors.fundamental_rating import FundamentalRating
 
 
 class StockReportGenerator:
@@ -1018,6 +1082,8 @@ Move the following methods from `quanttool/factors/stock_analyzer.py` into `Stoc
 - `_generate_fundamental_section`.
 - `_generate_trading_plan_v2`.
 - `_generate_technical_indicators_table`.
+
+Because `StockReportGenerator` lives in `quanttool.factors.reports`, remove the local import `from .fundamental_rating import FundamentalRating` from `_generate_fundamental_section`; use the module-level `from quanttool.factors.fundamental_rating import FundamentalRating` import instead. Do not change the generated Markdown text.
 
 Rename the public moved method to `generate`:
 
