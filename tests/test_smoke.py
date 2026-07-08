@@ -59,6 +59,58 @@ class ApiRouteContractTests(unittest.TestCase):
         self.assertEqual(duplicates, [])
 
 
+class ApiStructureTests(unittest.TestCase):
+    def test_model_api_router_is_split_into_focused_modules(self):
+        api_dir = Path("quanttool/web/api")
+        aggregate = api_dir / "models.py"
+        route_dir = api_dir / "model_routes"
+
+        self.assertLessEqual(
+            len(aggregate.read_text(encoding="utf-8").splitlines()),
+            120,
+        )
+        for module_name in [
+            "__init__.py",
+            "discovery.py",
+            "gbm.py",
+            "qlib_training.py",
+            "qlib_prediction.py",
+        ]:
+            self.assertTrue((route_dir / module_name).is_file(), module_name)
+
+    def test_model_api_routes_remain_registered(self):
+        from quanttool.web.app import app
+
+        routes = {
+            (method, route.path)
+            for route in app.routes
+            if hasattr(route, "methods")
+            for method in route.methods
+            if method not in {"HEAD", "OPTIONS"}
+        }
+
+        expected = {
+            ("GET", "/api/qlib/models"),
+            ("GET", "/api/qlib/saved-models"),
+            ("GET", "/api/qlib/pretrained-models"),
+            ("GET", "/api/qlib/all-models"),
+            ("GET", "/api/qlib/saved-models/{model_id}"),
+            ("GET", "/api/qlib/models/categories"),
+            ("POST", "/api/qlib/train"),
+            ("POST", "/api/qlib/train/stream"),
+            ("POST", "/api/qlib/predict"),
+            ("POST", "/api/gbm/train"),
+            ("POST", "/api/gbm/predict"),
+            ("GET", "/api/gbm/models"),
+            ("DELETE", "/api/gbm/models/{model_id}"),
+            ("GET", "/api/gbm/train/{task_id}/progress"),
+            ("GET", "/api/gbm/qrun-models"),
+            ("POST", "/api/gbm/picks"),
+        }
+
+        self.assertTrue(expected.issubset(routes))
+
+
 class PackagingSmokeTests(unittest.TestCase):
     def test_pyproject_discovers_quanttool_subpackages(self):
         text = Path("pyproject.toml").read_text(encoding="utf-8")
