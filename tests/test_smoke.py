@@ -191,6 +191,69 @@ class ApiStructureTests(unittest.TestCase):
 
         self.assertTrue(expected.issubset(routes))
 
+    def test_backtest_api_router_is_split_into_focused_modules(self):
+        api_dir = Path("quanttool/web/api")
+        aggregate = api_dir / "backtest.py"
+        route_dir = api_dir / "backtest_routes"
+
+        self.assertLessEqual(
+            len(aggregate.read_text(encoding="utf-8").splitlines()),
+            120,
+        )
+        for module_name in [
+            "__init__.py",
+            "catalog.py",
+            "execution.py",
+            "comparison.py",
+            "stream.py",
+            "experiments.py",
+        ]:
+            self.assertTrue((route_dir / module_name).is_file(), module_name)
+
+    def test_ml_api_router_is_split_into_focused_modules(self):
+        api_dir = Path("quanttool/web/api")
+        aggregate = api_dir / "ml.py"
+        route_dir = api_dir / "ml_routes"
+
+        self.assertLessEqual(
+            len(aggregate.read_text(encoding="utf-8").splitlines()),
+            120,
+        )
+        for module_name in [
+            "__init__.py",
+            "backtest.py",
+            "scan.py",
+            "monitor.py",
+        ]:
+            self.assertTrue((route_dir / module_name).is_file(), module_name)
+
+    def test_backtest_and_ml_api_routes_remain_registered(self):
+        from quanttool.web.app import app
+
+        routes = {
+            (method, route.path)
+            for route in app.routes
+            if hasattr(route, "methods")
+            for method in route.methods
+            if method not in {"HEAD", "OPTIONS"}
+        }
+
+        expected = {
+            ("GET", "/api/backtest/strategies"),
+            ("GET", "/api/backtest/history"),
+            ("POST", "/api/backtest/run"),
+            ("POST", "/api/backtest/run-all"),
+            ("POST", "/api/backtest/run-all-stream"),
+            ("GET", "/api/experiments"),
+            ("GET", "/api/backtest/runs/{run_id}"),
+            ("POST", "/api/ml/backtest"),
+            ("POST", "/api/ml/scan"),
+            ("POST", "/api/ml/monitor/start"),
+            ("GET", "/api/ml/monitor/{monitor_id}/signals"),
+        }
+
+        self.assertTrue(expected.issubset(routes))
+
 
 class PackagingSmokeTests(unittest.TestCase):
     def test_pyproject_discovers_quanttool_subpackages(self):
