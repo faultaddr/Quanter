@@ -47,14 +47,19 @@ class UnifiedScoringSystem:
                 BreakoutScoringStrategy,
                 MultiDimensionScoringStrategy,
             )
-            self.strategies = [
-                TrendScoringStrategy(),
-                BreakoutScoringStrategy(),
-                MultiDimensionScoringStrategy(),
-            ]
         except ImportError:
             # 如果导入失败，保持空列表
-            pass
+            return
+
+        for strategy_class in (
+            TrendScoringStrategy,
+            BreakoutScoringStrategy,
+            MultiDimensionScoringStrategy,
+        ):
+            try:
+                self.strategies.append(strategy_class())
+            except Exception:
+                continue
 
     def add_strategy(self, strategy: ScoringStrategy) -> 'UnifiedScoringSystem':
         """添加评分策略
@@ -125,6 +130,44 @@ class UnifiedScoringSystem:
                 )
 
         return results
+
+    def calculate_context_scores(
+        self,
+        df: pd.DataFrame,
+        symbol: str = "",
+        trade_date: str = "",
+    ) -> Dict[str, ScoreResult]:
+        """Calculate scores using context-facing names.
+
+        Returns keys matching AnalysisContext score families:
+        classic, trend, and breakout.
+        """
+        raw_scores = self.calculate_scores(
+            df,
+            symbol=symbol,
+            trade_date=trade_date,
+        )
+        aliases = {
+            "classic": "multi_dimension",
+            "trend": "trend",
+            "breakout": "breakout",
+        }
+
+        context_scores: Dict[str, ScoreResult] = {}
+        for context_key, strategy_name in aliases.items():
+            result = raw_scores.get(strategy_name)
+            if result is None:
+                result = ScoreResult(
+                    final_score=0,
+                    passed_filter=False,
+                    filter_reason=f"评分策略缺失: {strategy_name}",
+                    strategy_name=context_key,
+                )
+            else:
+                result.strategy_name = context_key
+            context_scores[context_key] = result
+
+        return context_scores
 
     def get_best_strategy(
         self,

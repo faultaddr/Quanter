@@ -49,24 +49,41 @@ class MultiDimensionScoringStrategy(ScoringStrategy):
 
     def calculate_score(self, df: pd.DataFrame, **kwargs) -> ScoreResult:
         """计算多维度评分"""
-        result = self._legacy_system.calculate_score(df)
+        result = self._legacy_system.calculate_all_scores(
+            df=df,
+            stock_code=kwargs.get("symbol", ""),
+            trade_date_T=kwargs.get("trade_date", ""),
+            trade_date_T1=kwargs.get("trade_date_t1"),
+            open_T1=kwargs.get("open_t1"),
+        )
 
-        # Extract key information from the legacy result
+        if "error" in result:
+            return ScoreResult(
+                final_score=0,
+                passed_filter=False,
+                filter_reason=result["error"],
+                strategy_name=self.name,
+                details={"legacy_result": result},
+            )
+
         return ScoreResult(
-            final_score=result.get('final_score', 0),
-            passed_filter=result.get('passed_filter', True),
-            filter_reason=result.get('filter_reason', ''),
+            final_score=result.get("score", result.get("final_score", 0)),
+            passed_filter=result.get("bias_passed", True),
+            filter_reason=result.get("filter_reason", ""),
             strategy_name=self.name,
             details={
-                'trend_score': result.get('trend_score', 0),
-                'momentum_score': result.get('momentum_score', 0),
-                'capital_score': result.get('capital_score', 0),
-                'signal': result.get('signal', 'hold'),
-                'signal_strength': result.get('signal_strength', 0),
-                'ma_status': result.get('ma_status', {}),
-                'macd_status': result.get('macd_status', {}),
-                'kdj_status': result.get('kdj_status', {}),
-                'rsi_status': result.get('rsi_status', {}),
-                'volume_status': result.get('volume_status', {}),
-            }
+                "legacy_result": result,
+                "trend_score": result.get("trend_score", 0),
+                "momentum_score": result.get("momentum_score", 0),
+                "money_score": result.get("money_score", 0),
+                "trend_bonus": result.get("trend_bonus", 0),
+                "volume_bonus": result.get("volume_bonus", 0),
+                "trigger_type": result.get("trigger_type", "none"),
+                "trigger_detail": result.get("trigger_detail", ""),
+                "factors_raw": result.get("factors_raw", {}),
+                "factors_score": result.get("factors_score", {}),
+                "execution": result.get("execution", {}),
+                "warnings": result.get("warnings", []),
+                "score_grade": result.get("score_grade", "一般"),
+            },
         )
