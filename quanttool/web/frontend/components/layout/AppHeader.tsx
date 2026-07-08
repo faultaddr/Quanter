@@ -1,7 +1,9 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useAppStore } from '@/stores/useAppStore';
+import { getPageKeyFromPath } from '@/lib/navigation';
 import { cn } from '@/lib/utils';
 
 const navItems = [
@@ -18,7 +20,8 @@ const secondaryNavItems = [
 ];
 
 export default function AppHeader() {
-  const activePage = useAppStore((state) => state.activePage);
+  const pathname = usePathname() ?? '/';
+  const activePage = getPageKeyFromPath(pathname);
   const setActivePage = useAppStore((state) => state.setActivePage);
   const theme = useAppStore((state) => state.theme);
   const toggleTheme = useAppStore((state) => state.toggleTheme);

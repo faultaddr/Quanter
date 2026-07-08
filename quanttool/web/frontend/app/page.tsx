@@ -114,12 +114,24 @@ const INDEX_NAMES: Record<string, string> = {
   '000300': '沪深300',
 };
 
+const ACTION_COLOR_CLASSES: Record<string, string> = {
+  primary: 'bg-primary/20 text-primary',
+  success: 'bg-success/20 text-success',
+  danger: 'bg-danger/20 text-danger',
+  warning: 'bg-warning/20 text-warning',
+  info: 'bg-cyan-500/20 text-cyan-400',
+  secondary: 'bg-slate-500/20 text-slate-300',
+};
+
 export default function HomePage() {
   const setActivePage = useAppStore((state) => state.setActivePage);
   const [marketIndices, setMarketIndices] = useState<RealtimeQuote[]>([]);
   const [loading, setLoading] = useState(true);
+  const [marketError, setMarketError] = useState<string | null>(null);
 
   const fetchMarketIndices = useCallback(async () => {
+    setLoading(true);
+    setMarketError(null);
     try {
       const data = await monitorApi.getQuotes(INDEX_SYMBOLS);
       if (data) {
@@ -134,6 +146,7 @@ export default function HomePage() {
       }
     } catch (error) {
       console.error('Failed to fetch market indices:', error);
+      setMarketError('市场指数加载失败，请稍后重试');
     } finally {
       setLoading(false);
     }
@@ -168,7 +181,7 @@ export default function HomePage() {
               >
                 <Card className="h-full card-hover cursor-pointer">
                   <div className="flex items-start gap-4">
-                    <div className={`p-3 rounded-lg bg-${action.color}/20 text-${action.color}`}>
+                    <div className={`p-3 rounded-lg ${ACTION_COLOR_CLASSES[action.color]}`}>
                       {action.icon}
                     </div>
                     <div className="flex-1">
@@ -196,7 +209,7 @@ export default function HomePage() {
               >
                 <Card className="h-full card-hover cursor-pointer">
                   <div className="flex items-start gap-4">
-                    <div className={`p-3 rounded-lg bg-${action.color}/20 text-${action.color}`}>
+                    <div className={`p-3 rounded-lg ${ACTION_COLOR_CLASSES[action.color]}`}>
                       {action.icon}
                     </div>
                     <div className="flex-1">
@@ -213,9 +226,28 @@ export default function HomePage() {
         </div>
 
         {/* Market Indices */}
-        <Card title="市场指数" action={<Badge variant="success">实时</Badge>}>
+        <Card
+          title="市场指数"
+          action={
+            <div className="flex items-center gap-2">
+              <Badge variant={marketError ? 'warning' : 'success'}>
+                {marketError ? '异常' : '实时'}
+              </Badge>
+              <Button size="sm" variant="ghost" onClick={fetchMarketIndices} loading={loading}>
+                刷新
+              </Button>
+            </div>
+          }
+        >
           {loading ? (
             <div className="text-center py-8 text-text-muted">加载中...</div>
+          ) : marketError ? (
+            <div className="text-center py-8">
+              <div className="text-warning">{marketError}</div>
+              <Button size="sm" variant="ghost" className="mt-3" onClick={fetchMarketIndices}>
+                重新加载
+              </Button>
+            </div>
           ) : marketIndices.length === 0 ? (
             <div className="text-center py-8 text-text-muted">暂无数据</div>
           ) : (

@@ -1,7 +1,9 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useAppStore } from '@/stores/useAppStore';
+import { getPageKeyFromPath } from '@/lib/navigation';
 import { cn } from '@/lib/utils';
 import { formatDate } from '@/lib/utils';
 
@@ -93,7 +95,8 @@ const smartItems = [
 ];
 
 export default function AppSidebar() {
-  const activePage = useAppStore((state) => state.activePage);
+  const pathname = usePathname() ?? '/';
+  const activePage = getPageKeyFromPath(pathname);
   const setActivePage = useAppStore((state) => state.setActivePage);
   const history = useAppStore((state) => state.history);
   const sidebarCollapsed = useAppStore((state) => state.sidebarCollapsed);
