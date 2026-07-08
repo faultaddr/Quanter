@@ -157,6 +157,40 @@ class ApiStructureTests(unittest.TestCase):
 
         self.assertTrue(expected.issubset(routes))
 
+    def test_qlib_training_api_router_is_split_into_focused_modules(self):
+        api_dir = Path("quanttool/web/api/model_routes")
+        aggregate = api_dir / "qlib_training.py"
+        route_dir = api_dir / "qlib_training_routes"
+
+        self.assertLessEqual(
+            len(aggregate.read_text(encoding="utf-8").splitlines()),
+            120,
+        )
+        for module_name in [
+            "__init__.py",
+            "batch.py",
+            "stream.py",
+        ]:
+            self.assertTrue((route_dir / module_name).is_file(), module_name)
+
+    def test_qlib_training_api_routes_remain_registered(self):
+        from quanttool.web.app import app
+
+        routes = {
+            (method, route.path)
+            for route in app.routes
+            if hasattr(route, "methods")
+            for method in route.methods
+            if method not in {"HEAD", "OPTIONS"}
+        }
+
+        expected = {
+            ("POST", "/api/qlib/train"),
+            ("POST", "/api/qlib/train/stream"),
+        }
+
+        self.assertTrue(expected.issubset(routes))
+
 
 class PackagingSmokeTests(unittest.TestCase):
     def test_pyproject_discovers_quanttool_subpackages(self):
