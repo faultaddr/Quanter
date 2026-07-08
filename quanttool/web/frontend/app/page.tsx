@@ -129,6 +129,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [marketError, setMarketError] = useState<string | null>(null);
   const showInitialLoading = loading && marketIndices.length === 0;
+  const hasMarketData = marketIndices.length > 0;
 
   const fetchMarketIndices = useCallback(async () => {
     setLoading(true);
@@ -242,29 +243,40 @@ export default function HomePage() {
         >
           {showInitialLoading ? (
             <div className="text-center py-8 text-text-muted">加载中...</div>
-          ) : marketError && marketIndices.length === 0 ? (
-            <div className="text-center py-8">
-              <div className="text-warning">{marketError}</div>
-              <Button size="sm" variant="ghost" className="mt-3" onClick={fetchMarketIndices}>
-                重新加载
-              </Button>
-            </div>
           ) : marketIndices.length === 0 ? (
-            <div className="text-center py-8 text-text-muted">暂无数据</div>
-          ) : (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {marketIndices.map((index) => (
-                <div key={index.symbol} className="p-4 bg-bg-tertiary rounded-lg">
-                  <div className="text-sm text-text-muted">{index.name}</div>
-                  <div className="text-xl font-bold text-text-primary mt-1">
-                    {index.price.toLocaleString()}
-                  </div>
-                  <div className={`text-sm mt-1 ${index.change_pct >= 0 ? 'text-success' : 'text-danger'}`}>
-                    {index.change_pct >= 0 ? '+' : ''}{index.change.toFixed(2)} ({(index.change_pct * 100).toFixed(2)}%)
-                  </div>
+            marketError ? (
+              <div className="text-center py-8">
+                <div className="mx-auto mb-3 max-w-md rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                  {marketError}
                 </div>
-              ))}
-            </div>
+                <Button size="sm" variant="ghost" onClick={fetchMarketIndices}>
+                  重新加载
+                </Button>
+              </div>
+            ) : (
+              <div className="text-center py-8 text-text-muted">暂无数据</div>
+            )
+          ) : (
+            <>
+              {marketError && hasMarketData && (
+                <div className="mb-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                  {marketError}
+                </div>
+              )}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {marketIndices.map((index) => (
+                  <div key={index.symbol} className="p-4 bg-bg-tertiary rounded-lg">
+                    <div className="text-sm text-text-muted">{index.name}</div>
+                    <div className="text-xl font-bold text-text-primary mt-1">
+                      {index.price.toLocaleString()}
+                    </div>
+                    <div className={`text-sm mt-1 ${index.change_pct >= 0 ? 'text-success' : 'text-danger'}`}>
+                      {index.change_pct >= 0 ? '+' : ''}{index.change.toFixed(2)} ({(index.change_pct * 100).toFixed(2)}%)
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </Card>
 

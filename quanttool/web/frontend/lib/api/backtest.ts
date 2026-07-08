@@ -55,11 +55,17 @@ export const backtestApi = {
         commission_rate: params.commission_rate,
       }),
       signal: controller.signal,
-    }).then(response => {
+    }).then(async response => {
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      const reader = response.body?.getReader();
+
+      if (!response.body) {
+        onError('后端未返回流式响应');
+        return;
+      }
+
+      const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 
@@ -96,8 +102,9 @@ export const backtestApi = {
         }
       };
 
-      function read() {
-        reader?.read().then(({ done, value }) => {
+      const read = async (): Promise<void> => {
+        try {
+          const { done, value } = await reader.read();
           if (done) {
             buffer += decoder.decode();
             flushBuffer(true);
@@ -105,10 +112,15 @@ export const backtestApi = {
           }
           buffer += decoder.decode(value, { stream: true });
           flushBuffer(false);
-          read();
-        });
-      }
-      read();
+          return read();
+        } catch (err) {
+          if ((err as Error).name !== 'AbortError') {
+            onError(err instanceof Error ? err.message : '流式回调失败');
+          }
+        }
+      };
+
+      return read();
     }).catch(err => {
       if (err.name !== 'AbortError') {
         onError(err.message);

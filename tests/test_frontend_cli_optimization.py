@@ -106,6 +106,15 @@ class FrontendOptimizationSourceTests(unittest.TestCase):
         self.assertIn("http://localhost:8000/api", source)
         self.assertIn("baseURL: getApiBaseUrl()", source)
 
+    def test_frontend_api_base_urls_trim_trailing_slashes(self):
+        index_source = (FRONTEND_ROOT / "lib" / "api" / "index.ts").read_text(encoding="utf-8")
+        api_source = (FRONTEND_ROOT / "lib" / "api.ts").read_text(encoding="utf-8")
+        next_config_source = (FRONTEND_ROOT / "next.config.js").read_text(encoding="utf-8")
+
+        for source in (index_source, api_source, next_config_source):
+            self.assertIn("normalizeApiBaseUrl(", source)
+            self.assertIn(r"replace(/\/+$/, '')", source)
+
     def test_no_hardcoded_localhost_api_host_outside_config(self):
         allowed = {
             FRONTEND_ROOT / "lib" / "api" / "index.ts",
@@ -132,6 +141,11 @@ class FrontendOptimizationSourceTests(unittest.TestCase):
         self.assertNotIn("bg-${action.color}", source)
         self.assertNotIn("text-${action.color}", source)
         self.assertIn("marketError", source)
+        self.assertIn("hasMarketData", source)
+        self.assertIn("marketError && hasMarketData", source)
+        self.assertIn("border-warning/30", source)
+        self.assertIn("bg-warning/10", source)
+        self.assertIn("重新加载", source)
 
     def test_navigation_active_state_is_path_derived(self):
         navigation = (FRONTEND_ROOT / "lib" / "navigation.ts").read_text(encoding="utf-8")
@@ -143,6 +157,16 @@ class FrontendOptimizationSourceTests(unittest.TestCase):
         self.assertIn("getPageKeyFromPath", header)
         self.assertIn("usePathname", sidebar)
         self.assertIn("getPageKeyFromPath", sidebar)
+
+    def test_backtest_stream_source_handles_missing_body_and_reader_failures(self):
+        source = (FRONTEND_ROOT / "lib" / "api" / "backtest.ts").read_text(encoding="utf-8")
+
+        self.assertIn("if (!response.body)", source)
+        self.assertIn("onError('后端未返回流式响应')", source)
+        self.assertIn("return read();", source)
+        self.assertIn("await reader.read()", source)
+        self.assertIn("catch (err)", source)
+        self.assertIn("流式回调失败", source)
 
 
 if __name__ == "__main__":

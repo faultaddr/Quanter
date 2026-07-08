@@ -1,7 +1,11 @@
 import axios from 'axios';
 
+function normalizeApiBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, '') || baseUrl;
+}
+
 export function getApiBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000/api';
+  return normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000/api');
 }
 
 export function getApiUrl(path: string): string {
