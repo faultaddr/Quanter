@@ -76,6 +76,22 @@ class BreakoutScoringStrategy(ScoringStrategy):
     def calculate_score(self, df: pd.DataFrame, **kwargs) -> ScoreResult:
         """计算突破评分"""
         result = self._legacy_system.calculate_score(df)
+        details = dict(result.details or {})
+        details.update({
+            'is_low_position': result.is_low_position,
+            'is_consolidating': result.is_consolidating,
+            'has_breakout': result.has_breakout,
+            'quality_score': result.quality_score,
+            'growth_score': result.growth_score,
+            'value_score': result.value_score,
+            'momentum_score': result.momentum_score,
+            'flow_score': result.flow_score,
+            'risk_score': result.risk_score,
+            'consolidation_days': result.consolidation_days,
+            'price_range': result.price_range,
+            'volume_ratio': result.volume_ratio,
+            'breakout_strength': result.breakout_strength,
+        })
 
         return ScoreResult(
             final_score=result.final_score,
@@ -84,19 +100,5 @@ class BreakoutScoringStrategy(ScoringStrategy):
             strategy_name=self.name,
             stop_loss_price=result.stop_loss_price,
             take_profit_price=result.take_profit_price,
-            details={
-                'is_low_position': result.is_low_position,
-                'is_consolidating': result.is_consolidating,
-                'has_breakout': result.has_breakout,
-                'quality_score': result.quality_score,
-                'growth_score': result.growth_score,
-                'value_score': result.value_score,
-                'momentum_score': result.momentum_score,
-                'flow_score': result.flow_score,
-                'risk_score': result.risk_score,
-                'consolidation_days': result.consolidation_days,
-                'price_range': result.price_range,
-                'volume_ratio': result.volume_ratio,
-                'breakout_strength': result.breakout_strength,
-            }
+            details=details,
         )

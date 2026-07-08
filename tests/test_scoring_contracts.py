@@ -33,6 +33,9 @@ class UnifiedScoringContractTests(unittest.TestCase):
                 self.assertIsInstance(result.to_dict(), dict)
 
         self.assertIn("is_low_position", scores["breakout"].details)
+        self.assertIn("low_position", scores["breakout"].details)
+        self.assertIn("consolidation", scores["breakout"].details)
+        self.assertIn("breakout", scores["breakout"].details)
 
     def test_multi_dimension_strategy_uses_legacy_calculate_all_scores(self):
         scorer = UnifiedScoringSystem()

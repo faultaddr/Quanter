@@ -107,11 +107,21 @@ class AnalysisOrchestrator:
 
     def _to_trend_score(self, result: ScoreResult) -> TrendScore:
         details = result.details or {}
+        timing_coefficient = result.timing_coefficient
+        if timing_coefficient is None:
+            timing_coefficient = details.get("timing_coefficient")
+        if timing_coefficient is None:
+            timing_coefficient = 0 if not result.passed_filter else 1.0
+
+        timing_type = details.get("timing_type")
+        if timing_type is None:
+            timing_type = "standard" if not result.passed_filter else "标准"
+
         return TrendScore(
             final_score=result.final_score,
             trend_total_score=details.get("trend_total_score", 0),
-            timing_coefficient=result.timing_coefficient or details.get("timing_coefficient", 1.0),
-            timing_type=details.get("timing_type", "标准"),
+            timing_coefficient=timing_coefficient,
+            timing_type=timing_type,
             passed_hard_filter=result.passed_filter,
             hard_filter_reason=result.filter_reason,
             ma_structure_score=details.get("ma_structure_score", 0),
@@ -123,6 +133,25 @@ class AnalysisOrchestrator:
 
     def _to_breakout_score(self, result: ScoreResult) -> BreakoutScore:
         details = result.details or {}
+        flat_detail_keys = {
+            "is_low_position",
+            "is_consolidating",
+            "has_breakout",
+            "quality_score",
+            "growth_score",
+            "value_score",
+            "momentum_score",
+            "flow_score",
+            "risk_score",
+            "consolidation_days",
+            "price_range",
+            "volume_ratio",
+            "breakout_strength",
+        }
+        legacy_details = {
+            key: value for key, value in details.items()
+            if key not in flat_detail_keys
+        }
         return BreakoutScore(
             final_score=result.final_score,
             is_low_position=details.get("is_low_position", False),
@@ -142,7 +171,7 @@ class AnalysisOrchestrator:
             breakout_strength=details.get("breakout_strength", 0.0),
             stop_loss_price=result.stop_loss_price or 0.0,
             take_profit_price=result.take_profit_price or 0.0,
-            details=details,
+            details=legacy_details or details,
         )
 
     def _build_default_market_state(self, df: pd.DataFrame) -> UnifiedMarketState:

@@ -159,6 +159,36 @@ class AnalysisOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(context.classic_score.warnings, expected.warnings)
 
+    def test_default_trend_and_breakout_preserve_legacy_payloads(self):
+        from quanttool.factors.analysis_orchestrator import AnalysisOrchestrator
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+
+        df = make_indicator_ready_ohlcv(rows=260)
+        analyzer = StockAnalyzer.__new__(StockAnalyzer)
+        expected_trend = analyzer._run_trend_scoring(df)
+        expected_breakout = analyzer._run_breakout_scoring(df)
+        context = AnalysisOrchestrator(
+            recommendation_engine=FakeRecommendationEngine(),
+            stop_loss_calculator=FakeStopLossCalculator(),
+            market_state_builder=lambda data: UnifiedMarketState(confidence=0.75),
+            fundamental_provider=lambda symbol: FundamentalData(data_source="fake"),
+        ).build_context(df, "000001.SZ")
+
+        self.assertEqual(
+            context.trend_score.timing_coefficient,
+            expected_trend.timing_coefficient,
+        )
+        self.assertEqual(context.trend_score.timing_type, expected_trend.timing_type)
+        self.assertEqual(
+            context.trend_score.passed_hard_filter,
+            expected_trend.passed_hard_filter,
+        )
+        self.assertEqual(
+            context.trend_score.hard_filter_reason,
+            expected_trend.hard_filter_reason,
+        )
+        self.assertEqual(context.breakout_score.details, expected_breakout.details)
+
 
 class StockReportGeneratorTests(unittest.TestCase):
     def test_report_generator_renders_context_sections(self):

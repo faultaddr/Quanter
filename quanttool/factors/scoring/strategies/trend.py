@@ -89,7 +89,16 @@ class TrendScoringStrategy(ScoringStrategy):
                 final_score=0,
                 passed_filter=False,
                 filter_reason=reason,
-                strategy_name=self.name
+                strategy_name=self.name,
+                timing_coefficient=0,
+                details={
+                    'trend_total_score': 0,
+                    'ma_structure_score': 0,
+                    'price_momentum_score': 0,
+                    'volume_score': 0,
+                    'relative_strength_score': 0,
+                    'timing_type': 'standard',
+                },
             )
 
         # 2. 计算各因子得分
