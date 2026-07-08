@@ -136,3 +136,25 @@ class AnalysisOrchestratorTests(unittest.TestCase):
 
         self.assertEqual(context.symbol, "000001.SZ")
         self.assertEqual(context.current_price, 0)
+
+    def test_default_classic_score_preserves_position_modifier(self):
+        from quanttool.factors.analysis_orchestrator import AnalysisOrchestrator
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+
+        df = make_indicator_ready_ohlcv(rows=260)
+        expected = StockAnalyzer.__new__(StockAnalyzer)._run_classic_scoring(
+            df,
+            "000001.SZ",
+        )
+        context = AnalysisOrchestrator(
+            recommendation_engine=FakeRecommendationEngine(),
+            stop_loss_calculator=FakeStopLossCalculator(),
+            market_state_builder=lambda data: UnifiedMarketState(confidence=0.75),
+            fundamental_provider=lambda symbol: FundamentalData(data_source="fake"),
+        ).build_context(df, "000001.SZ")
+
+        self.assertEqual(
+            context.classic_score.position_modifier,
+            expected.position_modifier,
+        )
+        self.assertEqual(context.classic_score.warnings, expected.warnings)

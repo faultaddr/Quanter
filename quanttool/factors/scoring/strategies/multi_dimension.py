@@ -66,6 +66,13 @@ class MultiDimensionScoringStrategy(ScoringStrategy):
                 details={"legacy_result": result},
             )
 
+        latest = df.iloc[-1]
+        factors_raw = result.get("factors_raw", {})
+        position_modifier, pos_warnings, protection_info = (
+            self._legacy_system._calculate_position_modifier(latest, factors_raw)
+        )
+        all_warnings = result.get("warnings", []) + pos_warnings
+
         return ScoreResult(
             final_score=result.get("score", result.get("final_score", 0)),
             passed_filter=result.get("bias_passed", True),
@@ -80,10 +87,12 @@ class MultiDimensionScoringStrategy(ScoringStrategy):
                 "volume_bonus": result.get("volume_bonus", 0),
                 "trigger_type": result.get("trigger_type", "none"),
                 "trigger_detail": result.get("trigger_detail", ""),
-                "factors_raw": result.get("factors_raw", {}),
+                "position_modifier": position_modifier,
+                "position_protection": protection_info,
+                "factors_raw": factors_raw,
                 "factors_score": result.get("factors_score", {}),
                 "execution": result.get("execution", {}),
-                "warnings": result.get("warnings", []),
+                "warnings": all_warnings,
                 "score_grade": result.get("score_grade", "一般"),
             },
         )
