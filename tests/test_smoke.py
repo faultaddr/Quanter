@@ -110,6 +110,53 @@ class ApiStructureTests(unittest.TestCase):
 
         self.assertTrue(expected.issubset(routes))
 
+    def test_stock_api_router_is_split_into_focused_modules(self):
+        api_dir = Path("quanttool/web/api")
+        aggregate = api_dir / "stock.py"
+        route_dir = api_dir / "stock_routes"
+
+        self.assertLessEqual(
+            len(aggregate.read_text(encoding="utf-8").splitlines()),
+            120,
+        )
+        for module_name in [
+            "__init__.py",
+            "analysis.py",
+            "market_data.py",
+            "chip_signals.py",
+            "insights.py",
+        ]:
+            self.assertTrue((route_dir / module_name).is_file(), module_name)
+
+    def test_stock_api_routes_remain_registered(self):
+        from quanttool.web.app import app
+
+        routes = {
+            (method, route.path)
+            for route in app.routes
+            if hasattr(route, "methods")
+            for method in route.methods
+            if method not in {"HEAD", "OPTIONS"}
+        }
+
+        expected = {
+            ("POST", "/api/analyze"),
+            ("POST", "/api/analyze/enhanced"),
+            ("GET", "/api/stock/{symbol}/info"),
+            ("GET", "/api/stock/{symbol}/kline"),
+            ("GET", "/api/stock/{symbol}/chip"),
+            ("GET", "/api/stock/{symbol}/signals"),
+            ("GET", "/api/stock/{symbol}/analysis"),
+            ("GET", "/api/stock/{symbol}/flow"),
+            ("GET", "/api/stock/{symbol}/risk"),
+            ("GET", "/api/stock/{symbol}/factors"),
+            ("GET", "/api/stock/{symbol}/feasibility"),
+            ("GET", "/api/stock/{symbol}/backtest-compare"),
+            ("GET", "/api/index/{index_code}/data"),
+        }
+
+        self.assertTrue(expected.issubset(routes))
+
 
 class PackagingSmokeTests(unittest.TestCase):
     def test_pyproject_discovers_quanttool_subpackages(self):
