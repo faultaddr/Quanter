@@ -71,13 +71,14 @@ class CliOptimizationTests(unittest.TestCase):
                     cli_main.app,
                     ["analyze", "000001", "--days", "120", "--output", str(output)],
                 )
+                saved_report = output.read_text(encoding="utf-8")
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertEqual(calls, [("000001", 120)])
         self.assertIn("=== 三系统评分摘要 ===", result.output)
         self.assertIn("最终推荐: 买入", result.output)
         self.assertIn("REPORT BODY", result.output)
-        self.assertEqual(output.read_text(encoding="utf-8"), "REPORT BODY")
+        self.assertEqual(saved_report, "REPORT BODY")
 
     def test_quick_analyze_converts_failures_to_click_exception(self):
         class FakeAnalyzer:

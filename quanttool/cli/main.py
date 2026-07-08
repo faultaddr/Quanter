@@ -2,9 +2,7 @@
 
 import sys
 import os
-import tempfile
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 # Add project root to Python path
@@ -57,27 +55,6 @@ def _echo_context_summary(context) -> None:
     typer.echo(f"\n最终推荐: {context.final_recommendation.get_action_display()}")
     typer.echo("-" * 50)
 
-
-def _preserve_output_directory(output: str) -> None:
-    """Keep a temp output directory alive long enough for post-run checks."""
-    output_parent = str(Path(output).parent)
-    tempdir_cls = tempfile.TemporaryDirectory
-
-    if not hasattr(tempdir_cls, "_quanttool_original_cleanup"):
-        tempdir_cls._quanttool_original_cleanup = tempdir_cls.cleanup  # type: ignore[attr-defined]
-        tempdir_cls._quanttool_preserved_paths = set()  # type: ignore[attr-defined]
-
-        def _cleanup(self):  # type: ignore[no-untyped-def]
-            if self.name in tempdir_cls._quanttool_preserved_paths:  # type: ignore[attr-defined]
-                self._finalizer.detach()
-                return
-            return tempdir_cls._quanttool_original_cleanup(self)  # type: ignore[attr-defined]
-
-        tempdir_cls.cleanup = _cleanup  # type: ignore[assignment]
-
-    tempdir_cls._quanttool_preserved_paths.add(output_parent)  # type: ignore[attr-defined]
-
-
 @app.command()
 def analyze(
     symbol: str = typer.Argument(..., help="Stock symbol to analyze (e.g., 601777, 000001.SZ)"),
@@ -105,7 +82,6 @@ def analyze(
     if output:
         with open(output, "w", encoding="utf-8") as f:
             f.write(report)
-        _preserve_output_directory(output)
         typer.echo(f"\n分析报告已保存至：{output}")
 
 
