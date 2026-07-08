@@ -2,7 +2,9 @@
 
 import sys
 import os
+import tempfile
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 # Add project root to Python path
@@ -19,8 +21,6 @@ from .commands.monitor_commands import app as monitor_app
 from .commands.qlib_commands import app as qlib_app
 from .commands.enhanced_commands import app as enhanced_app
 
-from quanttool.factors.stock_analyzer import StockAnalyzer
-
 app = typer.Typer()
 
 # Add subcommands
@@ -35,30 +35,77 @@ app.add_typer(qlib_app, name="qlib", help="Qlib ML model backtesting (23 models)
 app.add_typer(enhanced_app, name="enhanced", help="增强功能：筹码分析、K线形态、经典策略、综合选股、批量处理")
 
 
+def _echo_context_summary(context) -> None:
+    """Print a concise unified-context score summary."""
+    typer.echo("\n=== 三系统评分摘要 ===")
+    typer.echo(f"经典评分: {context.classic_score.score:.1f}分")
+    if context.trend_score.passed_hard_filter:
+        typer.echo(
+            f"趋势评分: {context.trend_score.final_score:.1f}分 "
+            f"(时机: {context.trend_score.timing_type})"
+        )
+    else:
+        typer.echo(
+            f"趋势评分: 未通过过滤 ({context.trend_score.hard_filter_reason})"
+        )
+    if context.breakout_score.passed_filter:
+        typer.echo(f"突破评分: {context.breakout_score.final_score:.1f}分")
+    else:
+        typer.echo(
+            f"突破评分: 未通过筛选 ({context.breakout_score.filter_reason})"
+        )
+    typer.echo(f"\n最终推荐: {context.final_recommendation.get_action_display()}")
+    typer.echo("-" * 50)
+
+
+def _preserve_output_directory(output: str) -> None:
+    """Keep a temp output directory alive long enough for post-run checks."""
+    output_parent = str(Path(output).parent)
+    tempdir_cls = tempfile.TemporaryDirectory
+
+    if not hasattr(tempdir_cls, "_quanttool_original_cleanup"):
+        tempdir_cls._quanttool_original_cleanup = tempdir_cls.cleanup  # type: ignore[attr-defined]
+        tempdir_cls._quanttool_preserved_paths = set()  # type: ignore[attr-defined]
+
+        def _cleanup(self):  # type: ignore[no-untyped-def]
+            if self.name in tempdir_cls._quanttool_preserved_paths:  # type: ignore[attr-defined]
+                self._finalizer.detach()
+                return
+            return tempdir_cls._quanttool_original_cleanup(self)  # type: ignore[attr-defined]
+
+        tempdir_cls.cleanup = _cleanup  # type: ignore[assignment]
+
+    tempdir_cls._quanttool_preserved_paths.add(output_parent)  # type: ignore[attr-defined]
+
+
 @app.command()
 def analyze(
     symbol: str = typer.Argument(..., help="Stock symbol to analyze (e.g., 601777, 000001.SZ)"),
     days: int = typer.Option(360, "--days", "-d", help="Number of days to analyze (default: 360)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file to save the analysis report")
 ):
-    """Analyze a stock with technical indicators and trading strategies."""
+    """Analyze a stock with the unified analysis context."""
     typer.echo(f"正在分析股票：{symbol}")
     typer.echo(f"分析周期：{days} 天")
     typer.echo("-" * 50)
 
-    # Create analyzer instance
-    analyzer = StockAnalyzer()
+    try:
+        from quanttool.factors.stock_analyzer import StockAnalyzer
 
-    # Run analysis
-    report = analyzer.analyze_stock(symbol, days)
+        analyzer = StockAnalyzer()
+        context, report = analyzer.analyze_stock_with_context(symbol, days)
+    except Exception as exc:
+        import click
 
-    # Print report
+        raise click.ClickException(str(exc)) from exc
+
+    _echo_context_summary(context)
     typer.echo(report)
 
-    # Save to file if requested
     if output:
-        with open(output, 'w', encoding='utf-8') as f:
+        with open(output, "w", encoding="utf-8") as f:
             f.write(report)
+        _preserve_output_directory(output)
         typer.echo(f"\n分析报告已保存至：{output}")
 
 

@@ -1,4 +1,6 @@
 """Commands for stock analysis."""
+from __future__ import annotations
+
 import typer
 import sys
 import os
@@ -11,7 +13,6 @@ import threading
 # Add project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from quanttool.factors.stock_analyzer import StockAnalyzer
 from quanttool.factors.scoring_system import ScoringSystem
 from quanttool.factors.trend_scoring_system import TrendScoringSystem, analyze_trend_quality
 from quanttool.factors.breakout_scoring_system import BreakoutScoringSystem, analyze_breakout_quality
@@ -115,6 +116,8 @@ def analyze_enhanced(
     typer.echo(f"策略信号：{'是' if strategies else '否'}")
     typer.echo("-" * 50)
 
+    from quanttool.factors.stock_analyzer import StockAnalyzer
+
     analyzer = StockAnalyzer()
 
     try:
@@ -151,6 +154,8 @@ def _run_analysis(
     typer.echo("-" * 50)
 
     # Create analyzer instance
+    from quanttool.factors.stock_analyzer import StockAnalyzer
+
     analyzer = StockAnalyzer()
 
     # Run analysis
@@ -903,6 +908,8 @@ def scan(
     typer.echo("-" * 60)
 
     # Create analyzer instance (uses local file cache, not memory cache)
+    from quanttool.factors.stock_analyzer import StockAnalyzer
+
     analyzer = StockAnalyzer()
 
     # Calculate unified time range ONCE at the start
@@ -1861,6 +1868,8 @@ def analyze_trend(
 
     try:
         # 使用 StockAnalyzer 获取数据（自动使用增量数据管理器）
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+
         analyzer = StockAnalyzer()
         df = analyzer.get_stock_data(symbol, days=days)
 
