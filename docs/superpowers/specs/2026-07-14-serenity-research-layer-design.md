@@ -99,6 +99,7 @@ quanttool/
 ├── application/serenity_service.py    # 纯评分、象限和 Markdown 输出
 ├── cli/commands/research_commands.py  # template / scorecard 命令
 ├── web/api/research.py                # Serenity API router
+├── web/api/routes.py                  # 聚合并注册 research router
 ├── web/schemas/serenity.py            # HTTP 请求/响应契约
 └── web/frontend/
     ├── app/research/page.tsx           # 研究评分工作台

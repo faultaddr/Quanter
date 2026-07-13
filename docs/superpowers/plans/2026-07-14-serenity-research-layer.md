@@ -116,7 +116,7 @@ Expected: tests pass and the command prints valid UTF-8 JSON.
 - Create: `quanttool/web/schemas/serenity.py`
 - Modify: `quanttool/web/schemas/__init__.py`
 - Create: `quanttool/web/api/research.py`
-- Modify: `quanttool/web/api/registry.py`
+- Modify: `quanttool/web/api/routes.py`
 - Create: `tests/test_serenity_api.py`
 - Modify: `tests/test_smoke.py`
 
@@ -146,7 +146,7 @@ Keep HTTP-only response wrappers in `quanttool/web/schemas/serenity.py`. Use a r
 
 - [ ] **Step 4: Register the router and lock route uniqueness**
 
-Add the router to `ROUTER_SPECS` with `/api` prefix. Extend smoke expectations with both routes; do not duplicate method/path pairs.
+Import `research` in the aggregate module and call `router.include_router(research.router)`. The application already mounts the aggregate router under `/api`. Extend smoke expectations with both routes; do not duplicate method/path pairs.
 
 - [ ] **Step 5: Run API and full Python tests**
 
