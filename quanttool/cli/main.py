@@ -18,19 +18,29 @@ from .commands.report_commands import app as report_app
 from .commands.monitor_commands import app as monitor_app
 from .commands.qlib_commands import app as qlib_app
 from .commands.enhanced_commands import app as enhanced_app
+from .commands.research_commands import app as research_app
 
 app = typer.Typer()
 
 # Add subcommands
 app.add_typer(data_app, name="data", help="Data-related commands")
 app.add_typer(backtest_app, name="backtest", help="Backtesting commands")
-app.add_typer(analysis_app, name="analysis", help="Analysis commands (use 'analyze' for quick stock analysis)")
+app.add_typer(
+    analysis_app,
+    name="analysis",
+    help="Analysis commands (use 'analyze' for quick stock analysis)",
+)
 app.add_typer(scheduler_app, name="scheduler", help="Scheduler daemon commands")
 app.add_typer(portfolio_app, name="portfolio", help="Portfolio backtest commands")
 app.add_typer(report_app, name="report", help="Daily report commands")
 app.add_typer(monitor_app, name="monitor", help="Realtime signal monitoring")
 app.add_typer(qlib_app, name="qlib", help="Qlib ML model backtesting (23 models)")
-app.add_typer(enhanced_app, name="enhanced", help="增强功能：筹码分析、K线形态、经典策略、综合选股、批量处理")
+app.add_typer(
+    enhanced_app,
+    name="enhanced",
+    help="增强功能：筹码分析、K线形态、经典策略、综合选股、批量处理",
+)
+app.add_typer(research_app, name="research", help="Serenity research scorecards")
 
 
 def _echo_context_summary(context) -> None:
