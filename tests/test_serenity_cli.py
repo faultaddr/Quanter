@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from typer.testing import CliRunner
 
@@ -132,6 +133,18 @@ class SerenityCliTests(unittest.TestCase):
         self.assert_click_error(result)
         self.assertIn("Invalid JSON", result.output)
 
+    def test_scorecard_reports_stdin_decode_failure_without_traceback(self):
+        decode_error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte")
+
+        with patch("click.get_text_stream", side_effect=decode_error):
+            result = self.runner.invoke(
+                app,
+                ["research", "scorecard", "-"],
+            )
+
+        self.assert_click_error(result)
+        self.assertIn("Could not read input '-'", result.output)
+
     def test_scorecard_reports_missing_file_without_traceback(self):
         result = self.runner.invoke(
             app,
@@ -153,6 +166,16 @@ class SerenityCliTests(unittest.TestCase):
 
         self.assert_click_error(result)
         self.assertIn("Invalid scorecard", result.output)
+
+    def test_scorecard_reports_unsupported_format_without_traceback(self):
+        result = self.runner.invoke(
+            app,
+            ["research", "scorecard", "-", "--format", "yaml"],
+            input=json.dumps(self.scorecard_payload()),
+        )
+
+        self.assert_click_error(result)
+        self.assertIn("Unsupported format", result.output)
 
 
 if __name__ == "__main__":

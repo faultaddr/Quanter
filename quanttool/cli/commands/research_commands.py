@@ -24,10 +24,10 @@ def _serenity_dependencies() -> Tuple[Any, Any, Any]:
 def _load_input(input_path: str) -> str:
     """Read a UTF-8 JSON document from a path or standard input."""
 
-    if input_path == "-":
-        return click.get_text_stream("stdin").read()
-
     try:
+        if input_path == "-":
+            return click.get_text_stream("stdin", encoding="utf-8").read()
+
         with open(input_path, "r", encoding="utf-8") as input_file:
             return input_file.read()
     except (OSError, UnicodeError) as exc:
