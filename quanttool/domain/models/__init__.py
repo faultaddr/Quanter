@@ -182,3 +182,17 @@ class FactorEvaluationResult(BaseModel):
     turnover: float
     max_exposure: float
     data: Any  # Can be DataFrame, string, or other data representation
+
+
+from .serenity import (  # noqa: E402
+    EvidenceStrength,
+    ResearchTimingQuadrant,
+    ResearchVerdict,
+    SerenityEvidence,
+    SerenityEvidenceSummary,
+    SerenityFactors,
+    SerenityPenalties,
+    SerenityScoreDetail,
+    SerenityScoreResult,
+    SerenityScorecard,
+)
