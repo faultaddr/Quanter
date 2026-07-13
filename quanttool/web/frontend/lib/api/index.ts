@@ -40,3 +40,4 @@ export { stockApi } from './stock';
 export { backtestApi } from './backtest';
 export { modelApi } from './model';
 export { monitorApi } from './monitor';
+export { researchApi } from './research';

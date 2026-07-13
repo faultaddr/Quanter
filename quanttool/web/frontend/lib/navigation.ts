@@ -4,6 +4,7 @@ const PATH_PAGE_KEYS: Array<[string, string]> = [
   ['/model', 'model'],
   ['/monitor', 'monitor'],
   ['/scan', 'scan'],
+  ['/research', 'research'],
   ['/picks', 'picks'],
   ['/factors', 'factors'],
   ['/risk', 'risk'],
