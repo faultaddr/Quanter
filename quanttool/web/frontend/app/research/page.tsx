@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useRef, useState } from 'react';
 import PageContainer from '@/components/layout/PageContainer';
 import { ResearchResult, ScoreField } from '@/components/research';
 import { Button, Input, PageHeader, Section, StatusBadge } from '@/components/ui';
@@ -79,6 +79,41 @@ export default function ResearchPage() {
   const [result, setResult] = useState<SerenityScoreResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nextRowId = useRef(1);
+  const evidenceRowIds = useRef(['evidence-0']);
+  const weakeningRowIds = useRef(['weakening-0']);
+
+  const addEvidence = () => {
+    evidenceRowIds.current.push(`evidence-${nextRowId.current++}`);
+    setScorecard((current) => ({
+      ...current,
+      evidence: [...current.evidence, { claim: '', source: '', strength: 'unverified', published_at: null }],
+    }));
+  };
+
+  const removeEvidence = (index: number) => {
+    evidenceRowIds.current = evidenceRowIds.current.filter((_, itemIndex) => itemIndex !== index);
+    setScorecard((current) => ({
+      ...current,
+      evidence: current.evidence.filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
+
+  const addWeakeningCondition = () => {
+    weakeningRowIds.current.push(`weakening-${nextRowId.current++}`);
+    setScorecard((current) => ({
+      ...current,
+      what_could_weaken_view: [...current.what_could_weaken_view, ''],
+    }));
+  };
+
+  const removeWeakeningCondition = (index: number) => {
+    weakeningRowIds.current = weakeningRowIds.current.filter((_, itemIndex) => itemIndex !== index);
+    setScorecard((current) => ({
+      ...current,
+      what_could_weaken_view: current.what_could_weaken_view.filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
 
   const updateEvidence = (index: number, key: keyof SerenityEvidence, value: string) => {
     setScorecard((current) => ({
@@ -102,6 +137,7 @@ export default function ResearchPage() {
     event.preventDefault();
     setLoading(true);
     setError(null);
+    setResult(null);
 
     const payload: SerenityScorecardInput = {
       ...scorecard,
@@ -202,12 +238,12 @@ export default function ResearchPage() {
         <Section
           title="研究证据"
           description="保留结论、来源、强度与发布日期。"
-          action={<Button type="button" size="sm" variant="secondary" onClick={() => setScorecard((current) => ({ ...current, evidence: [...current.evidence, { claim: '', source: '', strength: 'unverified', published_at: null }] }))}>添加证据</Button>}
+          action={<Button type="button" size="sm" variant="secondary" onClick={addEvidence}>添加证据</Button>}
           className="border-t border-border-primary pt-6"
         >
           <div className="divide-y divide-border-primary border-y border-border-primary">
             {scorecard.evidence.map((item, index) => (
-              <div key={index} className="grid grid-cols-1 gap-3 py-4 md:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_140px_160px_auto] lg:items-end">
+              <div key={evidenceRowIds.current[index]} className="grid grid-cols-1 gap-3 py-4 md:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_140px_160px_auto] lg:items-end">
                 <Input label="研究结论" value={item.claim} onChange={(event) => updateEvidence(index, 'claim', event.target.value)} />
                 <Input label="来源" value={item.source} onChange={(event) => updateEvidence(index, 'source', event.target.value)} />
                 <label className="text-sm font-medium text-text-secondary">
@@ -217,7 +253,7 @@ export default function ResearchPage() {
                   </select>
                 </label>
                 <Input label="发布日期" type="date" value={item.published_at ?? ''} onChange={(event) => updateEvidence(index, 'published_at', event.target.value)} />
-                <Button type="button" size="sm" variant="ghost" disabled={scorecard.evidence.length === 1} onClick={() => setScorecard((current) => ({ ...current, evidence: current.evidence.filter((_, itemIndex) => itemIndex !== index) }))}>删除</Button>
+                <Button type="button" size="sm" variant="ghost" disabled={scorecard.evidence.length === 1} onClick={() => removeEvidence(index)}>删除</Button>
               </div>
             ))}
           </div>
@@ -226,14 +262,14 @@ export default function ResearchPage() {
         <Section
           title="观点削弱条件"
           description="明确哪些事实变化会推翻或降低当前研究结论。"
-          action={<Button type="button" size="sm" variant="secondary" onClick={() => setScorecard((current) => ({ ...current, what_could_weaken_view: [...current.what_could_weaken_view, ''] }))}>添加条件</Button>}
+          action={<Button type="button" size="sm" variant="secondary" onClick={addWeakeningCondition}>添加条件</Button>}
           className="border-t border-border-primary pt-6"
         >
           <div className="divide-y divide-border-primary border-y border-border-primary">
             {scorecard.what_could_weaken_view.map((condition, index) => (
-              <div key={index} className="flex items-center gap-3 py-3">
+              <div key={weakeningRowIds.current[index]} className="flex items-center gap-3 py-3">
                 <input aria-label={`削弱条件 ${index + 1}`} className={inputClass} value={condition} onChange={(event) => updateWeakeningCondition(index, event.target.value)} placeholder="例如：客户切换到替代架构" />
-                <Button type="button" size="sm" variant="ghost" disabled={scorecard.what_could_weaken_view.length === 1} onClick={() => setScorecard((current) => ({ ...current, what_could_weaken_view: current.what_could_weaken_view.filter((_, itemIndex) => itemIndex !== index) }))}>删除</Button>
+                <Button type="button" size="sm" variant="ghost" disabled={scorecard.what_could_weaken_view.length === 1} onClick={() => removeWeakeningCondition(index)}>删除</Button>
               </div>
             ))}
           </div>

@@ -82,8 +82,8 @@ export interface SerenityScoreResult {
   verdict: ResearchVerdict;
   timing_score: number | null;
   quadrant: ResearchTimingQuadrant | null;
-  factor_details: Record<string, SerenityScoreDetail>;
-  penalty_details: Record<string, SerenityScoreDetail>;
+  factor_details: Record<keyof SerenityFactors, SerenityScoreDetail>;
+  penalty_details: Record<keyof SerenityPenalties, SerenityScoreDetail>;
   evidence_summary: SerenityEvidenceSummary;
   evidence: SerenityEvidence[];
   what_could_weaken_view: string[];
