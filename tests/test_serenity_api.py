@@ -100,14 +100,17 @@ class SerenityApiTests(unittest.TestCase):
             "quanttool.web.api.research.SerenityService.score",
             side_effect=RuntimeError("scoring unavailable"),
         ):
-            response = score_serenity_scorecard(SerenityScorecard())
+            with patch("quanttool.web.api.research.logger.exception") as log_mock:
+                response = score_serenity_scorecard(SerenityScorecard())
 
         body = response_dict(response)
         self.assertEqual(set(body), {"success", "data", "error", "timestamp"})
         self.assertFalse(body["success"])
         self.assertIsNone(body["data"])
-        self.assertIn("scoring unavailable", body["error"])
+        self.assertEqual(body["error"], "Serenity research service unavailable")
+        self.assertNotIn("scoring unavailable", body["error"])
         self.assertEqual(body["timestamp"].tzinfo, timezone.utc)
+        log_mock.assert_called_once_with("Serenity research request failed")
 
 
 if __name__ == "__main__":

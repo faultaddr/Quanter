@@ -5,11 +5,13 @@ from datetime import datetime, timezone
 from fastapi import APIRouter
 
 from quanttool.application.serenity_service import SerenityService
+from quanttool.core.logging import get_logger
 from quanttool.domain.models.serenity import SerenityScorecard
 from quanttool.web.schemas.serenity import SerenityResponse
 
 
 router = APIRouter(prefix="/research/serenity", tags=["research"])
+logger = get_logger(__name__)
 
 
 def _utc_now() -> datetime:
@@ -21,10 +23,11 @@ def _utc_now() -> datetime:
 def _failure_response(error: Exception) -> SerenityResponse:
     """Keep unexpected service failures inside the Serenity response contract."""
 
+    logger.exception("Serenity research request failed")
     return SerenityResponse(
         success=False,
         data=None,
-        error=str(error),
+        error="Serenity research service unavailable",
         timestamp=_utc_now(),
     )
 
