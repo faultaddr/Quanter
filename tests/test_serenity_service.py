@@ -58,10 +58,26 @@ class SerenityServiceTests(unittest.TestCase):
     def test_score_uses_exact_weights_and_penalties(self):
         result = self.service.score(self.make_scorecard())
 
+        expected_factor_weights = {
+            "demand_inflection": 15.0,
+            "architecture_coupling": 10.0,
+            "chokepoint_severity": 15.0,
+            "supplier_concentration": 12.0,
+            "expansion_difficulty": 12.0,
+            "evidence_quality": 15.0,
+            "valuation_disconnect": 11.0,
+            "catalyst_timing": 10.0,
+        }
+
         self.assertEqual(result.raw_factor_points, 100.0)
         self.assertEqual(result.penalty_points, 10.0)
         self.assertEqual(result.research_priority_score, 90.0)
-        self.assertEqual(result.factor_details["demand_inflection"].weight, 15.0)
+        self.assertEqual(
+            {
+                name: detail.weight for name, detail in result.factor_details.items()
+            },
+            expected_factor_weights,
+        )
         self.assertEqual(result.factor_details["demand_inflection"].points, 15.0)
         self.assertEqual(result.penalty_details["dilution_financing"].points, 10.0)
 
@@ -120,6 +136,24 @@ class SerenityServiceTests(unittest.TestCase):
             SerenityPenalties(governance=-0.01)
         with self.assertRaises(ValidationError):
             SerenityScorecard(factors=SerenityFactors(), timing_score=100.01)
+
+    def test_models_reject_out_of_range_assignments(self):
+        factors = SerenityFactors()
+        penalties = SerenityPenalties()
+        scorecard = SerenityScorecard()
+
+        with self.assertRaises(ValidationError):
+            factors.demand_inflection = 5.01
+        with self.assertRaises(ValidationError):
+            penalties.governance = -0.01
+        with self.assertRaises(ValidationError):
+            scorecard.timing_score = 100.01
+
+    def test_models_reject_unknown_factor_and_penalty_fields(self):
+        with self.assertRaises(ValidationError):
+            SerenityFactors(demand_inflecton=4.0)
+        with self.assertRaises(ValidationError):
+            SerenityPenalties(governace=4.0)
 
     def test_penalty_keys_match_serenity_scorecard_contract(self):
         penalties = SerenityPenalties(hype_risk=2.0, alternative_design_risk=3.0)

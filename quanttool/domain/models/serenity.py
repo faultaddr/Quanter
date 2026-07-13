@@ -4,7 +4,21 @@ from datetime import date
 from enum import Enum
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import VERSION, BaseModel, Field
+
+
+if VERSION.startswith("1."):
+
+    class _SerenityInputModel(BaseModel):
+        class Config:
+            extra = "forbid"
+            validate_assignment = True
+
+else:
+    from pydantic import ConfigDict
+
+    class _SerenityInputModel(BaseModel):
+        model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
 
 class EvidenceStrength(str, Enum):
@@ -34,7 +48,7 @@ class ResearchTimingQuadrant(str, Enum):
     LOW_PRIORITY = "low_priority"
 
 
-class SerenityFactors(BaseModel):
+class SerenityFactors(_SerenityInputModel):
     """Positive Serenity research factors, each rated from zero to five."""
 
     demand_inflection: float = Field(0.0, ge=0.0, le=5.0)
@@ -47,7 +61,7 @@ class SerenityFactors(BaseModel):
     catalyst_timing: float = Field(0.0, ge=0.0, le=5.0)
 
 
-class SerenityPenalties(BaseModel):
+class SerenityPenalties(_SerenityInputModel):
     """Research risks that reduce priority, each rated from zero to five."""
 
     dilution_financing: float = Field(0.0, ge=0.0, le=5.0)
@@ -60,7 +74,7 @@ class SerenityPenalties(BaseModel):
     alternative_design_risk: float = Field(0.0, ge=0.0, le=5.0)
 
 
-class SerenityEvidence(BaseModel):
+class SerenityEvidence(_SerenityInputModel):
     """A claim and source retained as part of the research result."""
 
     claim: str
@@ -69,7 +83,7 @@ class SerenityEvidence(BaseModel):
     published_at: Optional[date] = None
 
 
-class SerenityScorecard(BaseModel):
+class SerenityScorecard(_SerenityInputModel):
     """Research candidate and the ratings supplied by a researcher."""
 
     ticker: str = ""
