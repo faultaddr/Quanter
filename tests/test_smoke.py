@@ -37,6 +37,8 @@ class ApiRouteContractTests(unittest.TestCase):
             ("POST", "/api/backtest/run"),
             ("POST", "/api/gbm/train"),
             ("GET", "/api/realtime/search"),
+            ("GET", "/api/research/serenity/template"),
+            ("POST", "/api/research/serenity/scorecard"),
             ("GET", "/api/stock/{symbol}/analysis"),
         }
 

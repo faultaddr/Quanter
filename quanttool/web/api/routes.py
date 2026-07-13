@@ -9,6 +9,7 @@ from . import (
     models,
     monitor,
     realtime,
+    research,
     registry,
     risk,
     scan,
@@ -28,5 +29,6 @@ router.include_router(factors.router)
 router.include_router(registry.router)
 router.include_router(risk.router)
 router.include_router(realtime.router)
+router.include_router(research.router)
 router.include_router(monitor.router)
 router.include_router(ml.router)

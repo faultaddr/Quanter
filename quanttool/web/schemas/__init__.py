@@ -17,6 +17,7 @@ from .monitor import MonitorStartRequest, MonitorStatusResponse
 from .realtime import RealtimeQuoteResponse
 from .risk import PortfolioCheckRequest
 from .scan import ScanRequest
+from .serenity import SerenityResponse
 from .stock import AnalyzeRequest, EnhancedAnalyzeRequest
 from .tasks import TaskCreateRequest
 
@@ -48,6 +49,7 @@ __all__ = [
     "QlibTrainRequest",
     "RealtimeQuoteResponse",
     "ScanRequest",
+    "SerenityResponse",
     "SymbolInfoSchema",
     "TaskCreateRequest",
     "TradeSchema",
