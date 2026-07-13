@@ -281,7 +281,9 @@ export default function ResearchPage() {
           <Button type="submit" loading={loading}>生成研究评分</Button>
         </div>
 
-        {result && <ResearchResult result={result} />}
+        <div aria-live="polite">
+          {result && <ResearchResult result={result} />}
+        </div>
       </form>
     </PageContainer>
   );

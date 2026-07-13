@@ -27,6 +27,9 @@ interface AppState {
   // 侧边栏折叠
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
+  mobileSidebarOpen: boolean;
+  toggleMobileSidebar: () => void;
+  closeMobileSidebar: () => void;
 
   // 历史记录
   history: HistoryItem[];
@@ -56,6 +59,10 @@ export const useAppStore = create<AppState>()(
         set((state) => ({
           sidebarCollapsed: !state.sidebarCollapsed,
         })),
+      mobileSidebarOpen: false,
+      toggleMobileSidebar: () =>
+        set((state) => ({ mobileSidebarOpen: !state.mobileSidebarOpen })),
+      closeMobileSidebar: () => set({ mobileSidebarOpen: false }),
 
       history: [],
       addHistory: (item) =>
