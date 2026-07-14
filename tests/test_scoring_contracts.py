@@ -2,7 +2,9 @@ import unittest
 
 from quanttool.factors.scoring import UnifiedScoringSystem
 from quanttool.factors.scoring.base import ScoreResult
-from tests.fixtures.algorithm_data import make_indicator_ready_ohlcv
+from quanttool.factors.scoring.strategies.trend import TrendScoringStrategy
+from quanttool.factors.trend_scoring_system import TrendScoringSystem
+from tests.fixtures.algorithm_data import make_indicator_ready_ohlcv, make_trending_ohlcv
 
 
 class UnifiedScoringContractTests(unittest.TestCase):
@@ -49,6 +51,28 @@ class UnifiedScoringContractTests(unittest.TestCase):
         self.assertIn("legacy_result", result.details)
         self.assertIn("factors_raw", result.details)
         self.assertIn("execution", result.details)
+
+
+class TrendScoringIndicatorTests(unittest.TestCase):
+    def test_rsi_treats_zero_average_loss_as_extreme_strength(self):
+        df = make_trending_ohlcv(rows=260)
+        df["volume"] = df["volume"] * 10
+        df["amount"] = df["close"] * df["volume"]
+
+        result = TrendScoringSystem().calculate_score(df)
+
+        self.assertTrue(result.passed_hard_filter, result.hard_filter_reason)
+        self.assertGreaterEqual(result.details["timing"]["rsi"], 99)
+
+    def test_strategy_rsi_treats_zero_average_loss_as_extreme_strength(self):
+        df = make_trending_ohlcv(rows=260)
+        df["volume"] = df["volume"] * 10
+        df["amount"] = df["close"] * df["volume"]
+
+        result = TrendScoringStrategy().calculate_score(df)
+
+        self.assertTrue(result.passed_filter, result.filter_reason)
+        self.assertGreaterEqual(result.details["timing"]["rsi"], 99)
 
 
 if __name__ == "__main__":

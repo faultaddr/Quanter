@@ -64,7 +64,7 @@ export default function ModelCard({ model, onPredict, onDelete, selected }: Mode
         {onPredict && (
           <Button
             size="sm"
-            onClick={() => onPredict(model.id)}
+            onClick={() => onPredict(model.path || model.id)}
             className="flex-1"
           >
             预测

@@ -11,11 +11,13 @@ export default function PageContainer({ children, className }: PageContainerProp
   return (
     <main
       className={cn(
-        'flex-1 overflow-auto bg-bg-primary p-6',
+        'flex-1 overflow-auto bg-bg-primary px-4 py-5 md:px-6',
         className
       )}
     >
-      {children}
+      <div className="mx-auto w-full max-w-[1440px]">
+        {children}
+      </div>
     </main>
   );
 }

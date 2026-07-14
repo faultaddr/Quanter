@@ -38,83 +38,95 @@ interface RiskReport {
   };
 }
 
-// 模拟风控检查API
-const mockRiskCheck = async (symbols: string[]): Promise<RiskReport> => {
-  await new Promise(resolve => setTimeout(resolve, 1500));
+interface PortfolioPosition {
+  symbol: string;
+  name: string;
+  value: number;
+}
 
-  // 模拟生成风控报告
-  const riskItems: RiskItem[] = [];
+interface BackendRiskResponse {
+  risk_score: number;
+  industry_violations: Array<{
+    industry: string;
+    exposure: number;
+    limit: number;
+  }>;
+  blacklist_violations: string[];
+  position_shrink_factor: number;
+  recommendations: string[];
+}
 
-  // 模拟行业集中度风险
-  if (symbols.length > 3) {
-    riskItems.push({
-      type: 'industry',
-      severity: 'medium',
-      title: '行业集中度偏高',
-      description: '持仓中银行+金融类占比超过40%',
-      suggestion: '建议分散至消费、科技等其他行业',
-    });
-  }
+interface RiskRequestBody {
+  positions: Record<string, { value: number }>;
+  industry_map: Record<string, string>;
+  portfolio_value: number;
+  peak_value: number;
+}
 
-  // 模拟流动性风险
-  if (symbols.length < 3) {
-    riskItems.push({
-      type: 'liquidity',
-      severity: 'high',
-      title: '持仓过于集中',
-      description: '持仓股票数量少于3只',
-      suggestion: '建议分散至5-10只股票',
-    });
-  }
+function getRiskLevel(score: number): RiskReport['risk_level'] {
+  if (score < 40) return 'critical';
+  if (score < 60) return 'high';
+  if (score < 80) return 'medium';
+  return 'low';
+}
 
-  // 模拟波动率风险
-  riskItems.push({
-    type: 'volatility',
-    severity: 'low',
-    title: '波动率正常',
-    description: '组合年化波动率在合理范围内',
-    suggestion: '保持当前配置',
-  });
-
-  // 模拟黑名单
-  const blacklisted = symbols.filter(s => s === '000001');
-  if (blacklisted.length > 0) {
-    riskItems.push({
-      type: 'blacklist',
-      severity: 'high',
-      title: '持仓黑名单股票',
-      description: `${blacklisted.join(', ')} 存在于黑名单中`,
-      suggestion: '建议立即卖出',
-    });
-  }
-
-  // 计算风险评分
-  const severityScore = {
-    high: 30,
-    medium: 15,
-    low: 5,
-  };
-  const deductedScore = riskItems.reduce((sum, item) => sum + severityScore[item.severity], 0);
-  const overallScore = Math.max(0, 100 - deductedScore);
-
-  let riskLevel: RiskReport['risk_level'] = 'low';
-  if (overallScore < 40) riskLevel = 'critical';
-  else if (overallScore < 60) riskLevel = 'high';
-  else if (overallScore < 80) riskLevel = 'medium';
+function buildRiskRequest(symbols: string[], positions: PortfolioPosition[]): RiskRequestBody {
+  const tableValues = new Map(positions.map((position) => [position.symbol, position.value]));
+  const entries = symbols.map((symbol) => [symbol, { value: tableValues.get(symbol) || 100000 }] as const);
+  const portfolioValue = entries.reduce((sum, [, position]) => sum + position.value, 0);
 
   return {
-    overall_score: overallScore,
-    risk_level: riskLevel,
-    risk_items: riskItems,
+    positions: Object.fromEntries(entries),
+    industry_map: Object.fromEntries(symbols.map((symbol) => [symbol, 'unknown'])),
+    portfolio_value: portfolioValue,
+    peak_value: portfolioValue,
+  };
+}
+
+function mapRiskResponse(data: BackendRiskResponse, requestBody: RiskRequestBody): RiskReport {
+  const symbols = Object.keys(requestBody.positions);
+  const values = Object.values(requestBody.positions).map((position) => position.value);
+  const maxPositionValue = values.length > 0 ? Math.max(...values) : 0;
+
+  const industryItems: RiskItem[] = data.industry_violations.map((violation) => ({
+    type: 'industry',
+    severity: violation.exposure > violation.limit * 1.5 ? 'high' : 'medium',
+    title: '行业集中度超限',
+    description: `${violation.industry} 暴露 ${formatPercent(violation.exposure)}，限制 ${formatPercent(violation.limit)}`,
+    suggestion: '降低该行业持仓占比，分散到其他行业',
+  }));
+
+  const blacklistItems: RiskItem[] = data.blacklist_violations.map((symbol) => ({
+    type: 'blacklist',
+    severity: 'high',
+    title: '持仓黑名单股票',
+    description: `${symbol} 存在于黑名单中`,
+    suggestion: '建议立即复核并考虑卖出',
+  }));
+
+  const recommendationItems: RiskItem[] = data.recommendations
+    .filter((recommendation) => !(industryItems.length > 0 && recommendation.includes('行业 [')))
+    .map((recommendation) => ({
+      type: 'concentration',
+      severity: data.position_shrink_factor < 1 ? 'medium' : 'low',
+      title: '风控建议',
+      description: recommendation,
+      suggestion: recommendation,
+    }));
+
+  return {
+    overall_score: Math.round(data.risk_score),
+    risk_level: getRiskLevel(data.risk_score),
+    risk_items: [...industryItems, ...blacklistItems, ...recommendationItems],
     portfolio_metrics: {
-      total_value: symbols.length * 100000,
+      total_value: requestBody.portfolio_value,
       position_count: symbols.length,
-      industry_count: Math.min(symbols.length, 5),
-      top_holding_ratio: symbols.length > 0 ? 0.4 : 0,
-      avg_volatility: 0.18,
+      industry_count: new Set(Object.values(requestBody.industry_map)).size,
+      top_holding_ratio: requestBody.portfolio_value > 0 ? maxPositionValue / requestBody.portfolio_value : 0,
+      avg_volatility: 0,
     },
   };
-};
+}
 
 export default function RiskPage() {
   const setActivePage = useAppStore((state) => state.setActivePage);
@@ -122,7 +134,7 @@ export default function RiskPage() {
   // 输入状态
   const [inputMode, setInputMode] = useState<'text' | 'table'>('text');
   const [textInput, setTextInput] = useState('');
-  const [positions, setPositions] = useState<{symbol: string; name: string; value: number}[]>([]);
+  const [positions, setPositions] = useState<PortfolioPosition[]>([]);
 
   // 状态
   const [loading, setLoading] = useState(false);
@@ -195,8 +207,19 @@ export default function RiskPage() {
     setResult(null);
 
     try {
-      const report = await mockRiskCheck(symbols);
-      setResult(report);
+      const requestBody = buildRiskRequest(symbols, positions);
+      const response = await fetch('/api/risk/portfolio/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        throw new Error('风控接口返回异常');
+      }
+
+      const data: BackendRiskResponse = await response.json();
+      setResult(mapRiskResponse(data, requestBody));
     } catch (err) {
       setError('风控检查失败，请重试');
     } finally {

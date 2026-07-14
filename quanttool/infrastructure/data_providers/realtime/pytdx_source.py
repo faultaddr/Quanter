@@ -81,6 +81,22 @@ def _parse_hosts_from_env() -> Optional[List[Tuple[str, int]]]:
     return None
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, "").strip() or default)
+    except ValueError:
+        logger.warning(f"Invalid {name}: {os.getenv(name)}")
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, "").strip() or default)
+    except ValueError:
+        logger.warning(f"Invalid {name}: {os.getenv(name)}")
+        return default
+
+
 class PytdxRealtimeProvider:
     """
     通达信实时行情提供者
@@ -104,7 +120,9 @@ class PytdxRealtimeProvider:
         self,
         hosts: Optional[List[Tuple[str, int]]] = None,
         cache_ttl: int = 3,
-        connect_timeout: int = 5,
+        connect_timeout: Optional[float] = None,
+        max_hosts_per_attempt: Optional[int] = None,
+        failure_cooldown_seconds: Optional[float] = None,
     ):
         """
         初始化通达信实时行情提供者
@@ -113,10 +131,31 @@ class PytdxRealtimeProvider:
             hosts: 服务器列表 [(host, port), ...]
             cache_ttl: 缓存过期时间(秒)，默认3秒
             connect_timeout: 连接超时(秒)
+            max_hosts_per_attempt: 单次请求最多探测的服务器数
+            failure_cooldown_seconds: 一次完整探测失败后的本地冷却时间
         """
         self._hosts = hosts or _parse_hosts_from_env() or DEFAULT_PYTDX_HOSTS
         self._cache_ttl = cache_ttl
-        self._connect_timeout = connect_timeout
+        self._connect_timeout = (
+            connect_timeout
+            if connect_timeout is not None
+            else _env_float("PYTDX_CONNECT_TIMEOUT", 1.0)
+        )
+        host_attempts = (
+            max_hosts_per_attempt
+            if max_hosts_per_attempt is not None
+            else _env_int("PYTDX_MAX_HOSTS_PER_ATTEMPT", 2)
+        )
+        self._max_hosts_per_attempt = (
+            max(1, min(host_attempts, len(self._hosts))) if self._hosts else 0
+        )
+        self._failure_cooldown_seconds = (
+            failure_cooldown_seconds
+            if failure_cooldown_seconds is not None
+            else _env_float("PYTDX_FAILURE_COOLDOWN_SECONDS", 60.0)
+        )
+        self._disabled_until = 0.0
+        self._last_failure_reason = ""
         self._current_host_idx = 0
 
         # 缓存 {cache_key: (data, timestamp)}
@@ -142,6 +181,16 @@ class PytdxRealtimeProvider:
                 return None
         return self._pytdx_api
 
+    def _is_temporarily_disabled(self) -> bool:
+        if self._disabled_until <= 0:
+            return False
+        return time.time() < self._disabled_until
+
+    def _mark_temporarily_unavailable(self, reason: str) -> None:
+        self._last_failure_reason = reason
+        if self._failure_cooldown_seconds > 0:
+            self._disabled_until = time.time() + self._failure_cooldown_seconds
+
     @contextmanager
     def _pytdx_session(self) -> Generator:
         """
@@ -157,8 +206,9 @@ class PytdxRealtimeProvider:
         connected = False
 
         try:
-            # 尝试连接服务器
-            for i in range(len(self._hosts)):
+            # 尝试连接服务器，失败时快速转向备用源。
+            attempt_count = min(len(self._hosts), self._max_hosts_per_attempt)
+            for i in range(attempt_count):
                 host_idx = (self._current_host_idx + i) % len(self._hosts)
                 host, port = self._hosts[host_idx]
 
@@ -173,7 +223,13 @@ class PytdxRealtimeProvider:
                     continue
 
             if not connected:
-                raise RuntimeError("Pytdx 无法连接任何服务器")
+                self._current_host_idx = (self._current_host_idx + attempt_count) % len(self._hosts)
+                reason = (
+                    f"Pytdx 无法连接已探测服务器 "
+                    f"({attempt_count}/{len(self._hosts)})"
+                )
+                self._mark_temporarily_unavailable(reason)
+                raise RuntimeError(reason)
 
             yield api
 
@@ -223,7 +279,7 @@ class PytdxRealtimeProvider:
             return cached
 
         # 检查熔断器
-        if not self._circuit_breaker.is_available(self.SOURCE_NAME):
+        if not self.is_available():
             logger.warning(f"[熔断] {self.SOURCE_NAME} 处于熔断状态")
             return None
 
@@ -268,7 +324,7 @@ class PytdxRealtimeProvider:
                 return data
 
         # 检查熔断器
-        if not self._circuit_breaker.is_available(self.SOURCE_NAME):
+        if not self.is_available():
             logger.warning(f"[熔断] {self.SOURCE_NAME} 处于熔断状态")
             return {}
 
@@ -423,7 +479,10 @@ class PytdxRealtimeProvider:
 
     def is_available(self) -> bool:
         """检查数据源是否可用"""
-        return self._circuit_breaker.is_available(self.SOURCE_NAME)
+        return (
+            not self._is_temporarily_disabled()
+            and self._circuit_breaker.is_available(self.SOURCE_NAME)
+        )
 
     def get_status(self) -> Dict[str, Any]:
         """获取提供者状态"""
@@ -432,6 +491,10 @@ class PytdxRealtimeProvider:
             'available': self.is_available(),
             'circuit_breaker': self._circuit_breaker.get_status(),
             'current_host': self._hosts[self._current_host_idx] if self._hosts else None,
+            'connect_timeout': self._connect_timeout,
+            'max_hosts_per_attempt': self._max_hosts_per_attempt,
+            'temporary_disabled_until': self._disabled_until,
+            'last_failure_reason': self._last_failure_reason,
         }
 
 

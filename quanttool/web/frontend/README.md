@@ -23,10 +23,12 @@ npm install
 ### 开发模式
 
 ```bash
-npm run dev
+npm run dev:clean
 ```
 
 访问 http://localhost:3000
+
+`dev:clean` 会先清理 `.next`，避免旧的 Next.js manifest 指向不存在的 CSS 产物，导致页面样式在浏览器中失效。日常开发可继续使用 `npm run dev`，但遇到样式或热更新异常时优先使用 `npm run dev:clean`。
 
 ### 生产构建
 
@@ -34,6 +36,8 @@ npm run dev
 npm run build
 npm start
 ```
+
+当前项目启用了 `output: 'standalone'`，生产预览使用 `.next/standalone/server.js` 启动；不要直接使用 `next start`。
 
 ## 项目结构
 
@@ -107,15 +111,17 @@ frontend/
 
 ## API 代理配置
 
-开发环境下，API 请求会代理到后端服务：
+开发环境下，浏览器 API 默认请求同源 `/api`，Next.js 再代理到后端服务。后端地址可通过 `API_PROXY_BASE_URL` 配置：
 
 ```javascript
 // next.config.js
+const apiProxyBaseUrl = process.env.API_PROXY_BASE_URL || 'http://localhost:8000/api';
+
 async rewrites() {
   return [
     {
       source: '/api/:path*',
-      destination: 'http://localhost:8000/api/:path*',
+      destination: `${apiProxyBaseUrl}/:path*`,
     },
   ];
 }

@@ -12,15 +12,20 @@ export interface TrainParams {
 // 后端 API 返回的原始模型数据
 export interface ApiModelInfo {
   path: string;
-  filename: string;
+  filename?: string;
+  run_id?: string;
+  run_name?: string;
+  model_type?: string;
   size_mb: number;
   modified: string;
+  config?: Record<string, unknown>;
 }
 
 export interface ModelInfo {
   id: string;
   name: string;
   type: string;
+  path?: string;
   created_at?: string;
   metrics?: {
     accuracy?: number;

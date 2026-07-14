@@ -3,7 +3,7 @@ function normalizeApiBaseUrl(baseUrl) {
   return baseUrl.replace(/\/+$/, '') || baseUrl;
 }
 
-const apiBaseUrl = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000/api');
+const apiProxyBaseUrl = normalizeApiBaseUrl(process.env.API_PROXY_BASE_URL || 'http://localhost:8000/api');
 
 const nextConfig = {
   output: 'standalone',
@@ -11,7 +11,7 @@ const nextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: `${apiBaseUrl}/:path*`,
+        destination: `${apiProxyBaseUrl}/:path*`,
       },
     ];
   },

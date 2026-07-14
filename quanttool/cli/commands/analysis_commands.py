@@ -547,52 +547,64 @@ def analyze_stock_unified_score(
         adaptive_thresholds = None
         dual_market_state = None
 
-        try:
-            market_detector = IndexMarketDetector(default_index='hs300')
-            dual_state = market_detector.get_dual_market_state(df_with_indicators)
-            dual_market_state = dual_state.to_dict()
-
-            threshold_manager = AdaptiveThresholdManager()
-            adaptive_config = threshold_manager.get_adaptive_thresholds(df_with_indicators)
-
-            base_buy = 50.0
-            base_sell = 25.0
-            combined_signal = dual_state.combined_signal
-            if combined_signal == CombinedSignal.STRONG_BUY:
-                base_buy = 45.0
-            elif combined_signal == CombinedSignal.CASH:
-                base_buy = 80.0
-            elif combined_signal == CombinedSignal.AVOID:
-                base_buy = 70.0
-            elif combined_signal == CombinedSignal.LIGHT_POSITION:
-                base_buy = 55.0
-
+        if getattr(analyzer, "_scan_fast_mode", False):
+            market_state = context.market_state
+            dual_market_state = market_state.to_dict()
             adaptive_thresholds = {
-                'buy_threshold': adaptive_config.buy_threshold,
-                'sell_threshold': adaptive_config.sell_threshold,
-                'regime': adaptive_config.market_regime.value,
-                'volatility': adaptive_config.volatility_level.value,
-                'adjusted_buy_threshold': base_buy,
-                'adjusted_sell_threshold': base_sell,
+                'buy_threshold': market_state.buy_threshold,
+                'sell_threshold': market_state.sell_threshold,
+                'regime': market_state.combined_regime.value,
+                'volatility': market_state.volatility_level,
+                'adjusted_buy_threshold': market_state.buy_threshold,
+                'adjusted_sell_threshold': market_state.sell_threshold,
             }
+        else:
+            try:
+                market_detector = IndexMarketDetector(default_index='hs300')
+                dual_state = market_detector.get_dual_market_state(df_with_indicators)
+                dual_market_state = dual_state.to_dict()
 
-            strategy = ScoreStrategy(
-                buy_threshold=base_buy,
-                sell_threshold=base_sell,
-                use_dynamic_weights=True,
-                use_multi_timeframe=True,
-                use_risk_control=True
-            )
-            signal = strategy.get_signal(latest, df_with_indicators)
-            strategy_signal = {
-                'direction': signal.get('direction'),
-                'signal': signal.get('signal'),
-                'adjusted_score': signal.get('adjusted_score'),
-                'mtf_bonus': signal.get('mtf_bonus'),
-                'stop_loss': signal.get('stop_loss'),
-            }
-        except Exception as e:
-            strategy_signal = {'error': str(e)}
+                threshold_manager = AdaptiveThresholdManager()
+                adaptive_config = threshold_manager.get_adaptive_thresholds(df_with_indicators)
+
+                base_buy = 50.0
+                base_sell = 25.0
+                combined_signal = dual_state.combined_signal
+                if combined_signal == CombinedSignal.STRONG_BUY:
+                    base_buy = 45.0
+                elif combined_signal == CombinedSignal.CASH:
+                    base_buy = 80.0
+                elif combined_signal == CombinedSignal.AVOID:
+                    base_buy = 70.0
+                elif combined_signal == CombinedSignal.LIGHT_POSITION:
+                    base_buy = 55.0
+
+                adaptive_thresholds = {
+                    'buy_threshold': adaptive_config.buy_threshold,
+                    'sell_threshold': adaptive_config.sell_threshold,
+                    'regime': adaptive_config.market_regime.value,
+                    'volatility': adaptive_config.volatility_level.value,
+                    'adjusted_buy_threshold': base_buy,
+                    'adjusted_sell_threshold': base_sell,
+                }
+
+                strategy = ScoreStrategy(
+                    buy_threshold=base_buy,
+                    sell_threshold=base_sell,
+                    use_dynamic_weights=True,
+                    use_multi_timeframe=True,
+                    use_risk_control=True
+                )
+                signal = strategy.get_signal(latest, df_with_indicators)
+                strategy_signal = {
+                    'direction': signal.get('direction'),
+                    'signal': signal.get('signal'),
+                    'adjusted_score': signal.get('adjusted_score'),
+                    'mtf_bonus': signal.get('mtf_bonus'),
+                    'stop_loss': signal.get('stop_loss'),
+                }
+            except Exception as e:
+                strategy_signal = {'error': str(e)}
 
         return {
             "symbol": symbol,

@@ -48,6 +48,47 @@ interface StockFactorAnalysis {
   factor_scores: FactorScore[];
 }
 
+interface BackendFactorResponse {
+  symbol: string;
+  name?: string;
+  momentum?: number;
+  value?: number;
+  quality?: number;
+  growth?: number;
+  overall?: number;
+}
+
+const FACTOR_SCORE_LABELS: Array<{
+  key: keyof BackendFactorResponse;
+  label: string;
+  read: (data: BackendFactorResponse) => number | undefined;
+}> = [
+  { key: 'momentum', label: '动量因子', read: (data) => data.momentum },
+  { key: 'value', label: '价值因子', read: (data) => data.value },
+  { key: 'quality', label: '质量因子', read: (data) => data.quality },
+  { key: 'growth', label: '成长因子', read: (data) => data.growth },
+];
+
+function getFactorSignal(value: number): FactorScore['signal'] {
+  if (value >= 65) return 'buy';
+  if (value <= 45) return 'sell';
+  return 'neutral';
+}
+
+function buildFactorScores(data: BackendFactorResponse): FactorScore[] {
+  return FACTOR_SCORE_LABELS.map(({ key, label, read }) => {
+    const value = Number(read(data) ?? 0);
+    return {
+      factor: key,
+      label,
+      value,
+      zscore: (value - 50) / 10,
+      percentile: Math.max(0, Math.min(100, Math.round(value))),
+      signal: getFactorSignal(value),
+    };
+  });
+}
+
 export default function FactorsPage() {
   const setActivePage = useAppStore((state) => state.setActivePage);
 
@@ -78,14 +119,14 @@ export default function FactorsPage() {
       if (!response.ok) {
         throw new Error('获取因子数据失败');
       }
-      const data = await response.json();
+      const data: BackendFactorResponse = await response.json();
 
       // 构造分析结果
       setAnalysis({
         symbol: keyword.trim(),
         name: data.name || keyword.trim(),
         overall_score: data.overall || 70,
-        factor_scores: data.scores || [],
+        factor_scores: buildFactorScores(data),
       });
     } catch (err) {
       console.error('Search error:', err);

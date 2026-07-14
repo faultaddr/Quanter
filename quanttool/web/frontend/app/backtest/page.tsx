@@ -359,7 +359,7 @@ export default function BacktestPage() {
                         <span className={`text-sm font-medium ${
                           result.excess_return > 0 ? 'text-green-600' : 'text-red-600'
                         }`}>
-                          {result.excess_return > 0 ? '+' : ''}{formatPercent(result.excess_return)}
+                          {formatPercent(result.excess_return)}
                         </span>
                       </div>
                     </div>

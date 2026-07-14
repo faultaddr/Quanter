@@ -487,8 +487,11 @@ class TrendScoringStrategy(ScoringStrategy):
         avg_gain = pd.Series(gains).rolling(period).mean().values
         avg_loss = pd.Series(losses).rolling(period).mean().values
 
-        rs = np.where(avg_loss != 0, avg_gain / avg_loss, 0)
-        rsi = 100 - (100 / (1 + rs))
+        rsi = np.full_like(avg_gain, 50, dtype=float)
+        valid_loss = avg_loss > 0
+        rsi[valid_loss] = 100 - (100 / (1 + avg_gain[valid_loss] / avg_loss[valid_loss]))
+        no_loss_with_gain = (avg_loss == 0) & (avg_gain > 0)
+        rsi[no_loss_with_gain] = 100
         rsi[:period] = 50
 
         return rsi
