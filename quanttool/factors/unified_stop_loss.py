@@ -78,6 +78,11 @@ class UnifiedStopLossCalculator:
         low = df['low'].values
         current_price = close[-1]
 
+        # 实时价格与 DataFrame 收盘价的比例，用于将止损止盈映射到实时价格坐标系
+        # 避免混用不同价格体系（如后复权 ¥20 vs 实时 ¥30）
+        realtime_price = context.current_price if context.current_price > 0 else 0
+        price_ratio = realtime_price / current_price if current_price > 0 and realtime_price > 0 else 1.0
+
         # 计算各类止损
         pattern_stop = self._calculate_pattern_stop(context)
         support_stop = self._calculate_support_stop(df)
@@ -122,11 +127,35 @@ class UnifiedStopLossCalculator:
             config.stop_type = StopLossType.PERCENTAGE
             config.confidence = 0.5
 
-        # 计算止损幅度
+        # 将止损价格映射到实时价格坐标系
+        if price_ratio != 1.0:
+            config.stop_price = config.stop_price * price_ratio
+            config.pattern_stop = config.pattern_stop * price_ratio if config.pattern_stop > 0 else 0
+            config.support_stop = config.support_stop * price_ratio if config.support_stop > 0 else 0
+            config.atr_stop = config.atr_stop * price_ratio if config.atr_stop > 0 else 0
+            config.ma_stop = config.ma_stop * price_ratio if config.ma_stop > 0 else 0
+            config.atr_value = config.atr_value * price_ratio
+            current_price = current_price * price_ratio
+
+        # 计算止损幅度（基于映射后的坐标系，确保 distance_percent 与 stop_price 一致）
         if current_price > 0:
             config.distance_percent = (current_price - config.stop_price) / current_price
 
-        # 计算止盈价格
+        # 止损距离下限：根据趋势强度调整 ATR 倍数
+        # - 普通趋势: 1倍ATR（避免正常波动被止损）
+        # - 强趋势(ADX>50): 2倍ATR（强趋势波动大，需要更宽止损）
+        if current_price > 0 and config.atr_value > 0:
+            adx = context.df_last_row.get('dmi_adx', 0) if context.df_last_row else 0
+            atr_mult = 2.0 if adx > 50 else 1.0
+            min_stop = current_price - config.atr_value * atr_mult
+            if config.stop_price > min_stop:
+                config.stop_price = min_stop
+                if config.stop_type != StopLossType.PATTERN:
+                    config.stop_type = StopLossType.ATR
+                config.confidence = min(config.confidence, 0.7)
+                config.distance_percent = (current_price - config.stop_price) / current_price
+
+        # 计算止盈价格（基于映射后的实时价格）
         risk = current_price - config.stop_price
         if risk > 0:
             config.take_profit_price = current_price + risk * config.risk_reward_ratio

@@ -57,7 +57,7 @@ from quanttool.infrastructure.batch_time_processor import (
     run_batch_job,
     format_batch_result
 )
-from quanttool.infrastructure.data_providers.data_fetcher import create_data_fetcher_with_credentials, EnhancedDataFetcher
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import create_data_fetcher_with_credentials, EnhancedDataFetcher
 
 app = typer.Typer(help="增强功能：筹码分析、K线形态、经典策略、综合选股、批量处理")
 

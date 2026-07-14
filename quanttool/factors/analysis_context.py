@@ -431,6 +431,60 @@ class BreakoutScore:
 
 
 @dataclass
+class FundamentalData:
+    """基本面数据"""
+    # 估值指标
+    pe_ttm: Optional[float] = None
+    pb: Optional[float] = None
+    ps_ttm: Optional[float] = None
+    total_market_cap: Optional[float] = None  # 总市值(亿)
+    float_market_cap: Optional[float] = None  # 流通市值(亿)
+
+    # 盈利能力
+    roe: Optional[float] = None           # ROE(%)
+    profit_margin: Optional[float] = None  # 净利率(%)
+    gross_margin: Optional[float] = None   # 毛利率(%)
+
+    # 成长性
+    revenue_yoy: Optional[float] = None    # 营收同比(%)
+    profit_yoy: Optional[float] = None     # 净利同比(%)
+
+    # 关键财务（最新年报）
+    annual_revenue: Optional[float] = None  # 年营收(亿)
+    annual_profit: Optional[float] = None   # 年净利(亿)
+    eps: Optional[float] = None             # 每股收益
+    deduct_eps: Optional[float] = None      # 扣非EPS
+    debt_ratio: Optional[float] = None      # 资产负债率(%)
+
+    # 历史对比（最近5年年报）
+    annual_history: List[Dict] = field(default_factory=list)
+
+    # 数据来源
+    data_source: str = ""
+
+    def to_dict(self) -> Dict:
+        return {
+            'pe_ttm': self.pe_ttm,
+            'pb': self.pb,
+            'ps_ttm': self.ps_ttm,
+            'total_market_cap': self.total_market_cap,
+            'float_market_cap': self.float_market_cap,
+            'roe': self.roe,
+            'profit_margin': self.profit_margin,
+            'gross_margin': self.gross_margin,
+            'revenue_yoy': self.revenue_yoy,
+            'profit_yoy': self.profit_yoy,
+            'annual_revenue': self.annual_revenue,
+            'annual_profit': self.annual_profit,
+            'eps': self.eps,
+            'deduct_eps': self.deduct_eps,
+            'debt_ratio': self.debt_ratio,
+            'annual_history': self.annual_history,
+            'data_source': self.data_source,
+        }
+
+
+@dataclass
 class AnalysisContext:
     """
     统一分析上下文 - 单一数据源
@@ -468,6 +522,12 @@ class AnalysisContext:
     # 筛选结果
     screening_result: Dict = field(default_factory=dict)
 
+    # 策略信号（RSI/MACD/MA/BOLL 等传统策略）
+    strategy_signals: Dict = field(default_factory=dict)
+
+    # 基本面数据
+    fundamental_data: FundamentalData = field(default_factory=FundamentalData)
+
     # 额外信息
     extra_info: Dict = field(default_factory=dict)
 
@@ -486,6 +546,8 @@ class AnalysisContext:
             'df_last_row': self.df_last_row,
             'candlestick_patterns': self.candlestick_patterns,
             'screening_result': self.screening_result,
+            'strategy_signals': self.strategy_signals,
+            'fundamental_data': self.fundamental_data.to_dict(),
             'extra_info': self.extra_info,
         }
 

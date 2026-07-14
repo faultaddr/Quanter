@@ -1,20 +1,73 @@
-import api from '../api';
+import { api } from './index';
 import type { TrainParams, ModelInfo, PredictionResult, TrainingProgress, ApiModelInfo } from '@/types/model';
+
+interface TrainResponse {
+  task_id?: string;
+  success?: boolean;
+  model_id?: string;
+  model_path?: string;
+  train_samples?: number;
+  valid_samples?: number;
+  test_samples?: number;
+}
+
+type BackendPredictionResult = {
+  symbol?: string;
+  instrument?: string;
+  name?: string;
+  score?: number;
+  pred_score?: number;
+  predicted_return?: number;
+  pred_return?: number;
+  confidence?: number;
+  error?: string;
+};
+
+interface PredictApiResponse {
+  success: boolean;
+  model_path?: string;
+  predictions?: BackendPredictionResult[];
+}
 
 // 将 API 返回的模型数据转换为前端格式
 function transformModelData(apiModel: ApiModelInfo): ModelInfo {
+  const filename = apiModel.filename || apiModel.path.split('/').pop() || apiModel.path;
+
   return {
-    id: apiModel.filename.replace('.pkl', ''),
-    name: apiModel.filename.replace('.pkl', ''),
+    id: filename.replace('.pkl', ''),
+    name: filename.replace('.pkl', ''),
     type: 'GBM',
+    path: apiModel.path,
     created_at: apiModel.modified,
+  };
+}
+
+function transformQrunModelData(apiModel: ApiModelInfo): ModelInfo {
+  return {
+    id: apiModel.path,
+    name: apiModel.run_name || apiModel.run_id || apiModel.path,
+    type: apiModel.model_type || 'QRun GBM',
+    path: apiModel.path,
+    created_at: apiModel.modified,
+    params: apiModel.config,
+  };
+}
+
+function normalizePredictionResult(result: BackendPredictionResult, index: number): PredictionResult {
+  return {
+    symbol: result.symbol || result.instrument || '',
+    name: result.name || result.symbol || result.instrument || '',
+    score: Number(result.score ?? result.pred_score ?? 0),
+    rank: index + 1,
+    predicted_return: Number(result.predicted_return ?? result.pred_return ?? 0),
+    confidence: Number(result.confidence ?? 0),
   };
 }
 
 export const modelApi = {
   // 训练 GBM 模型
   train: (params: TrainParams) =>
-    api.post<any, { task_id: string }>('/gbm/train', params),
+    api.post<any, TrainResponse>('/gbm/train', params),
 
   // 获取训练进度
   getTrainingProgress: (taskId: string) =>
@@ -22,7 +75,9 @@ export const modelApi = {
 
   // 使用模型预测
   predict: (modelId: string, symbols?: string[]) =>
-    api.post<any, PredictionResult[]>('/gbm/predict', { model_id: modelId, symbols }),
+    api.post<any, PredictApiResponse>('/gbm/predict', { model_path: modelId, symbols }).then((response) => {
+      return (response.predictions || []).map(normalizePredictionResult);
+    }),
 
   // 获取模型列表
   getModels: async (): Promise<ModelInfo[]> => {
@@ -34,7 +89,7 @@ export const modelApi = {
   getQrunModels: async (): Promise<ModelInfo[]> => {
     try {
       const data = await api.get<any, ApiModelInfo[]>('/gbm/qrun-models');
-      return (data || []).map(transformModelData);
+      return (data || []).map(transformQrunModelData);
     } catch {
       return [];
     }

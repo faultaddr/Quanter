@@ -676,18 +676,18 @@ class IndexMarketDetector:
     def _get_data_fetcher(self):
         """懒加载数据获取器"""
         if self._data_fetcher is None:
-            from quanttool.infrastructure.data_providers.data_fetcher import create_data_fetcher_with_credentials
-            self._data_fetcher = create_data_fetcher_with_credentials()
+            from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import EnhancedDataFetcher
+            self._data_fetcher = EnhancedDataFetcher()
             self._data_fetcher.initialize()
         return self._data_fetcher
 
     def _get_incremental_manager(self):
         """懒加载增量数据管理器"""
         if self._incremental_manager is None:
-            from quanttool.infrastructure.data_providers.incremental_data_manager import (
-                get_incremental_manager, DataType
+            from quanttool.infrastructure.data_providers.incremental.manager import (
+                IncrementalDataManager, DataType
             )
-            self._incremental_manager = get_incremental_manager()
+            self._incremental_manager = IncrementalDataManager()
         return self._incremental_manager
 
     def get_index_data(self, index_code: str, days: int = 120) -> pd.DataFrame:

@@ -1,16 +1,23 @@
 pandas>=1.3.0
 numpy>=1.21.0
 pydantic>=1.8.0
+pyyaml>=5.4.0
+typer>=0.4.0
+pytz>=2021.1
 tushare>=1.2.0
 pyarrow>=6.0.0
 fastapi>=0.68.0
-uvicorn>=0.15.0
-typer>=0.4.0
+uvicorn[standard]>=0.15.0
 scikit-learn>=1.0.0
 matplotlib>=3.4.0
 seaborn>=0.11.0
 sqlalchemy>=1.4.0
 websockets>=10.0
+apscheduler>=3.10.0
+aiosmtplib>=3.0.0
+jinja2>=3.0.0
+weasyprint>=53.0
+markdown>=3.0
 zoneinfo;python_version<"3.9"
 
 # PostgreSQL support

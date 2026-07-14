@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import PageContainer from '@/components/layout/PageContainer';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -15,7 +16,9 @@ import { useToast } from '@/hooks/useToast';
 import type { RealtimeQuote } from '@/types/api';
 
 export default function MonitorPage() {
+  const router = useRouter();
   const setActivePage = useAppStore((state) => state.setActivePage);
+  const addHistory = useAppStore((state) => state.addHistory);
   const toast = useToast();
 
   const symbols = useMonitorStore((state) => state.symbols);
@@ -154,29 +157,74 @@ export default function MonitorPage() {
             <p className="text-text-muted">在上方输入框添加股票代码开始监控</p>
           </Card>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {quoteList.map((quote) => (
-              <div key={quote.symbol} className="relative">
-                <QuoteCard
-                  quote={quote}
-                  selected={selectedSymbol === quote.symbol}
-                  onClick={() => setSelectedSymbol(
-                    selectedSymbol === quote.symbol ? null : quote.symbol
-                  )}
-                />
-                <button
-                  onClick={() => {
-                    removeSymbol(quote.symbol);
-                    toast.info(`已移除 ${quote.symbol}`);
-                  }}
-                  className="absolute top-2 right-2 p-1 text-text-muted hover:text-danger transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            ))}
+          <div className="space-y-4">
+            {/* Selected stock action bar */}
+            {selectedSymbol && quoteList.find(q => q.symbol === selectedSymbol) && (
+              <Card className="bg-primary/5 border-primary/20">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-text-muted">已选中：</span>
+                    <span className="font-medium text-text-primary ml-2">
+                      {quoteList.find(q => q.symbol === selectedSymbol)?.name}
+                      {' '}
+                      ({selectedSymbol})
+                    </span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => {
+                        const quote = quoteList.find(q => q.symbol === selectedSymbol);
+                        if (quote) {
+                          addHistory({
+                            type: 'stock',
+                            title: `${quote.name} (${selectedSymbol})`,
+                            path: `/analyze?symbol=${selectedSymbol}`
+                          });
+                          router.push(`/analyze?symbol=${selectedSymbol}`);
+                        }
+                      }}
+                    >
+                      查看详情
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSelectedSymbol(null)}
+                    >
+                      取消选中
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {/* Quote grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {quoteList.map((quote) => (
+                <div key={quote.symbol} className="relative">
+                  <QuoteCard
+                    quote={quote}
+                    selected={selectedSymbol === quote.symbol}
+                    onClick={() => setSelectedSymbol(
+                      selectedSymbol === quote.symbol ? null : quote.symbol
+                    )}
+                  />
+                  <button
+                    onClick={() => {
+                      removeSymbol(quote.symbol);
+                      toast.info(`已移除 ${quote.symbol}`);
+                    }}
+                    className="absolute top-2 right-2 p-1 text-text-muted hover:text-danger transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>

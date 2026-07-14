@@ -1,87 +1,22 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import PageContainer from '@/components/layout/PageContainer';
-import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
-import Badge from '@/components/ui/Badge';
+import {
+  MetricTile,
+  PageHeader,
+  Section,
+  StatusBadge,
+} from '@/components/ui';
 import { useAppStore } from '@/stores/useAppStore';
 import { monitorApi } from '@/lib/api/monitor';
+import { formatNumber, formatPercent } from '@/lib/utils';
 import type { RealtimeQuote } from '@/types/api';
 
-const quickActions = [
-  {
-    title: '股票分析',
-    description: '查看K线图、技术指标、筹码分布和交易信号',
-    href: '/analyze',
-    icon: (
-      <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-      </svg>
-    ),
-    color: 'primary',
-  },
-  {
-    title: '策略回测',
-    description: '验证交易策略的历史表现，对比多种策略收益',
-    href: '/backtest',
-    icon: (
-      <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-      </svg>
-    ),
-    color: 'success',
-  },
-  {
-    title: 'ML模型',
-    description: '训练GBM模型，管理模型生命周期',
-    href: '/model',
-    icon: (
-      <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-      </svg>
-    ),
-    color: 'warning',
-  },
-  {
-    title: '实时监控',
-    description: 'WebSocket实时行情，自定义监控列表',
-    href: '/monitor',
-    icon: (
-      <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-      </svg>
-    ),
-    color: 'danger',
-  },
-  {
-    title: '因子研究',
-    description: '因子有效性检验、IC/IR分析、分层回测',
-    href: '/factors',
-    icon: (
-      <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-      </svg>
-    ),
-    color: 'info',
-  },
-  {
-    title: '组合风控',
-    description: '行业暴露检查、黑名单监控、仓位收缩',
-    href: '/risk',
-    icon: (
-      <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-      </svg>
-    ),
-    color: 'secondary',
-  },
-];
-
-// 市场指数代码
 const INDEX_SYMBOLS = ['000001', '399001', '399006', '000300'];
+
 const INDEX_NAMES: Record<string, string> = {
   '000001': '上证指数',
   '399001': '深证成指',
@@ -89,26 +24,58 @@ const INDEX_NAMES: Record<string, string> = {
   '000300': '沪深300',
 };
 
+const quickActions = [
+  {
+    title: '运行沪深300快扫',
+    description: '用默认统一评分快速找候选',
+    href: '/scan',
+    page: 'scan',
+  },
+  {
+    title: '打开单股分析',
+    description: '搜索代码后进入工作台',
+    href: '/analyze',
+    page: 'analyze',
+  },
+  {
+    title: '查看组合风控',
+    description: '检查风险和黑名单暴露',
+    href: '/risk',
+    page: 'risk',
+  },
+];
+
+const candidatePrompts = [
+  { label: '趋势延续', detail: '统一评分 + 均线多头', href: '/scan' },
+  { label: '放量突破', detail: '突破评分 + 成交量确认', href: '/scan' },
+  { label: '低风险观察', detail: '排除ST/停牌/涨跌停', href: '/scan' },
+];
+
 export default function HomePage() {
   const setActivePage = useAppStore((state) => state.setActivePage);
+  const history = useAppStore((state) => state.history);
   const [marketIndices, setMarketIndices] = useState<RealtimeQuote[]>([]);
   const [loading, setLoading] = useState(true);
+  const [marketError, setMarketError] = useState<string | null>(null);
 
   const fetchMarketIndices = useCallback(async () => {
+    setLoading(true);
+    setMarketError(null);
     try {
       const data = await monitorApi.getQuotes(INDEX_SYMBOLS);
-      if (data) {
-        // 过滤掉错误的记录，并补充名称
-        const validData = data
-          .filter(q => !q.error && q.price > 0)
-          .map(q => ({
-            ...q,
-            name: q.name || INDEX_NAMES[q.symbol] || q.symbol,
-          }));
-        setMarketIndices(validData);
+      const validData = (data || [])
+        .filter((quote) => !quote.error && quote.price > 0)
+        .map((quote) => ({
+          ...quote,
+          name: quote.name || INDEX_NAMES[quote.symbol] || quote.symbol,
+        }));
+      setMarketIndices(validData);
+      if (validData.length === 0) {
+        setMarketError('暂未拿到有效市场指数');
       }
     } catch (error) {
       console.error('Failed to fetch market indices:', error);
+      setMarketError('市场指数加载失败，请稍后重试');
     } finally {
       setLoading(false);
     }
@@ -117,139 +84,156 @@ export default function HomePage() {
   useEffect(() => {
     setActivePage('overview');
     fetchMarketIndices();
-    // 每30秒刷新一次
     const interval = setInterval(fetchMarketIndices, 30000);
     return () => clearInterval(interval);
   }, [setActivePage, fetchMarketIndices]);
 
+  const freshnessTone = marketError ? 'warning' : 'success';
+  const recentItems = history.slice(0, 5);
+
   return (
     <PageContainer>
       <div className="space-y-6">
-        {/* Page Header */}
-        <div>
-          <h1 className="text-2xl font-bold text-text-primary">盘面概览</h1>
-          <p className="text-text-muted mt-1">快速查看市场动态和常用功能入口</p>
-        </div>
+        <PageHeader
+          eyebrow="Market Workspace"
+          title="盘面概览"
+          description="从市场状态进入候选扫描，再把结果推进到单股分析、回测和风控。"
+          meta={
+            <>
+              <StatusBadge tone={freshnessTone}>{marketError ? '数据异常' : '30秒刷新'}</StatusBadge>
+              <StatusBadge tone="muted">免费数据源优先</StatusBadge>
+            </>
+          }
+          actions={
+            <Button size="sm" variant="ghost" onClick={fetchMarketIndices} loading={loading}>
+              刷新指数
+            </Button>
+          }
+        />
 
-        {/* Quick Actions */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {quickActions.map((action) => (
-            <Link
-              key={action.href}
-              href={action.href}
-              className="block group"
-            >
-              <Card className="h-full card-hover cursor-pointer">
-                <div className="flex items-start gap-4">
-                  <div className={`p-3 rounded-lg bg-${action.color}/20 text-${action.color}`}>
-                    {action.icon}
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="font-medium text-text-primary group-hover:text-primary transition-colors">
-                      {action.title}
-                    </h3>
-                    <p className="text-sm text-text-muted mt-1">{action.description}</p>
-                  </div>
-                </div>
-              </Card>
-            </Link>
-          ))}
-        </div>
-
-        {/* Market Indices */}
-        <Card title="市场指数" action={<Badge variant="success">实时</Badge>}>
-          {loading ? (
-            <div className="text-center py-8 text-text-muted">加载中...</div>
+        <Section
+          title="市场快照"
+          description={marketError || '主要指数与盘面温度，作为扫描前的第一眼判断。'}
+          framed
+        >
+          {loading && marketIndices.length === 0 ? (
+            <div className="py-8 text-center text-sm text-text-muted">加载市场指数...</div>
           ) : marketIndices.length === 0 ? (
-            <div className="text-center py-8 text-text-muted">暂无数据</div>
+            <div className="flex items-center justify-between rounded-lg border border-warning/30 bg-warning/10 px-4 py-3">
+              <span className="text-sm text-warning">{marketError || '暂无市场数据'}</span>
+              <Button size="sm" variant="ghost" onClick={fetchMarketIndices}>
+                重新加载
+              </Button>
+            </div>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {marketIndices.map((index) => (
-                <div key={index.symbol} className="p-4 bg-bg-tertiary rounded-lg">
-                  <div className="text-sm text-text-muted">{index.name}</div>
-                  <div className="text-xl font-bold text-text-primary mt-1">
-                    {index.price.toLocaleString()}
-                  </div>
-                  <div className={`text-sm mt-1 ${index.change_pct >= 0 ? 'text-success' : 'text-danger'}`}>
-                    {index.change_pct >= 0 ? '+' : ''}{index.change.toFixed(2)} ({(index.change_pct * 100).toFixed(2)}%)
-                  </div>
-                </div>
-              ))}
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {marketIndices.map((index) => {
+                const positive = index.change_pct > 0;
+                return (
+                  <MetricTile
+                    key={index.symbol}
+                    label={index.name || index.symbol}
+                    value={formatNumber(index.price)}
+                    detail={`${positive ? '+' : ''}${formatNumber(index.change)} / ${formatPercent(index.change_pct)}`}
+                    tone={positive ? 'positive' : index.change_pct < 0 ? 'negative' : 'muted'}
+                  />
+                );
+              })}
             </div>
           )}
-        </Card>
+        </Section>
 
-        {/* Quick Access to Smart Features */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card
-            title="智能选股"
-            action={
-              <Link href="/scan">
-                <Button size="sm" variant="ghost">查看全部</Button>
-              </Link>
-            }
-          >
-            <p className="text-text-muted text-sm">
-              基于技术指标和量化因子，全市场扫描符合条件的股票
-            </p>
-            <div className="mt-4 flex gap-2">
-              <Badge variant="primary">MACD金叉</Badge>
-              <Badge variant="success">放量突破</Badge>
-              <Badge variant="warning">均线多头</Badge>
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <Section title="今日动作" framed>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              {quickActions.map((action) => (
+                <Link
+                  key={action.href}
+                  href={action.href}
+                  onClick={() => setActivePage(action.page)}
+                  className="group rounded-lg border border-border-primary bg-bg-tertiary px-4 py-3 transition-colors hover:border-primary hover:bg-bg-secondary"
+                >
+                  <span className="text-sm font-semibold text-text-primary group-hover:text-primary">
+                    {action.title}
+                  </span>
+                  <p className="mt-1 text-sm text-text-muted">{action.description}</p>
+                </Link>
+              ))}
             </div>
-          </Card>
+          </Section>
 
-          <Card
-            title="智能荐股"
-            action={
-              <Link href="/picks">
-                <Button size="sm" variant="ghost">查看全部</Button>
-              </Link>
-            }
-          >
-            <p className="text-text-muted text-sm">
-              利用GBM机器学习模型，预测股票未来收益表现
-            </p>
-            <div className="mt-4 flex gap-2">
-              <Badge variant="success">高胜率</Badge>
-              <Badge variant="primary">沪深300</Badge>
-              <Badge variant="warning">Top 10</Badge>
+          <Section title="系统状态" framed>
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-text-muted">行情接口</span>
+                <StatusBadge tone={marketError ? 'warning' : 'success'}>
+                  {marketError ? '部分异常' : '正常'}
+                </StatusBadge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-text-muted">扫描模式</span>
+                <StatusBadge tone="primary">默认快扫</StatusBadge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-text-muted">候选流向</span>
+                <StatusBadge tone="muted">选股 / 分析 / 回测</StatusBadge>
+              </div>
             </div>
-          </Card>
+          </Section>
         </div>
 
-        {/* Getting Started */}
-        <Card title="快速开始">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="flex items-center gap-3 p-4 bg-bg-tertiary rounded-lg">
-              <div className="w-8 h-8 bg-primary/20 text-primary rounded-full flex items-center justify-center font-bold">
-                1
-              </div>
-              <div>
-                <div className="font-medium text-text-primary">分析股票</div>
-                <div className="text-sm text-text-muted">输入股票代码查看详情</div>
-              </div>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <Section
+            title="候选入口"
+            description="还没有扫描结果时，先从常用预设进入。"
+            action={
+              <Link href="/scan" onClick={() => setActivePage('scan')} className="text-sm text-primary hover:text-primary-light">
+                打开智能选股
+              </Link>
+            }
+            framed
+          >
+            <div className="space-y-2">
+              {candidatePrompts.map((candidate) => (
+                <Link
+                  key={candidate.label}
+                  href={candidate.href}
+                  onClick={() => setActivePage('scan')}
+                  className="flex items-center justify-between rounded-lg border border-border-primary bg-bg-tertiary px-3 py-2 transition-colors hover:border-primary"
+                >
+                  <div>
+                    <div className="text-sm font-medium text-text-primary">{candidate.label}</div>
+                    <div className="text-xs text-text-muted">{candidate.detail}</div>
+                  </div>
+                  <StatusBadge tone="primary">扫描</StatusBadge>
+                </Link>
+              ))}
             </div>
-            <div className="flex items-center gap-3 p-4 bg-bg-tertiary rounded-lg">
-              <div className="w-8 h-8 bg-primary/20 text-primary rounded-full flex items-center justify-center font-bold">
-                2
+          </Section>
+
+          <Section title="最近工作" description="继续上次看过的股票、回测或模型。" framed>
+            {recentItems.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border-primary px-4 py-8 text-center">
+                <div className="text-sm font-medium text-text-primary">暂无最近记录</div>
+                <p className="mt-1 text-sm text-text-muted">先运行扫描或搜索股票，记录会出现在这里。</p>
               </div>
-              <div>
-                <div className="font-medium text-text-primary">回测验证</div>
-                <div className="text-sm text-text-muted">测试策略历史表现</div>
+            ) : (
+              <div className="space-y-2">
+                {recentItems.map((item) => (
+                  <Link
+                    key={item.id}
+                    href={item.path}
+                    onClick={() => setActivePage(item.type === 'stock' ? 'analyze' : item.type)}
+                    className="flex items-center justify-between rounded-lg border border-border-primary bg-bg-tertiary px-3 py-2 transition-colors hover:border-primary"
+                  >
+                    <span className="truncate text-sm text-text-primary">{item.title}</span>
+                    <StatusBadge tone="muted">{item.type}</StatusBadge>
+                  </Link>
+                ))}
               </div>
-            </div>
-            <div className="flex items-center gap-3 p-4 bg-bg-tertiary rounded-lg">
-              <div className="w-8 h-8 bg-primary/20 text-primary rounded-full flex items-center justify-center font-bold">
-                3
-              </div>
-              <div>
-                <div className="font-medium text-text-primary">实时监控</div>
-                <div className="text-sm text-text-muted">跟踪关注股票动态</div>
-              </div>
-            </div>
-          </div>
-        </Card>
+            )}
+          </Section>
+        </div>
       </div>
     </PageContainer>
   );

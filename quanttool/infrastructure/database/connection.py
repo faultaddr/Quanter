@@ -46,7 +46,7 @@ class ConnectionPool:
         """
         self._config = config or get_database_config()
         self._pool: Optional[Pool] = None
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
 
     async def _create_pool(self) -> Pool:
         """Create the connection pool."""
@@ -93,6 +93,9 @@ class ConnectionPool:
     async def get_pool(self) -> Pool:
         """Get the connection pool (lazy initialization)."""
         if self._pool is None:
+            # Lazily create lock on the event loop that will actually use it
+            if self._lock is None:
+                self._lock = asyncio.Lock()
             async with self._lock:
                 if self._pool is None:
                     self._pool = await self._create_pool()
@@ -204,6 +207,8 @@ class ConnectionPool:
     async def close(self) -> None:
         """Close the connection pool."""
         if self._pool is not None:
+            if self._lock is None:
+                self._lock = asyncio.Lock()
             async with self._lock:
                 if self._pool is not None:
                     await self._pool.close()

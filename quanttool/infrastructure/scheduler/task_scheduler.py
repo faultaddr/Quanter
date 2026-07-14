@@ -15,7 +15,7 @@ except ImportError:
 from quanttool.core.logging import get_logger
 from quanttool.infrastructure.stores.meta_db import MetaDB
 from quanttool.application.portfolio_backtest_service import PortfolioBacktestService
-from quanttool.infrastructure.data_providers.data_fetcher import EnhancedDataFetcher
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import EnhancedDataFetcher
 
 logger = get_logger(__name__)
 

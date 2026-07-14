@@ -9,8 +9,8 @@ import pandas as pd
 import numpy as np
 
 from quanttool.infrastructure.stores.meta_db import MetaDB
-from quanttool.infrastructure.data_providers.data_fetcher import EnhancedDataFetcher
-from quanttool.infrastructure.data_providers.incremental_data_manager import IncrementalDataManager, DataType
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import EnhancedDataFetcher
+from quanttool.infrastructure.data_providers.incremental.manager import IncrementalDataManager, DataType
 from quanttool.core.logging import get_logger
 
 

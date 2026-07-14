@@ -44,15 +44,22 @@ export default function ModelPage() {
 
   const handleTrain = async (params: TrainParams) => {
     setTraining(true);
-    setTrainingProgress({ status: 'pending', progress: 0 });
+    setTrainingProgress({ status: 'running', progress: 10, message: '正在训练...' });
 
     try {
       const result = await modelApi.train(params);
-      if (result.task_id) {
+      if (result.model_id) {
+        setTrainingProgress({ status: 'completed', progress: 100, message: `模型 ${result.model_id} 已保存` });
+        toast.success('模型训练完成');
+        loadModels();
+        setTraining(false);
+      } else if (result.task_id) {
+        const taskId = result.task_id;
+
         // Poll for progress
         const pollProgress = async () => {
           try {
-            const progress = await modelApi.getTrainingProgress(result.task_id);
+            const progress = await modelApi.getTrainingProgress(taskId);
             setTrainingProgress(progress);
 
             if (progress.status === 'running') {
@@ -72,9 +79,16 @@ export default function ModelPage() {
         };
 
         pollProgress();
+      } else {
+        throw new Error('训练接口未返回模型或任务信息');
       }
     } catch (error) {
       toast.error('启动训练失败');
+      setTrainingProgress({
+        status: 'failed',
+        progress: 100,
+        error: error instanceof Error ? error.message : '训练失败',
+      });
       setTraining(false);
     }
   };

@@ -1,4 +1,6 @@
 """Commands for stock analysis."""
+from __future__ import annotations
+
 import typer
 import sys
 import os
@@ -11,7 +13,6 @@ import threading
 # Add project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from quanttool.factors.stock_analyzer import StockAnalyzer
 from quanttool.factors.scoring_system import ScoringSystem
 from quanttool.factors.trend_scoring_system import TrendScoringSystem, analyze_trend_quality
 from quanttool.factors.breakout_scoring_system import BreakoutScoringSystem, analyze_breakout_quality
@@ -27,7 +28,7 @@ from quanttool.strategies.adaptive_threshold import (
     MarketRegime,
     CombinedSignal,
 )
-from quanttool.infrastructure.data_providers.data_fetcher import create_data_fetcher_with_credentials
+from quanttool.infrastructure.data_providers.historical.enhanced_fetcher import create_data_fetcher_with_credentials
 from quanttool.infrastructure.stores.meta_db import MetaDB
 import pandas as pd
 import json
@@ -115,6 +116,8 @@ def analyze_enhanced(
     typer.echo(f"策略信号：{'是' if strategies else '否'}")
     typer.echo("-" * 50)
 
+    from quanttool.factors.stock_analyzer import StockAnalyzer
+
     analyzer = StockAnalyzer()
 
     try:
@@ -151,6 +154,8 @@ def _run_analysis(
     typer.echo("-" * 50)
 
     # Create analyzer instance
+    from quanttool.factors.stock_analyzer import StockAnalyzer
+
     analyzer = StockAnalyzer()
 
     # Run analysis
@@ -494,6 +499,152 @@ def _get_momentum_score_grade(score: float) -> str:
         return "极弱"
 
 
+def analyze_stock_unified_score(
+        stock_info: Dict[str, str],
+        days: int,
+        analyzer: StockAnalyzer,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """使用统一分析上下文分析单只股票。
+
+    同时运行三套评分系统（经典、趋势、突破），由 RecommendationEngine
+    生成最终推荐，适合需要综合多维度评分的场景。
+
+    Args:
+        stock_info: 股票信息字典，包含 'code' 和 'name'
+        days: 分析天数（当 start_date/end_date 未提供时使用）
+        analyzer: StockAnalyzer 实例
+        start_date: 可选的开始日期
+        end_date: 可选的结束日期
+
+    Returns:
+        Tuple of (result_dict, skip_reason). 成功时 result_dict 包含分析数据，
+        skip_reason 为 None。失败时 result_dict 为 None，skip_reason 包含跳过原因。
+    """
+    try:
+        symbol = stock_info['code'] if isinstance(stock_info, dict) else stock_info
+        name = stock_info.get('name', symbol) if isinstance(stock_info, dict) else symbol
+
+        df = analyzer.get_stock_data(symbol, days, start_date, end_date)
+        if df.empty:
+            return None, "数据获取失败"
+        if len(df) < 60:
+            return None, f"数据不足60天 ({len(df)}条)"
+
+        df_with_indicators = analyzer.calculate_technical_indicators(df)
+
+        context = analyzer.build_analysis_context(df_with_indicators, symbol, ScoringSystemType.AUTO)
+
+        rec = context.final_recommendation
+        latest = df.iloc[-1]
+        close = latest.get('close', 0)
+
+        scores_summary = context.get_all_scores_summary()
+
+        # 策略层信号生成
+        strategy_signal = None
+        adaptive_thresholds = None
+        dual_market_state = None
+
+        if getattr(analyzer, "_scan_fast_mode", False):
+            market_state = context.market_state
+            dual_market_state = market_state.to_dict()
+            adaptive_thresholds = {
+                'buy_threshold': market_state.buy_threshold,
+                'sell_threshold': market_state.sell_threshold,
+                'regime': market_state.combined_regime.value,
+                'volatility': market_state.volatility_level,
+                'adjusted_buy_threshold': market_state.buy_threshold,
+                'adjusted_sell_threshold': market_state.sell_threshold,
+            }
+        else:
+            try:
+                market_detector = IndexMarketDetector(default_index='hs300')
+                dual_state = market_detector.get_dual_market_state(df_with_indicators)
+                dual_market_state = dual_state.to_dict()
+
+                threshold_manager = AdaptiveThresholdManager()
+                adaptive_config = threshold_manager.get_adaptive_thresholds(df_with_indicators)
+
+                base_buy = 50.0
+                base_sell = 25.0
+                combined_signal = dual_state.combined_signal
+                if combined_signal == CombinedSignal.STRONG_BUY:
+                    base_buy = 45.0
+                elif combined_signal == CombinedSignal.CASH:
+                    base_buy = 80.0
+                elif combined_signal == CombinedSignal.AVOID:
+                    base_buy = 70.0
+                elif combined_signal == CombinedSignal.LIGHT_POSITION:
+                    base_buy = 55.0
+
+                adaptive_thresholds = {
+                    'buy_threshold': adaptive_config.buy_threshold,
+                    'sell_threshold': adaptive_config.sell_threshold,
+                    'regime': adaptive_config.market_regime.value,
+                    'volatility': adaptive_config.volatility_level.value,
+                    'adjusted_buy_threshold': base_buy,
+                    'adjusted_sell_threshold': base_sell,
+                }
+
+                strategy = ScoreStrategy(
+                    buy_threshold=base_buy,
+                    sell_threshold=base_sell,
+                    use_dynamic_weights=True,
+                    use_multi_timeframe=True,
+                    use_risk_control=True
+                )
+                signal = strategy.get_signal(latest, df_with_indicators)
+                strategy_signal = {
+                    'direction': signal.get('direction'),
+                    'signal': signal.get('signal'),
+                    'adjusted_score': signal.get('adjusted_score'),
+                    'mtf_bonus': signal.get('mtf_bonus'),
+                    'stop_loss': signal.get('stop_loss'),
+                }
+            except Exception as e:
+                strategy_signal = {'error': str(e)}
+
+        return {
+            "symbol": symbol,
+            "name": name,
+            "close": close,
+            "score": rec.final_score,
+            "score_grade": rec.score_grade,
+            "trigger_type": "unified",
+            "trigger_detail": rec.get_action_display(),
+            "primary_system": rec.primary_system.value,
+            "classic_score": context.classic_score.score,
+            "trend_score": context.trend_score.final_score if context.trend_score.passed_hard_filter else None,
+            "trend_timing": context.trend_score.timing_type if context.trend_score.passed_hard_filter else None,
+            "breakout_score": context.breakout_score.final_score if context.breakout_score.passed_filter else None,
+            "action": rec.action.value,
+            "action_display": rec.get_action_display(),
+            "action_emoji": rec.get_action_emoji(),
+            "position_size": rec.position_size,
+            "confidence": rec.confidence,
+            "stop_loss_price": rec.stop_loss.stop_price if rec.stop_loss.stop_price else 0,
+            "stop_loss_pct": rec.stop_loss.distance_percent if rec.stop_loss.distance_percent else 0,
+            "entry_low": rec.entry_low,
+            "entry_high": rec.entry_high,
+            "reasons": rec.reasons,
+            "warnings": rec.warnings,
+            "is_actionable": rec.is_actionable(),
+            "factors_score": context.classic_score.factors_score,
+            "factors_raw": context.classic_score.factors_raw,
+            "execution": context.classic_score.execution,
+            "strategy_signal": strategy_signal,
+            "adaptive_thresholds": adaptive_thresholds,
+            "dual_market_state": dual_market_state,
+            "screening_result": context.screening_result,
+            "traditional_signals": context.strategy_signals,
+        }, None
+
+    except Exception as e:
+        return None, f"分析异常: {str(e)}"
+
+
 def analyze_stock_score(
         stock_info: Dict[str, str],
         days: int,
@@ -676,6 +827,7 @@ def scan(
     use_trend_score: bool = typer.Option(True, "--trend/--classic", help="Use trend scoring system (default) or classic scoring system"),
     use_breakout_score: bool = typer.Option(False, "--breakout", help="Use breakout scoring system (low position + consolidation + breakout)"),
     use_momentum_score: bool = typer.Option(False, "--momentum", help="Use trend momentum scoring system (momentum + MA + volume)"),
+    use_unified_score: bool = typer.Option(False, "--unified", "-u", help="Use unified analysis context (all three scoring systems + final recommendation)"),
     # BIAS filter options (乖离率过滤)
     bias_min: Optional[float] = typer.Option(None, "--bias-min", help="Minimum BIAS(6) value to include stock (e.g., -5.0) - Note: Hard filter uses BIAS(20) > +8%"),
     bias_max: Optional[float] = typer.Option(None, "--bias-max", help="Maximum BIAS(6) value to include stock (e.g., 5.0) - Note: Hard filter uses BIAS(20) > +8%"),
@@ -693,6 +845,7 @@ def scan(
     - 经典评分系统：包含位置惩罚系数，超买股会被大幅扣分
     - 低位盘整突破评分系统：寻找低位盘整后放量突破的股票
     - 趋势动量评分系统：抓住趋势启动点，动量+均线+量能综合评分
+    - 统一评分系统：三套评分系统同时运行，自动生成综合推荐
 
     Examples:
         # 使用趋势评分系统扫描沪深300（默认）
@@ -715,14 +868,21 @@ def scan(
 
         # Scan with custom output directory
         quanttool analysis scan --output-dir ./my_reports
+
+        # 使用统一评分系统扫描（三套系统综合推荐）
+        quanttool analysis scan --unified
     """
+
+    # 市场名称映射
+    market_names = {"csi300": "沪深300", "csi1000": "中证1000"}
+    market_display = market_names.get(market.lower(), market.upper())
 
     # Get stock list based on market parameter
     if market.lower() == "csi300":
-        typer.echo("正在获取沪深300成分股...")
+        typer.echo(f"正在获取{market_display}成分股...")
         stock_list = get_csi300_constituents()
     elif market.lower() == "csi1000":
-        typer.echo("正在获取中证1000成分股...")
+        typer.echo(f"正在获取{market_display}成分股...")
         stock_list = get_csi1000_constituents()
     else:
         typer.echo(f"不支持的扫描市场: {market}")
@@ -746,7 +906,9 @@ def scan(
         typer.echo()
 
     # 显示评分系统选择
-    if use_momentum_score:
+    if use_unified_score:
+        typer.echo("📊 评分系统：统一评分系统（经典+趋势+突破三系统综合推荐）")
+    elif use_momentum_score:
         typer.echo("📊 评分系统：趋势动量评分系统（动量+均线+量能）")
     elif use_breakout_score:
         typer.echo("📊 评分系统：低位盘整突破评分系统（低位+盘整+突破）")
@@ -758,6 +920,8 @@ def scan(
     typer.echo("-" * 60)
 
     # Create analyzer instance (uses local file cache, not memory cache)
+    from quanttool.factors.stock_analyzer import StockAnalyzer
+
     analyzer = StockAnalyzer()
 
     # Calculate unified time range ONCE at the start
@@ -793,6 +957,11 @@ def scan(
 
     elapsed = time.time() - start_time
     typer.echo(f"✅ 缓存预热完成: {cached_count}/{len(stock_list)} 只股票 (耗时 {elapsed:.1f} 秒)")
+
+    # Batch fetch realtime prices to avoid N+1 per-stock HTTP calls during analysis
+    typer.echo("📦 正在批量获取实时价格...")
+    rt_count = analyzer.preload_realtime_prices(symbols)
+    typer.echo(f"✅ 实时价格获取完成: {rt_count}/{len(symbols)} 只")
     typer.echo("-" * 60)
 
     # Analyze stocks in parallel
@@ -808,7 +977,11 @@ def scan(
         symbol = stock_info['code'] if isinstance(stock_info, dict) else stock_info
         name = stock_info.get('name', symbol) if isinstance(stock_info, dict) else symbol
 
-        if use_momentum_score:
+        if use_unified_score:
+            result, skip_reason = analyze_stock_unified_score(
+                stock_info, days, analyzer, start_date, end_date
+            )
+        elif use_momentum_score:
             result, skip_reason = analyze_stock_momentum_score(
                 stock_info, days, analyzer, start_date, end_date
             )
@@ -828,7 +1001,9 @@ def scan(
         with progress_lock:
             completed_count += 1
             if result:
-                if use_momentum_score:
+                if use_unified_score:
+                    typer.echo(f"[{completed_count}/{total}] {symbol} 评分: {result['score']:.1f} | {result['action_display']}")
+                elif use_momentum_score:
                     signal_str = "✓信号" if result.get('signal') else "观望"
                     typer.echo(f"[{completed_count}/{total}] {symbol} 评分: {result['score']:.1f} | 动量: {result['momentum_score']:.0f} | {signal_str}")
                 elif use_breakout_score:
@@ -883,22 +1058,38 @@ def scan(
     results.sort(key=lambda x: x['score'], reverse=True)
 
     # Display filter summary
-    if not use_trend_score and (bias_min is not None or bias_max is not None):
-        typer.echo(f"\n📊 乖离率过滤：{filtered_count} 只股票被过滤")
+    if not use_unified_score and not use_trend_score and (bias_min is not None or bias_max is not None):
+        bias_filtered = sum(1 for s in skipped_stocks if s.get('reason_type') == '乖离率过滤')
+        typer.echo(f"\n📊 乖离率过滤：{bias_filtered} 只股票被过滤")
 
     # Display top N results
     typer.echo("\n" + "=" * 110)
-    if use_momentum_score:
-        typer.echo(f"📊 沪深300成分股趋势动量评分排名 - Top {top_n}")
+    if use_unified_score:
+        typer.echo(f"📊 {market_display}成分股统一评分排名 - Top {top_n}")
+    elif use_momentum_score:
+        typer.echo(f"📊 {market_display}成分股趋势动量评分排名 - Top {top_n}")
     elif use_breakout_score:
-        typer.echo(f"📊 沪深300成分股低位盘整突破评分排名 - Top {top_n}")
+        typer.echo(f"📊 {market_display}成分股低位盘整突破评分排名 - Top {top_n}")
     elif use_trend_score:
-        typer.echo(f"📊 沪深300成分股趋势评分排名 - Top {top_n}")
+        typer.echo(f"📊 {market_display}成分股趋势评分排名 - Top {top_n}")
     else:
-        typer.echo(f"📊 沪深300成分股评分排名 - Top {top_n}")
+        typer.echo(f"📊 {market_display}成分股评分排名 - Top {top_n}")
     typer.echo("=" * 110)
 
-    if use_momentum_score:
+    if use_unified_score:
+        # 统一评分表格格式
+        typer.echo(f"{'排名':<4} {'代码':<10} {'股票名称':<10} {'收盘价':<10} {'综合评分':<10} {'经典':<8} {'趋势':<8} {'突破':<8} {'操作':<10} {'等级':<8}")
+        typer.echo("-" * 110)
+
+        for i, r in enumerate(results[:top_n], 1):
+            symbol_short = r['symbol'].replace('.SH', '').replace('.SZ', '')
+            name_short = r['name'][:8] if len(r['name']) > 8 else r['name']
+            classic_s = f"{r['classic_score']:.0f}" if r.get('classic_score') else "-"
+            trend_s = f"{r['trend_score']:.0f}" if r.get('trend_score') else "-"
+            breakout_s = f"{r['breakout_score']:.0f}" if r.get('breakout_score') else "-"
+            action_str = r['action_display'][:8] if len(r['action_display']) > 8 else r['action_display']
+            typer.echo(f"{i:<4} {symbol_short:<10} {name_short:<10} ¥{r['close']:<9.2f} {r['score']:<10.1f} {classic_s:<8} {trend_s:<8} {breakout_s:<8} {action_str:<10} {r['score_grade']:<8}")
+    elif use_momentum_score:
         # 趋势动量评分表格格式
         typer.echo(f"{'排名':<4} {'代码':<10} {'股票名称':<10} {'收盘价':<10} {'评分':<10} {'动量':<8} {'均线':<8} {'量能':<8} {'等级':<8}")
         typer.echo("-" * 110)
@@ -944,7 +1135,28 @@ def scan(
     for i, r in enumerate(results[:top_n], 1):
         symbol_short = r['symbol'].replace('.SH', '').replace('.SZ', '')
 
-        if use_momentum_score:
+        if use_unified_score:
+            # 统一评分详细显示格式
+            typer.echo(f"\n【#{i}】{symbol_short} {r['name']} - 综合评分: {r['score']:.1f}/100 | 等级: {r['score_grade']} | {r['action_emoji']} {r['action_display']}")
+            typer.echo(f"    收盘价: ¥{r['close']:.2f}")
+            classic_s = f"{r['classic_score']:.1f}" if r.get('classic_score') else "-"
+            trend_s = f"{r['trend_score']:.1f}" if r.get('trend_score') else "未通过"
+            breakout_s = f"{r['breakout_score']:.1f}" if r.get('breakout_score') else "未通过"
+            typer.echo(f"    三系统: 经典={classic_s} | 趋势={trend_s} | 突破={breakout_s}")
+            typer.echo(f"    主系统: {r['primary_system']} | 置信度: {r['confidence']}")
+            if r.get('trend_timing'):
+                typer.echo(f"    趋势时机: {r['trend_timing']}")
+            if r.get('position_size') and r['position_size'] != '0%':
+                typer.echo(f"    建议仓位: {r['position_size']}")
+            if r.get('stop_loss_price') and r['stop_loss_price'] > 0:
+                typer.echo(f"    止损: ¥{r['stop_loss_price']:.2f} ({r['stop_loss_pct']*100:.1f}%)")
+            if r.get('entry_low') and r['entry_low'] > 0:
+                typer.echo(f"    入场区间: ¥{r['entry_low']:.2f} - ¥{r['entry_high']:.2f}")
+            if r.get('reasons'):
+                typer.echo(f"    操作理由: {'; '.join(r['reasons'][:3])}")
+            if r.get('warnings'):
+                typer.echo(f"    风险提示: {'; '.join(r['warnings'][:3])}")
+        elif use_momentum_score:
             # 趋势动量评分详细显示格式
             signal_str = "✓买入信号" if r.get('signal') else "观望"
             typer.echo(f"\n【#{i}】{symbol_short} {r['name']} - 评分: {r['score']:.1f}/100 | 等级: {r['score_grade']} | {signal_str}")
@@ -1032,8 +1244,28 @@ def scan(
             typer.echo(f"    自适应阈值: 买入 {buy_th:.1f} / 卖出 {sell_th:.1f}")
             typer.echo(f"    个股状态: {regime_cn} | 波动率: {vol_cn}")
 
-        # 显示触发详情（仅经典评分）
-        if not use_trend_score and r.get('trigger_detail'):
+        # 显示传统策略信号
+        traditional_signals = r.get('traditional_signals')
+        if traditional_signals and 'error' not in traditional_signals:
+            signals = []
+            for key in ['rsi', 'macd', 'ma', 'boll']:
+                sig = traditional_signals.get(key, {})
+                if sig and 'error' not in sig:
+                    name = sig.get('strategy', key.upper())
+                    signal = sig.get('current_signal', '-')
+                    signals.append(f"{name}={signal}")
+            if signals:
+                typer.echo(f"    策略共振: {' | '.join(signals)}")
+
+        # 显示筛选结果
+        screening = r.get('screening_result')
+        if screening and screening.get('result') != 'pass':
+            result_cn = {'pass': '通过', 'filter': '过滤', 'warning': '警示'}.get(screening['result'], screening['result'])
+            reasons = '; '.join(screening.get('reasons', []))
+            typer.echo(f"    K线筛选: {result_cn} | {reasons}")
+
+        # 显示触发详情（仅经典评分，不含统一评分）
+        if not use_unified_score and not use_trend_score and r.get('trigger_detail'):
             typer.echo(f"    触发详情: {r['trigger_detail']}")
 
         # 显示因子得分
@@ -1213,7 +1445,20 @@ def scan(
                 f.write("## 📊 Top {} 股票概览\n\n".format(top_n))
 
                 # 根据评分系统类型选择不同的表头
-                if use_trend_score:
+                if use_unified_score:
+                    # 统一评分系统
+                    f.write("| 排名 | 代码 | 名称 | 收盘价 | 综合评分 | 等级 | 经典分 | 趋势分 | 突破分 | 操作 | 主系统 | 置信度 |\n")
+                    f.write("|------|------|------|--------|----------|------|--------|--------|--------|------|--------|--------|\n")
+
+                    for i, r in enumerate(results[:top_n], 1):
+                        symbol_short = r['symbol'].replace('.SH', '').replace('.SZ', '')
+                        name = r.get('name', symbol_short)
+                        classic_s = f"{r['classic_score']:.0f}" if r.get('classic_score') else "-"
+                        trend_s = f"{r['trend_score']:.0f}" if r.get('trend_score') else "-"
+                        breakout_s = f"{r['breakout_score']:.0f}" if r.get('breakout_score') else "-"
+                        f.write(f"| {i} | {symbol_short} | {name} | ¥{r['close']:.2f} | {r['score']:.1f} | {r['score_grade']} | {classic_s} | {trend_s} | {breakout_s} | {r['action_display']} | {r['primary_system']} | {r['confidence']} |\n")
+
+                elif use_trend_score:
                     # 趋势评分系统
                     f.write("| 排名 | 代码 | 名称 | 收盘价 | 评分 | 等级 | 均线分 | 动能分 | 量能分 | 强度分 | 时机系数 | 时机类型 |\n")
                     f.write("|------|------|------|--------|------|------|--------|--------|--------|--------|----------|----------|\n")
@@ -1635,6 +1880,8 @@ def analyze_trend(
 
     try:
         # 使用 StockAnalyzer 获取数据（自动使用增量数据管理器）
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+
         analyzer = StockAnalyzer()
         df = analyzer.get_stock_data(symbol, days=days)
 

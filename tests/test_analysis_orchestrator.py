@@ -1,0 +1,264 @@
+import unittest
+
+from quanttool.factors.analysis_context import (
+    ActionType,
+    AnalysisContext,
+    FinalRecommendation,
+    FundamentalData,
+    ScoringSystemType,
+    StopLossConfig,
+    StopLossType,
+    UnifiedMarketState,
+)
+from quanttool.factors.scoring.base import ScoreResult
+from tests.fixtures.algorithm_data import make_indicator_ready_ohlcv
+
+
+class FakeScoringSystem:
+    def calculate_context_scores(self, df, symbol="", trade_date=""):
+        return {
+            "classic": ScoreResult(
+                final_score=66.0,
+                passed_filter=True,
+                strategy_name="classic",
+                details={
+                    "trend_score": 61.0,
+                    "position_modifier": 1.0,
+                    "score_grade": "良好",
+                    "factors_score": {"trend_strength": 66},
+                    "factors_raw": {"aux_factors": {"bias20": 0.01}},
+                    "execution": {"action_guide": "测试"},
+                    "warnings": ["测试警告"],
+                },
+            ),
+            "trend": ScoreResult(
+                final_score=72.0,
+                passed_filter=True,
+                strategy_name="trend",
+                timing_coefficient=1.1,
+                details={
+                    "trend_total_score": 65.0,
+                    "timing_type": "测试时机",
+                    "ma_structure_score": 70.0,
+                    "price_momentum_score": 68.0,
+                    "volume_score": 60.0,
+                    "relative_strength_score": 55.0,
+                },
+            ),
+            "breakout": ScoreResult(
+                final_score=58.0,
+                passed_filter=True,
+                strategy_name="breakout",
+                stop_loss_price=9.5,
+                take_profit_price=11.0,
+                details={
+                    "is_low_position": True,
+                    "is_consolidating": True,
+                    "has_breakout": False,
+                    "quality_score": 60.0,
+                    "growth_score": 55.0,
+                    "value_score": 52.0,
+                    "momentum_score": 57.0,
+                    "flow_score": 59.0,
+                    "risk_score": 54.0,
+                    "consolidation_days": 24,
+                    "price_range": 0.12,
+                    "volume_ratio": 1.3,
+                    "breakout_strength": 0.0,
+                },
+            ),
+        }
+
+
+class FakeRecommendationEngine:
+    def generate_recommendation(self, context):
+        return FinalRecommendation(
+            action=ActionType.BUY,
+            primary_system=ScoringSystemType.CLASSIC,
+            final_score=context.classic_score.score,
+            score_grade="良好",
+            entry_low=context.current_price * 0.99,
+            entry_high=context.current_price * 1.01,
+            position_size="30%",
+            reasons=["测试推荐"],
+            warnings=context.classic_score.warnings,
+            confidence="高",
+        )
+
+
+class FakeStopLossCalculator:
+    def calculate(self, df, context):
+        return StopLossConfig(
+            stop_price=context.current_price * 0.95,
+            stop_type=StopLossType.ATR,
+            distance_percent=0.05,
+            confidence=0.8,
+        )
+
+
+class AnalysisOrchestratorTests(unittest.TestCase):
+    def test_build_context_uses_injected_components(self):
+        from quanttool.factors.analysis_orchestrator import AnalysisOrchestrator
+
+        df = make_indicator_ready_ohlcv(rows=260)
+        orchestrator = AnalysisOrchestrator(
+            scoring_system=FakeScoringSystem(),
+            recommendation_engine=FakeRecommendationEngine(),
+            stop_loss_calculator=FakeStopLossCalculator(),
+            market_state_builder=lambda data: UnifiedMarketState(confidence=0.75),
+            fundamental_provider=lambda symbol: FundamentalData(data_source="fake"),
+        )
+
+        context = orchestrator.build_context(
+            df,
+            "000001.SZ",
+            current_price=12.34,
+        )
+
+        self.assertIsInstance(context, AnalysisContext)
+        self.assertEqual(context.symbol, "000001.SZ")
+        self.assertEqual(context.current_price, 12.34)
+        self.assertEqual(context.classic_score.score, 66.0)
+        self.assertEqual(context.trend_score.final_score, 72.0)
+        self.assertEqual(context.breakout_score.consolidation_days, 24)
+        self.assertEqual(context.market_state.confidence, 0.75)
+        self.assertEqual(context.fundamental_data.data_source, "fake")
+        self.assertEqual(context.final_recommendation.action, ActionType.BUY)
+
+    def test_build_context_handles_empty_data(self):
+        from quanttool.factors.analysis_orchestrator import AnalysisOrchestrator
+
+        orchestrator = AnalysisOrchestrator(scoring_system=FakeScoringSystem())
+        context = orchestrator.build_context(
+            make_indicator_ready_ohlcv(rows=260).iloc[0:0],
+            "000001.SZ",
+        )
+
+        self.assertEqual(context.symbol, "000001.SZ")
+        self.assertEqual(context.current_price, 0)
+
+    def test_default_classic_score_preserves_position_modifier(self):
+        from quanttool.factors.analysis_orchestrator import AnalysisOrchestrator
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+
+        df = make_indicator_ready_ohlcv(rows=260)
+        expected = StockAnalyzer.__new__(StockAnalyzer)._run_classic_scoring(
+            df,
+            "000001.SZ",
+        )
+        context = AnalysisOrchestrator(
+            recommendation_engine=FakeRecommendationEngine(),
+            stop_loss_calculator=FakeStopLossCalculator(),
+            market_state_builder=lambda data: UnifiedMarketState(confidence=0.75),
+            fundamental_provider=lambda symbol: FundamentalData(data_source="fake"),
+        ).build_context(df, "000001.SZ")
+
+        self.assertEqual(
+            context.classic_score.position_modifier,
+            expected.position_modifier,
+        )
+        self.assertEqual(context.classic_score.warnings, expected.warnings)
+
+    def test_default_trend_and_breakout_preserve_legacy_payloads(self):
+        from quanttool.factors.analysis_orchestrator import AnalysisOrchestrator
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+
+        df = make_indicator_ready_ohlcv(rows=260)
+        analyzer = StockAnalyzer.__new__(StockAnalyzer)
+        expected_trend = analyzer._run_trend_scoring(df)
+        expected_breakout = analyzer._run_breakout_scoring(df)
+        context = AnalysisOrchestrator(
+            recommendation_engine=FakeRecommendationEngine(),
+            stop_loss_calculator=FakeStopLossCalculator(),
+            market_state_builder=lambda data: UnifiedMarketState(confidence=0.75),
+            fundamental_provider=lambda symbol: FundamentalData(data_source="fake"),
+        ).build_context(df, "000001.SZ")
+
+        self.assertEqual(
+            context.trend_score.timing_coefficient,
+            expected_trend.timing_coefficient,
+        )
+        self.assertEqual(context.trend_score.timing_type, expected_trend.timing_type)
+        self.assertEqual(
+            context.trend_score.passed_hard_filter,
+            expected_trend.passed_hard_filter,
+        )
+        self.assertEqual(
+            context.trend_score.hard_filter_reason,
+            expected_trend.hard_filter_reason,
+        )
+        self.assertEqual(context.breakout_score.details, expected_breakout.details)
+
+
+class StockReportGeneratorTests(unittest.TestCase):
+    def test_report_generator_renders_context_sections(self):
+        from quanttool.factors.analysis_orchestrator import AnalysisOrchestrator
+        from quanttool.factors.reports.stock_report import StockReportGenerator
+
+        df = make_indicator_ready_ohlcv(rows=260)
+        context = AnalysisOrchestrator(
+            scoring_system=FakeScoringSystem(),
+            recommendation_engine=FakeRecommendationEngine(),
+            stop_loss_calculator=FakeStopLossCalculator(),
+            market_state_builder=lambda data: UnifiedMarketState(confidence=0.75),
+            fundamental_provider=lambda symbol: FundamentalData(data_source="fake"),
+        ).build_context(df, "000001.SZ", current_price=12.34)
+
+        report = StockReportGenerator().generate(df, context, "000001.SZ")
+
+        self.assertIn("# 股票技术分析报告：000001.SZ", report)
+        self.assertIn("## 第一部分：核心结论", report)
+        self.assertIn("## 第二部分：三系统评分对比", report)
+        self.assertIn("## 第四部分：交易执行计划", report)
+        self.assertIn("测试推荐", report)
+
+
+class StockAnalyzerFacadeDelegationTests(unittest.TestCase):
+    def test_stock_analyzer_build_context_delegates_to_orchestrator(self):
+        from quanttool.factors.analysis_context import AnalysisContext
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+
+        class FakeOrchestrator:
+            def __init__(self):
+                self.calls = []
+
+            def build_context(self, df, symbol, primary_system=ScoringSystemType.AUTO, current_price=None):
+                self.calls.append((symbol, current_price, primary_system))
+                return AnalysisContext(
+                    symbol=symbol,
+                    current_price=current_price,
+                    analysis_date=df["timestamp"].iloc[-1].to_pydatetime(),
+                )
+
+        df = make_indicator_ready_ohlcv(rows=260)
+        analyzer = StockAnalyzer.__new__(StockAnalyzer)
+        analyzer.fetcher = None
+        analyzer._realtime_price_cache = {}
+        analyzer.analysis_orchestrator = FakeOrchestrator()
+
+        context = analyzer.build_analysis_context(df, "000001.SZ")
+
+        self.assertEqual(context.symbol, "000001.SZ")
+        self.assertEqual(context.current_price, df["close"].iloc[-1])
+        self.assertEqual(len(analyzer.analysis_orchestrator.calls), 1)
+
+    def test_stock_analyzer_report_delegates_to_report_generator(self):
+        from quanttool.factors.analysis_context import AnalysisContext
+        from quanttool.factors.stock_analyzer import StockAnalyzer
+
+        class FakeReportGenerator:
+            def generate(self, df, context, symbol):
+                return f"report:{symbol}:{context.current_price:.2f}:{len(df)}"
+
+        df = make_indicator_ready_ohlcv(rows=260)
+        analyzer = StockAnalyzer.__new__(StockAnalyzer)
+        analyzer.stock_report_generator = FakeReportGenerator()
+        context = AnalysisContext(
+            symbol="000001.SZ",
+            current_price=12.34,
+            analysis_date=df["timestamp"].iloc[-1].to_pydatetime(),
+        )
+
+        report = analyzer.generate_report_from_context(df, context, "000001.SZ")
+
+        self.assertEqual(report, "report:000001.SZ:12.34:260")

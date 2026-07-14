@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import PageContainer from '@/components/layout/PageContainer';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -25,7 +26,9 @@ import { formatNumber, formatPercent, getChangeColorClass } from '@/lib/utils';
 import type { ModelInfo, PredictionResult } from '@/types/model';
 
 export default function PicksPage() {
+  const router = useRouter();
   const setActivePage = useAppStore((state) => state.setActivePage);
+  const addHistory = useAppStore((state) => state.addHistory);
   const toast = useToast();
 
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -160,7 +163,19 @@ export default function PicksPage() {
               </TableHeader>
               <TableBody>
                 {predictions.map((item, index) => (
-                  <TableRow key={item.symbol} hoverable>
+                  <TableRow
+                    key={item.symbol}
+                    hoverable
+                    className="cursor-pointer"
+                    onClick={() => {
+                      addHistory({
+                        type: 'stock',
+                        title: `${item.name} (${item.symbol})`,
+                        path: `/analyze?symbol=${item.symbol}`
+                      });
+                      router.push(`/analyze?symbol=${item.symbol}`);
+                    }}
+                  >
                     <TableCell>
                       {index < 3 ? (
                         <Badge variant={index === 0 ? 'primary' : index === 1 ? 'success' : 'warning'}>

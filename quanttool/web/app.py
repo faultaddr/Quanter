@@ -10,6 +10,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import numpy as np
 from fastapi import FastAPI, Response, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from .api.routes import router as api_router
@@ -60,6 +61,15 @@ app = FastAPI(
     description="A comprehensive quantitative trading platform for A-share stocks",
     version="0.1.0",
     default_response_class=NumpyJSONResponse,
+)
+
+# 添加 CORS 支持，允许前端直接调用
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Serve static files

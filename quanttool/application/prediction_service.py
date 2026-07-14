@@ -11,7 +11,7 @@ from ..domain.interfaces.model import IModel
 from ..domain.interfaces.data_provider import IDataProvider
 from ..core.registry import registry, ComponentType
 from ..core.logging import get_logger
-from ..infrastructure.data_providers.incremental_data_manager import IncrementalDataManager, DataType
+from ..infrastructure.data_providers.incremental.manager import IncrementalDataManager, DataType
 
 
 logger = get_logger(__name__)

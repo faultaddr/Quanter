@@ -1,4 +1,4 @@
-import api from '../api';
+import { api } from './index';
 import type { StockAnalysis, KlineData, ChipDistribution, Signal } from '@/types/stock';
 
 // 资金流向数据类型

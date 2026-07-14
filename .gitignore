@@ -40,6 +40,7 @@ ENV/
 # Cache and data files
 .cache/
 *.parquet
+reports/
 
 # Logs
 *.log
@@ -80,6 +81,7 @@ qlib_data/
 node_modules/
 .npm/
 .next/
+*.tsbuildinfo
 
 # Playwright
 .playwright-mcp/
@@ -93,4 +95,3 @@ test-results/
 
 # Models directory (generated)
 models/gbm/*.pkl
-

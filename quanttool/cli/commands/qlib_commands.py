@@ -251,15 +251,15 @@ def _run_qlib_backtest(
 
     # 1. 尝试 baostock (免费)
     try:
-        from quanttool.infrastructure.data_providers.real_data_provider import RealAShareDataProvider
-        provider = RealAShareDataProvider(primary_source="baostock", use_fallback=True)
+        from quanttool.infrastructure.data_providers.historical.ashare_provider import AShareProvider
+        provider = AShareProvider()
     except Exception:
         pass
 
     # 2. 尝试 TuShare
     if provider is None:
         try:
-            from quanttool.infrastructure.data_providers.tushare_provider import TuShareProvider
+            from quanttool.infrastructure.data_providers.historical.tushare_provider import TuShareProvider
             provider = TuShareProvider()
         except Exception:
             pass

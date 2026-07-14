@@ -384,6 +384,10 @@ def safe_request(
     if headers is None:
         headers = HeaderGenerator.generate_headers()
 
+    # 显式禁用系统代理，避免 macOS 代理设置干扰数据源请求
+    no_proxy = {"http": None, "https": None}
+    kwargs.setdefault("proxies", no_proxy)
+
     # 执行请求
     if method.upper() == 'GET':
         response = requests.get(url, headers=headers, timeout=timeout, **kwargs)
@@ -984,7 +988,7 @@ def safe_request_with_proxy(
     # 代理重试循环
     for attempt in range(max_proxy_retries + 1):
         try:
-            proxies = None
+            proxies = {"http": None, "https": None}  # 默认禁用系统代理
             if use_proxy and proxy_pool:
                 current_proxy = proxy_pool.get_proxy()
                 if current_proxy:

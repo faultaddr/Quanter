@@ -4,9 +4,9 @@ import typer
 from typing import List, Optional
 from datetime import datetime
 from ...application.data_service import DataService
-from ...infrastructure.data_providers.tushare_provider import TuShareProvider
-from ...infrastructure.data_providers.ashare_provider import AShareProvider
-from ...infrastructure.data_providers.csv_provider import CSVProvider
+from ...infrastructure.data_providers.historical.tushare_provider import TuShareProvider
+from ...infrastructure.data_providers.historical.ashare_provider import AShareProvider
+from ...infrastructure.data_providers.historical.csv_provider import CSVProvider
 from ...infrastructure.stores.parquet_store import ParquetStore
 
 

@@ -33,10 +33,14 @@ from .analysis_context import (
 
 # 低位超卖保护仓位配置
 PROTECTION_POSITION_SIZES = {
-    "strong": "30-40%",    # 强保护触发：极端低位，反弹概率高
-    "standard": "20-30%",  # 标准保护触发：低位超卖，轻仓试探
-    "weak": "10-20%",      # 弱保护触发：观察为主
+    "strong": "20-30%",    # 强保护触发：极端低位，反弹概率高
+    "standard": "10-20%",  # 标准保护触发：低位超卖，轻仓试探
+    "weak": "5-10%",       # 弱保护触发：观察为主
 }
+
+# 流动性和置信度约束阈值
+LIQUIDITY_MIN_AMT_MA20 = 100000   # 20日日均成交额（千元），即1亿元
+LOW_CONFIDENCE_THRESHOLD = 0.4    # 低置信度阈值
 
 
 class RecommendationEngine:
@@ -266,9 +270,9 @@ class RecommendationEngine:
             recommendation.score_grade = "回避"
             return
 
-        score = trend.final_score
-        recommendation.final_score = score
-        recommendation.score_grade = self._get_score_grade(score)
+        score = trend.final_score * context.classic_score.position_modifier
+        recommendation.final_score = round(score, 1)
+        recommendation.score_grade = self._get_score_grade(recommendation.final_score)
 
         # 根据评分和时机系数决策
         timing = trend.timing_coefficient
@@ -316,9 +320,9 @@ class RecommendationEngine:
             recommendation.score_grade = "回避"
             return
 
-        score = breakout.final_score
-        recommendation.final_score = score
-        recommendation.score_grade = self._get_score_grade(score)
+        score = breakout.final_score * context.classic_score.position_modifier
+        recommendation.final_score = round(score, 1)
+        recommendation.score_grade = self._get_score_grade(recommendation.final_score)
 
         # 检查形态完整性
         if breakout.has_breakout:
@@ -355,9 +359,10 @@ class RecommendationEngine:
         classic = context.classic_score
         position = context.position_assessment
 
-        score = classic.score
-        recommendation.final_score = score
-        recommendation.score_grade = classic.score_grade
+        # 用 position_modifier 修正分数（高位惩罚）
+        score = classic.score * classic.position_modifier
+        recommendation.final_score = round(score, 1)
+        recommendation.score_grade = self._get_score_grade(recommendation.final_score)
 
         # 形态覆盖优先
         if recommendation.pattern_override:
@@ -409,25 +414,41 @@ class RecommendationEngine:
     ):
         """应用位置修正"""
         position = context.position_assessment
+        classic = context.classic_score
+        trend = context.trend_score
+        breakout = context.breakout_score
 
         # 获取低位超卖保护级别
         protection_level = self._get_protection_level(context)
 
-        # 低位超卖保护覆盖回避信号
-        if protection_level:
+        # 判断是否有任何评分系统给出正面信号
+        has_positive_signal = (
+            classic.score * classic.position_modifier >= 50 or
+            (trend.passed_hard_filter and trend.final_score >= 60) or
+            (breakout.passed_filter and breakout.has_breakout)
+        )
+
+        # 低位超卖保护覆盖回避信号（需有至少一个正面信号支撑）
+        if protection_level and has_positive_signal:
             if recommendation.action == ActionType.AVOID:
                 if protection_level == "strong":
                     recommendation.action = ActionType.LIGHT_POSITION
                     recommendation.position_size = PROTECTION_POSITION_SIZES["strong"]
-                    recommendation.reasons.append("【强保护】极度低位超卖，建议轻仓试探")
+                    recommendation.reasons.append("【强保护】极度低位超卖+有评分支撑，建议轻仓试探")
                 elif protection_level == "standard":
-                    recommendation.action = ActionType.LIGHT_POSITION
-                    recommendation.position_size = PROTECTION_POSITION_SIZES["standard"]
-                    recommendation.reasons.append("【标准保护】低位超卖，存在反弹机会")
+                    recommendation.action = ActionType.WAIT
+                    recommendation.position_size = PROTECTION_POSITION_SIZES["weak"]
+                    recommendation.reasons.append("【标准保护】低位超卖，但评分不足，建议观察为主")
                 else:  # weak
                     recommendation.action = ActionType.WAIT
                     recommendation.position_size = PROTECTION_POSITION_SIZES["weak"]
                     recommendation.reasons.append("【弱保护】偏低位超卖，建议观察")
+        elif protection_level and not has_positive_signal:
+            # 有保护但无正面信号，不覆盖回避，只降级到观望
+            if recommendation.action == ActionType.AVOID:
+                recommendation.action = ActionType.WAIT
+                recommendation.position_size = PROTECTION_POSITION_SIZES["weak"]
+                recommendation.warnings.append("虽有低位超卖保护，但三系统均无正面信号，不宜入场")
 
         # 设置仓位（如果未被保护逻辑覆盖）
         if recommendation.action not in [ActionType.AVOID, ActionType.SELL]:
@@ -442,17 +463,92 @@ class RecommendationEngine:
                 recommendation.action = ActionType.LIGHT_POSITION
                 recommendation.warnings.append("短期高位，不宜重仓追高")
 
-        # 长短期双低位机会
+        # 长短期双低位机会（需有正面信号支撑）
         if (position.long_term_position == 'low' and
             position.short_term_position == 'low'):
             if recommendation.action == ActionType.WAIT:
-                # 检查是否有保护，如果有保护则更积极
-                if protection_level:
+                if has_positive_signal:
                     recommendation.action = ActionType.LIGHT_POSITION
-                    recommendation.reasons.append("长短期双低位+超卖保护，存在反弹机会")
-                else:
-                    recommendation.action = ActionType.LIGHT_POSITION
-                    recommendation.reasons.append("长短期双低位，存在反弹机会")
+                    recommendation.reasons.append("长短期双低位+有评分支撑，存在反弹机会")
+                elif protection_level:
+                    recommendation.reasons.append("长短期双低位+超卖保护，但缺乏评分支撑，继续观察")
+
+        # 流动性和置信度约束：降低仓位
+        self._apply_liquidity_and_confidence_adjustment(context, recommendation, has_positive_signal)
+
+    def _apply_liquidity_and_confidence_adjustment(
+        self,
+        context: AnalysisContext,
+        recommendation: FinalRecommendation,
+        has_positive_signal: bool
+    ):
+        """根据流动性和置信度调整仓位"""
+        low_liquidity = False
+        low_confidence = False
+
+        # 检查流动性：20日日均成交额 < 1亿元
+        df_row = context.df_last_row or {}
+        amt_ma20 = df_row.get('amt_ma20', 0)
+        if not amt_ma20:
+            # 从 amount 字段估算（单日成交额，千元单位）
+            amt_today = df_row.get('amount', 0) or df_row.get('amt', 0)
+            if amt_today and amt_today < LIQUIDITY_MIN_AMT_MA20:
+                low_liquidity = True
+        elif amt_ma20 < LIQUIDITY_MIN_AMT_MA20:
+            low_liquidity = True
+
+        # 检查置信度
+        market_confidence = context.market_state.confidence
+        if market_confidence < LOW_CONFIDENCE_THRESHOLD:
+            low_confidence = True
+
+        # 无正面信号时进一步降低仓位
+        no_signal = not has_positive_signal
+
+        if low_liquidity or low_confidence or no_signal:
+            reasons = []
+            if low_liquidity:
+                reasons.append("流动性不足")
+            if low_confidence:
+                reasons.append(f"置信度低({market_confidence:.0%})")
+            if no_signal:
+                reasons.append("三系统无正面信号")
+
+            # 仓位上限：低流动性/低置信度/无信号 → 5-10%
+            if recommendation.action in [ActionType.STRONG_BUY, ActionType.BUY]:
+                recommendation.action = ActionType.LIGHT_POSITION
+                recommendation.position_size = "5-10%"
+            elif recommendation.action == ActionType.LIGHT_POSITION:
+                recommendation.position_size = "5-10%"
+            elif recommendation.action == ActionType.WAIT:
+                recommendation.position_size = "0%"
+
+            # 多重风险叠加时进一步降级
+            risk_count = sum([low_liquidity, low_confidence, no_signal])
+            if risk_count >= 2:
+                if recommendation.action == ActionType.LIGHT_POSITION:
+                    recommendation.action = ActionType.WAIT
+                    recommendation.position_size = "0-5%"
+                    reasons.append("多重风险叠加")
+
+            recommendation.warnings.append(f"⚠ 仓位约束: {', '.join(reasons)}，建议极轻仓或观望")
+
+        # 清理矛盾警告：最终为观望/回避时删除"可轻仓观察"等与结论矛盾的措辞
+        if recommendation.action in [ActionType.WAIT, ActionType.AVOID]:
+            recommendation.warnings = [
+                w for w in recommendation.warnings
+                if "可轻仓" not in w and "轻仓试探" not in w
+            ]
+
+        # 去重：如果多条警告都提到"三系统无正面信号"，只保留最详细的一条
+        no_signal_warnings = [w for w in recommendation.warnings if "三系统" in w and "无正面信号" in w]
+        if len(no_signal_warnings) > 1:
+            # 保留最长的一条（通常最详细），删除其余
+            longest = max(no_signal_warnings, key=len)
+            recommendation.warnings = [
+                w for w in recommendation.warnings
+                if not ("三系统" in w and "无正面信号" in w) or w == longest
+            ]
 
     def _get_protection_level(self, context: AnalysisContext) -> Optional[str]:
         """
@@ -505,6 +601,11 @@ class RecommendationEngine:
         """生成理由和警告"""
         position = context.position_assessment
         market = context.market_state
+        classic = context.classic_score
+        trend = context.trend_score
+        breakout = context.breakout_score
+
+        is_negative = recommendation.action in [ActionType.AVOID, ActionType.WAIT]
 
         # 理由
         reasons = []
@@ -529,19 +630,87 @@ class RecommendationEngine:
         }
         reasons.append(f"市场状态: {regime_names.get(market.combined_regime, '未知')}")
 
-        # 位置说明
+        # 位置说明 — 根据结论方向调整措辞
         if position.position == 'low':
-            reasons.append("入场位置安全")
+            if is_negative:
+                pass  # 观望原因统一在下方详细列出
+            else:
+                reasons.append("入场位置安全")
         elif position.position == 'high':
             reasons.append("入场位置偏高")
             recommendation.warnings.append("位置偏高，注意回调风险")
 
         # 长短期位置说明
         if position.long_term_position == 'low' and position.short_term_position == 'low':
-            reasons.append("长短期双低位")
+            if not is_negative:
+                reasons.append("长短期双低位")
         elif position.long_term_position == 'high' and position.short_term_position == 'high':
             reasons.append("长短期双高位")
             recommendation.warnings.append("双高位风险，建议谨慎")
+
+        # 观望/回避时补充具体原因（含位置因素）
+        if is_negative:
+            detail_reasons = []
+            if classic.trend_score < 40:
+                detail_reasons.append("趋势极弱")
+            if not trend.passed_hard_filter:
+                detail_reasons.append("趋势系统未通过过滤")
+            if not breakout.passed_filter:
+                detail_reasons.append("突破系统未通过过滤")
+            if classic.score * classic.position_modifier < 50:
+                detail_reasons.append("经典评分不足")
+            if market.combined_regime == MarketState.BEAR:
+                detail_reasons.append("熊市环境")
+
+            # ADX 极端趋势警告
+            adx = context.df_last_row.get('dmi_adx', 0) if context.df_last_row else 0
+            mdi = context.df_last_row.get('dmi_mdi', 0) if context.df_last_row else 0
+            pdi = context.df_last_row.get('dmi_pdi', 0) if context.df_last_row else 0
+            if adx > 60 and mdi > pdi:
+                recommendation.warnings.append(f"⚠ 极强下降趋势: ADX={adx:.1f}, MDI>PDI，逆势风险极高")
+            elif adx > 40 and mdi > pdi:
+                detail_reasons.append(f"下降趋势较强(ADX={adx:.0f})")
+            if detail_reasons:
+                prefix = ""
+                if position.long_term_position == 'low' and position.short_term_position == 'low':
+                    prefix = "双低位但"
+                elif position.position == 'low':
+                    prefix = "位置虽低但"
+                reasons.append(f"观望原因: {prefix}{', '.join(detail_reasons)}")
+
+        # 补充正面策略信号（即使观望也应提示）
+        if is_negative:
+            strategy_signals = context.strategy_signals or {}
+            buy_signals = []
+            buy_keywords = ['BUY', 'STRONG_BUY', 'WEAK_BUY']
+            for name, sig in strategy_signals.items():
+                if isinstance(sig, dict):
+                    current = str(sig.get('current_signal', ''))
+                    if any(kw in current for kw in buy_keywords):
+                        buy_signals.append(f"{name.upper()}")
+            if buy_signals:
+                recommendation.warnings.append(f"潜在正面信号: {', '.join(buy_signals)}，可关注后续确认")
+
+        # 基本面因素
+        fd = context.fundamental_data
+        if fd and fd.data_source:
+            if fd.pe_ttm and fd.pe_ttm > 50:
+                recommendation.warnings.append(f"估值偏高: PE(TTM)={fd.pe_ttm:.1f}x")
+            if fd.revenue_yoy is not None and fd.revenue_yoy < -10:
+                recommendation.warnings.append(f"营收增长停滞: 同比{fd.revenue_yoy:.1f}%")
+            if fd.debt_ratio and fd.debt_ratio > 70:
+                recommendation.warnings.append(f"高负债风险: 负债率{fd.debt_ratio:.1f}%")
+            if fd.annual_revenue and fd.annual_revenue < 5:
+                recommendation.warnings.append(f"小盘股: 年营收仅{fd.annual_revenue:.1f}亿，流动性风险")
+
+        # 根据市场状态置信度设置推荐置信度
+        market_conf = context.market_state.confidence
+        if market_conf >= 0.7:
+            recommendation.confidence = "高"
+        elif market_conf >= 0.5:
+            recommendation.confidence = "中"
+        else:
+            recommendation.confidence = "低"
 
         recommendation.reasons = reasons
 

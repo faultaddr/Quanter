@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import PageContainer from '@/components/layout/PageContainer';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
 import Badge from '@/components/ui/Badge';
+import { PageHeader, Section, SegmentedControl, StatusBadge } from '@/components/ui';
 import {
   Table,
   TableHeader,
@@ -19,19 +21,28 @@ import { useAppStore } from '@/stores/useAppStore';
 import { monitorApi } from '@/lib/api/monitor';
 import { useApi } from '@/hooks/useApi';
 import { useToast } from '@/hooks/useToast';
-import Loading from '@/components/ui/Loading';
-import { formatDate, formatNumber, formatPercent, getChangeColorClass } from '@/lib/utils';
+import EmptyState from '@/components/ui/EmptyState';
+import { formatNumber, formatPercent, getChangeColorClass } from '@/lib/utils';
 import type { ScanResult } from '@/types/api';
 
+type ScoringMode = 'unified' | 'trend' | 'classic' | 'breakout' | 'momentum';
+type ScanPreset = 'csi300-fast' | 'trend-full' | 'low-risk' | 'deep-fundamental';
+
 export default function ScanPage() {
+  const router = useRouter();
   const setActivePage = useAppStore((state) => state.setActivePage);
   const addHistory = useAppStore((state) => state.addHistory);
   const toast = useToast();
 
-  const [market, setMarket] = useState('all');
+  const [market, setMarket] = useState('csi300');
+  const [scanPreset, setScanPreset] = useState<ScanPreset>('csi300-fast');
+  const [scoringMode, setScoringMode] = useState<ScoringMode>('unified');
+  const [includeFundamentals, setIncludeFundamentals] = useState(false);
+  const [selectedSignals, setSelectedSignals] = useState<string[]>([]);
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [results, setResults] = useState<ScanResult[]>([]);
+  const [hasScanned, setHasScanned] = useState(false);
 
   // 因子筛选选项
   const [factorType, setFactorType] = useState('momentum');
@@ -50,12 +61,20 @@ export default function ScanPage() {
   }, [setActivePage]);
 
   const handleScan = async () => {
-    const params: Record<string, any> = {};
+    const params: Record<string, any> = {
+      market,
+      use_unified_score: scoringMode === 'unified',
+      use_trend_score: scoringMode === 'trend',
+      use_breakout_score: scoringMode === 'breakout',
+      use_momentum_score: scoringMode === 'momentum',
+      include_fundamentals: includeFundamentals,
+      include_market_state: includeFundamentals,
+    };
 
     // 基本筛选
-    if (market !== 'all') params.market = market;
     if (minPrice) params.min_price = Number(minPrice);
     if (maxPrice) params.max_price = Number(maxPrice);
+    if (selectedSignals.length > 0) params.signals = selectedSignals;
 
     // 因子筛选
     if (enableFactorFilter) {
@@ -69,31 +88,108 @@ export default function ScanPage() {
     params.exclude_suspended = excludeSuspended;
     params.exclude_limit = excludeLimit;
 
+    setHasScanned(false);
     const data = await runScan(params);
     if (data) {
       setResults(data);
+      setHasScanned(true);
       toast.success(`扫描完成，共发现 ${data.length} 只符合条件的股票`);
     }
   };
 
   const marketOptions = [
-    { value: 'all', label: '全部市场' },
-    { value: 'sh', label: '上海证券交易所' },
-    { value: 'sz', label: '深圳证券交易所' },
-    { value: 'bj', label: '北京证券交易所' },
+    { value: 'csi300', label: '沪深300' },
+    { value: 'csi1000', label: '中证1000' },
   ];
+
+  const scoringModes: Array<{ value: ScoringMode; label: string }> = [
+    { value: 'unified', label: '统一' },
+    { value: 'trend', label: '趋势' },
+    { value: 'classic', label: '经典' },
+    { value: 'breakout', label: '突破' },
+    { value: 'momentum', label: '动量' },
+  ];
+
+  const scanPresets: Array<{ value: ScanPreset; label: string; description: string }> = [
+    { value: 'csi300-fast', label: '沪深300快扫', description: '约30秒' },
+    { value: 'trend-full', label: '趋势扩展', description: '中证1000' },
+    { value: 'low-risk', label: '低风险观察', description: '风控优先' },
+    { value: 'deep-fundamental', label: '深度基本面', description: '更完整' },
+  ];
+
+  const applyPreset = (preset: ScanPreset) => {
+    setScanPreset(preset);
+    if (preset === 'csi300-fast') {
+      setMarket('csi300');
+      setScoringMode('unified');
+      setIncludeFundamentals(false);
+      setExcludeST(true);
+      setExcludeSuspended(true);
+      setExcludeLimit(true);
+      setSelectedSignals([]);
+    }
+    if (preset === 'trend-full') {
+      setMarket('csi1000');
+      setScoringMode('trend');
+      setIncludeFundamentals(false);
+      setSelectedSignals(['均线多头']);
+    }
+    if (preset === 'low-risk') {
+      setMarket('csi300');
+      setScoringMode('unified');
+      setIncludeFundamentals(false);
+      setExcludeST(true);
+      setExcludeSuspended(true);
+      setExcludeLimit(true);
+      setSelectedSignals([]);
+    }
+    if (preset === 'deep-fundamental') {
+      setMarket('csi300');
+      setScoringMode('unified');
+      setIncludeFundamentals(true);
+      setSelectedSignals([]);
+    }
+  };
 
   return (
     <PageContainer>
       <div className="space-y-6">
-        {/* Header */}
-        <div>
-          <h1 className="text-2xl font-bold text-text-primary">智能选股</h1>
-          <p className="text-text-muted mt-1">基于技术指标和量化因子，全市场扫描符合条件的股票</p>
-        </div>
+        <PageHeader
+          eyebrow="Candidate Scan"
+          title="智能选股"
+          description="先选扫描意图，再用统一评分和风控过滤生成候选池。"
+          meta={
+            <>
+              <StatusBadge tone={includeFundamentals ? 'warning' : 'success'}>
+                {includeFundamentals ? '深度数据' : '快速模式'}
+              </StatusBadge>
+              <StatusBadge tone="muted">{market === 'csi300' ? '沪深300' : '中证1000'}</StatusBadge>
+            </>
+          }
+          actions={
+            <Button onClick={handleScan} loading={loading}>
+              开始扫描
+            </Button>
+          }
+        />
 
         {/* Scan Parameters */}
-        <Card title="扫描条件">
+        <Section
+          title="扫描条件"
+          description="推荐先从预设开始，再展开细节过滤。"
+          framed
+        >
+          <div className="mb-4">
+            <label className="mb-2 block text-sm font-medium text-text-secondary">
+              扫描预设
+            </label>
+            <SegmentedControl
+              options={scanPresets}
+              value={scanPreset}
+              onChange={applyPreset}
+            />
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <Select
               label="市场"
@@ -122,6 +218,31 @@ export default function ScanPage() {
             </div>
           </div>
 
+          <div className="mt-4">
+            <label className="block text-sm font-medium text-text-secondary mb-2">
+              评分模式
+            </label>
+            <SegmentedControl
+              options={scoringModes}
+              value={scoringMode}
+              onChange={setScoringMode}
+              compact
+            />
+          </div>
+
+          <div className="mt-4">
+            <label htmlFor="includeFundamentals" className="flex items-center gap-2 text-sm text-text-secondary">
+              <input
+                type="checkbox"
+                id="includeFundamentals"
+                checked={includeFundamentals}
+                onChange={(e) => setIncludeFundamentals(e.target.checked)}
+                className="rounded"
+              />
+              <span>深度数据</span>
+            </label>
+          </div>
+
           {/* Signal Filters */}
           <div className="mt-4">
             <label className="block text-sm font-medium text-text-secondary mb-2">
@@ -129,15 +250,31 @@ export default function ScanPage() {
             </label>
             <div className="flex flex-wrap gap-2">
               {['MACD金叉', 'KDJ超卖', '放量突破', '均线多头', 'RSI超卖', '突破新高'].map((signal) => (
-                <Button key={signal} size="sm" variant="secondary">
+                <Button
+                  key={signal}
+                  size="sm"
+                  variant={selectedSignals.includes(signal) ? 'primary' : 'secondary'}
+                  onClick={() => {
+                    setSelectedSignals(prev =>
+                      prev.includes(signal)
+                        ? prev.filter(s => s !== signal)
+                        : [...prev, signal]
+                    );
+                  }}
+                >
                   {signal}
                 </Button>
               ))}
+              {selectedSignals.length > 0 && (
+                <Button size="sm" variant="ghost" onClick={() => setSelectedSignals([])}>
+                  清除
+                </Button>
+              )}
             </div>
           </div>
 
           {/* Factor Filters */}
-          <div className="mt-4 pt-4 border-t border-gray-200">
+          <div className="mt-4 pt-4 border-t border-border-primary">
             <div className="flex items-center gap-2 mb-2">
               <input
                 type="checkbox"
@@ -175,7 +312,7 @@ export default function ScanPage() {
           </div>
 
           {/* Risk Control Filters */}
-          <div className="mt-4 pt-4 border-t border-gray-200">
+          <div className="mt-4 pt-4 border-t border-border-primary">
             <label className="block text-sm font-medium text-text-secondary mb-2">
               风控过滤
             </label>
@@ -209,7 +346,7 @@ export default function ScanPage() {
               </label>
             </div>
           </div>
-        </Card>
+        </Section>
 
         {/* Results */}
         {results.length > 0 && (
@@ -223,11 +360,24 @@ export default function ScanPage() {
                   <TableHead className="text-right">涨跌幅</TableHead>
                   <TableHead>信号</TableHead>
                   <TableHead className="text-right">评分</TableHead>
+                  <TableHead className="text-right">下一步</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {results.map((item) => (
-                  <TableRow key={item.symbol} hoverable>
+                  <TableRow
+                    key={item.symbol}
+                    hoverable
+                    className="cursor-pointer"
+                    onClick={() => {
+                      addHistory({
+                        type: 'stock',
+                        title: `${item.name} (${item.symbol})`,
+                        path: `/analyze?symbol=${item.symbol}`
+                      });
+                      router.push(`/analyze?symbol=${item.symbol}`);
+                    }}
+                  >
                     <TableCell className="font-mono">{item.symbol}</TableCell>
                     <TableCell>{item.name}</TableCell>
                     <TableCell className="text-right">{formatNumber(item.price)}</TableCell>
@@ -259,11 +409,47 @@ export default function ScanPage() {
                         </span>
                       ) : '-'}
                     </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            addHistory({
+                              type: 'stock',
+                              title: `${item.name} (${item.symbol})`,
+                              path: `/analyze?symbol=${item.symbol}`,
+                            });
+                            router.push(`/analyze?symbol=${item.symbol}`);
+                          }}
+                        >
+                          分析
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            router.push(`/backtest?symbol=${item.symbol}`);
+                          }}
+                        >
+                          回测
+                        </Button>
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           </Card>
+        )}
+
+        {hasScanned && !loading && results.length === 0 && (
+          <EmptyState
+            title="暂无符合条件股票"
+            description="可以调整市场范围、评分方式或过滤条件后重新扫描"
+          />
         )}
       </div>
     </PageContainer>

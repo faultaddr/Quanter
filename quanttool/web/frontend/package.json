@@ -4,8 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:clean": "npm run clean && next dev",
+    "clean": "node -e \"require('fs').rmSync('.next', { recursive: true, force: true })\"",
     "build": "next build",
-    "start": "next start",
+    "prepare:standalone": "node scripts/prepare-standalone.js",
+    "start": "npm run prepare:standalone && node .next/standalone/server.js",
+    "start:standalone": "npm run prepare:standalone && node .next/standalone/server.js",
     "lint": "next lint"
   },
   "dependencies": {
