@@ -93,5 +93,8 @@ test-results/
 *.temp
 *.bak
 
+# Local Git worktrees
+.worktrees/
+
 # Models directory (generated)
 models/gbm/*.pkl
