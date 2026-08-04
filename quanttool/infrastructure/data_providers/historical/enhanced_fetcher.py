@@ -345,6 +345,7 @@ class AshareFetcher:
             try:
                 df = cls._get_price_sina(xcode, end_date=end_date, count=count, frequency=frequency)
                 if not df.empty:
+                    df.attrs["concrete_source"] = "sina"
                     return df
             except Exception:
                 pass
@@ -352,6 +353,7 @@ class AshareFetcher:
             try:
                 df = cls._get_price_day_tx(xcode, end_date=end_date, count=count, frequency=frequency)
                 if not df.empty:
+                    df.attrs["concrete_source"] = "tencent"
                     return df
             except Exception:
                 pass
