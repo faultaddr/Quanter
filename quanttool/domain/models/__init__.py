@@ -2,10 +2,9 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional, Union
 import pandas as pd
 from pydantic import BaseModel, Field
-from typing import Union
 
 
 class OrderSide(str, Enum):
@@ -57,11 +56,16 @@ class Trade(BaseModel):
     id: str
     symbol: str
     side: OrderSide
-    quantity: float
+    quantity: Union[int, float]
     price: float
     timestamp: datetime
     fee: float = 0.0
     pnl: Optional[float] = None
+    gross_amount: float = 0.0
+    commission: float = 0.0
+    stamp_tax: float = 0.0
+    transfer_fee: float = 0.0
+    slippage_cost: float = 0.0
 
 
 class Order(BaseModel):
@@ -78,6 +82,8 @@ class Order(BaseModel):
     filled_avg_price: Optional[float] = None
     status: str = "pending"  # pending, partially_filled, filled, cancelled
     parent_strategy: Optional[str] = None
+    rejection_code: Optional[str] = None
+    rejection_reason: Optional[str] = None
 
 
 class Position(BaseModel):

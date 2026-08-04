@@ -113,7 +113,8 @@ def calculate_transaction_cost(
         else 0.0
     )
     transfer_fee = gross_amount * rates.transfer_fee_rate
-    total_fee = commission + stamp_tax + transfer_fee
+    # Keep the component aggregation order stable for audit reconciliation.
+    total_fee = commission + transfer_fee + stamp_tax
     net_amount = (
         gross_amount + total_fee
         if normalized_side == "buy"

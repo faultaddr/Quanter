@@ -266,6 +266,7 @@ class ASShareConstraints:
         is_suspended: bool = False,
         stock_name: Optional[str] = None,
         trade_date: Optional[datetime] = None,
+        listing_session: Optional[int] = None,
     ) -> TradeConstraint:
         """
         检查是否可以买入
@@ -313,6 +314,7 @@ class ASShareConstraints:
                 prev_close,
                 date=trade_date,
                 stock_name=stock_name,
+                listing_session=listing_session,
             )
             if limit_status == LimitStatus.LIMIT_UP:
                 return TradeConstraint(
@@ -346,6 +348,7 @@ class ASShareConstraints:
         is_suspended: bool = False,
         stock_name: Optional[str] = None,
         trade_date: Optional[datetime] = None,
+        listing_session: Optional[int] = None,
     ) -> TradeConstraint:
         """
         检查是否可以卖出
@@ -383,6 +386,7 @@ class ASShareConstraints:
                 prev_close,
                 date=trade_date,
                 stock_name=stock_name,
+                listing_session=listing_session,
             )
             if limit_status == LimitStatus.LIMIT_DOWN:
                 return TradeConstraint(
