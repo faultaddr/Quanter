@@ -224,6 +224,22 @@ print(f"收益率: {result.total_return:.2%}")
 3. **AkShare** - 免费、接口丰富
 4. **TuShare** - 需要 Token，作为备选
 
+## 生产运行与数据安全
+
+生产进程必须显式声明运行模式，凭据只通过运行时环境注入：
+
+```bash
+QUANTTOOL_ENV=production
+TUSHARE_TOKEN=<optional runtime secret>
+EASTMONEY_COOKIE=<optional runtime secret>
+```
+
+- 内置 Sina/Tencent Ashare 日线链路免费且无需 Token；具体成功来源会随校验后的 DataFrame 一起记录。
+- 原 `csv_mock` 注册项已移除；CSV fixture provider 只能在 `QUANTTOOL_ENV=test` 下由测试显式构造。
+- 生产模式对缺失股票默认零容忍。真实行情不可用、数据校验失败或来源无法归属时，任务会明确失败，不生成替代行情。
+- 曾经提交到 Git 的数据源 Token 与 Cookie 必须在正式上线前完成吊销/轮换，并从 Git 历史中清除；当前代码删除明文并不代表旧凭据已经失效。
+- 当前 P0 目标是内部盘后选股和模拟组合验证，不包含自动券商下单或面向公众的投资建议。
+
 ## 性能指标
 
 | 操作 | P50 | P95 |

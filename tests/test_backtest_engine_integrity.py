@@ -184,6 +184,23 @@ class BacktestExecutionIntegrityTests(unittest.TestCase):
             pd.Timestamp("2026-08-03").to_pydatetime(),
         )
 
+    def test_win_rate_uses_closed_trades_only(self):
+        bars = make_bars(5)
+        result = BacktestEngine(initial_cash=100_000).run_backtest(
+            SequenceStrategy(
+                {1: {"direction": "buy"}, 3: {"direction": "sell"}}
+            ),
+            {"600000.SH": bars},
+            bars.timestamp.iloc[0].to_pydatetime(),
+            bars.timestamp.iloc[-1].to_pydatetime(),
+        )
+        self.assertEqual(result.total_trades, 2)
+        self.assertEqual(
+            result.winning_trades + result.losing_trades,
+            1,
+        )
+        self.assertIn(result.win_rate, {0.0, 1.0})
+
 
 if __name__ == "__main__":
     unittest.main()

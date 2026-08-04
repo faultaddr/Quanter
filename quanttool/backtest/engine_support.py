@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from ..core.errors import BacktestError
-from ..domain.models import Metric, Trade
+from ..domain.models import Metric, OrderSide, Trade
 from .ashare_constraints import LimitStatus, StockStatus
 
 
@@ -159,10 +159,15 @@ class BacktestEngineSupport:
             return [], 0.0, 0.0, 0.0, 0.0, 0.0
         curve = self.equity_curve if equity_curve is None else equity_curve
         total_trades = len(trades)
-        winning = [trade for trade in trades if trade.pnl and trade.pnl > 0]
-        losing = [trade for trade in trades if trade.pnl and trade.pnl < 0]
-        total_pnl = sum((trade.pnl or 0.0) for trade in trades)
-        win_rate = len(winning) / total_trades if total_trades else 0.0
+        closed = [
+            trade
+            for trade in trades
+            if trade.side == OrderSide.SELL and trade.pnl is not None
+        ]
+        winning = [trade for trade in closed if trade.pnl > 0]
+        losing = [trade for trade in closed if trade.pnl < 0]
+        total_pnl = sum((trade.pnl or 0.0) for trade in closed)
+        win_rate = len(winning) / len(closed) if closed else 0.0
         gross_profit = sum(trade.pnl or 0.0 for trade in winning)
         gross_loss = sum(trade.pnl or 0.0 for trade in losing)
         profit_factor = (

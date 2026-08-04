@@ -742,8 +742,13 @@ class BacktestEngine(BacktestEngineSupport):
             if days > 0
             else 0.0
         )
-        winning = [trade for trade in self.trades if trade.pnl and trade.pnl > 0]
-        losing = [trade for trade in self.trades if trade.pnl and trade.pnl < 0]
+        closed = [
+            trade
+            for trade in self.trades
+            if trade.side == OrderSide.SELL and trade.pnl is not None
+        ]
+        winning = [trade for trade in closed if trade.pnl > 0]
+        losing = [trade for trade in closed if trade.pnl < 0]
         return BacktestResult(
             start_date=start_date,
             end_date=end_date,
@@ -755,7 +760,7 @@ class BacktestEngine(BacktestEngineSupport):
             sharpe_ratio=sharpe_ratio,
             sortino_ratio=sortino_ratio,
             max_drawdown=max_drawdown,
-            win_rate=len(winning) / len(self.trades) if self.trades else 0.0,
+            win_rate=len(winning) / len(closed) if closed else 0.0,
             profit_factor=profit_factor,
             total_trades=len(self.trades),
             winning_trades=len(winning),
