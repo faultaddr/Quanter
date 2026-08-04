@@ -10,11 +10,17 @@ A股市场约束处理模块
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date as Date, datetime
 from enum import Enum
 from typing import Dict, Optional, Tuple
-import pandas as pd
-import numpy as np
+
+from ..core.errors import BacktestError
+from .a_share_rules import (
+    calculate_limit_prices,
+    normalize_symbol,
+    resolve_trading_rule,
+)
+from .fee_schedule import calculate_transaction_cost
 
 
 class LimitStatus(str, Enum):
@@ -134,21 +140,15 @@ class ASShareConstraints:
         Returns:
             市场类型: main, chinext, star, default
         """
-        if symbol.startswith("000") or symbol.startswith("001"):
-            return "main"
-        elif symbol.startswith("002"):
-            return "chinext"
-        elif symbol.startswith("300"):
-            return "chinext"
-        elif symbol.startswith("688"):
-            return "star"
-        elif symbol.startswith("6"):
-            return "main"
-        elif symbol.startswith("0") or symbol.startswith("3"):
-            return "chinext"
-        return "default"
+        return normalize_symbol(symbol).board
 
-    def get_limit_rates(self, symbol: str) -> Tuple[float, float]:
+    def get_limit_rates(
+        self,
+        symbol: str,
+        trade_date: Optional[Date] = None,
+        stock_name: Optional[str] = None,
+        listing_session: Optional[int] = None,
+    ) -> Tuple[float, float]:
         """
         获取涨跌停限制比例
 
@@ -158,18 +158,25 @@ class ASShareConstraints:
         Returns:
             (涨跌幅上限, 跌涨幅下限)
         """
-        market = self.get_market_type(symbol)
-        return (
-            self.LIMIT_UP_RATES.get(market, self.LIMIT_UP_RATES["default"]),
-            self.LIMIT_DOWN_RATES.get(market, self.LIMIT_DOWN_RATES["default"]),
+        resolved_date = self._require_trade_date(trade_date)
+        rule = resolve_trading_rule(
+            symbol,
+            resolved_date,
+            stock_name=stock_name,
+            listing_session=listing_session,
         )
+        if rule.price_limit is None:
+            return 0.0, 0.0
+        return rule.price_limit, rule.price_limit
 
     def calculate_limit_price(
         self,
         symbol: str,
         prev_close: float,
-        date: Optional[datetime] = None
-    ) -> Tuple[float, float]:
+        date: Optional[datetime] = None,
+        stock_name: Optional[str] = None,
+        listing_session: Optional[int] = None,
+    ) -> Tuple[Optional[float], Optional[float]]:
         """
         计算涨跌停价格
 
@@ -181,23 +188,23 @@ class ASShareConstraints:
         Returns:
             (涨停价, 跌停价)
         """
-        limit_up_rate, limit_down_rate = self.get_limit_rates(symbol)
-
-        limit_up = prev_close * (1 + limit_up_rate)
-        limit_down = prev_close * (1 - limit_down_rate)
-
-        # 精确到分（四舍五入）
-        limit_up = round(limit_up * 100) / 100
-        limit_down = round(limit_down * 100) / 100
-
-        return limit_up, limit_down
+        resolved_date = self._require_trade_date(date)
+        rule = resolve_trading_rule(
+            symbol,
+            resolved_date,
+            stock_name=stock_name,
+            listing_session=listing_session,
+        )
+        return calculate_limit_prices(prev_close, rule)
 
     def check_limit_status(
         self,
         symbol: str,
         current_price: float,
         prev_close: float,
-        date: Optional[datetime] = None
+        date: Optional[datetime] = None,
+        stock_name: Optional[str] = None,
+        listing_session: Optional[int] = None,
     ) -> LimitStatus:
         """
         检查涨跌停状态
@@ -214,7 +221,15 @@ class ASShareConstraints:
         if not self.enable_limit_check:
             return LimitStatus.NORMAL
 
-        limit_up, limit_down = self.calculate_limit_price(symbol, prev_close, date)
+        limit_up, limit_down = self.calculate_limit_price(
+            symbol,
+            prev_close,
+            date,
+            stock_name=stock_name,
+            listing_session=listing_session,
+        )
+        if limit_up is None or limit_down is None:
+            return LimitStatus.NORMAL
 
         # 使用精确比较，考虑价格精度
         if abs(current_price - limit_up) < 0.001:
@@ -250,6 +265,8 @@ class ASShareConstraints:
         prev_close: float,
         is_suspended: bool = False,
         stock_name: Optional[str] = None,
+        trade_date: Optional[datetime] = None,
+        listing_session: Optional[int] = None,
     ) -> TradeConstraint:
         """
         检查是否可以买入
@@ -291,7 +308,14 @@ class ASShareConstraints:
 
         # 检查涨停
         if self.enable_limit_check:
-            limit_status = self.check_limit_status(symbol, current_price, prev_close)
+            limit_status = self.check_limit_status(
+                symbol,
+                current_price,
+                prev_close,
+                date=trade_date,
+                stock_name=stock_name,
+                listing_session=listing_session,
+            )
             if limit_status == LimitStatus.LIMIT_UP:
                 return TradeConstraint(
                     can_trade=False,
@@ -323,6 +347,8 @@ class ASShareConstraints:
         prev_close: float,
         is_suspended: bool = False,
         stock_name: Optional[str] = None,
+        trade_date: Optional[datetime] = None,
+        listing_session: Optional[int] = None,
     ) -> TradeConstraint:
         """
         检查是否可以卖出
@@ -354,7 +380,14 @@ class ASShareConstraints:
 
         # 检查跌停
         if self.enable_limit_check:
-            limit_status = self.check_limit_status(symbol, current_price, prev_close)
+            limit_status = self.check_limit_status(
+                symbol,
+                current_price,
+                prev_close,
+                date=trade_date,
+                stock_name=stock_name,
+                listing_session=listing_session,
+            )
             if limit_status == LimitStatus.LIMIT_DOWN:
                 return TradeConstraint(
                     can_trade=False,
@@ -440,7 +473,8 @@ class ASShareConstraints:
         self,
         price: float,
         quantity: float,
-        side: str
+        side: str,
+        trade_date: Optional[Date] = None,
     ) -> TransactionCost:
         """
         计算真实交易成本
@@ -458,29 +492,22 @@ class ASShareConstraints:
         Returns:
             TransactionCost: 交易成本详情
         """
-        gross_amount = price * quantity
-
-        # 佣金
-        commission = max(
-            self.min_commission,
-            gross_amount * self.commission_rate
+        resolved_date = self._require_trade_date(trade_date)
+        breakdown = calculate_transaction_cost(
+            price=price,
+            quantity=int(quantity),
+            side=side,
+            trade_date=resolved_date,
+            commission_rate=self.commission_rate,
+            min_commission=self.min_commission,
         )
 
-        # 印花税（仅卖出）
-        stamp_tax = gross_amount * self.stamp_tax_rate if side.lower() == "sell" else 0.0
-
-        # 过户费
-        transfer_fee = gross_amount * self.transfer_fee_rate
-
-        total_cost = commission + stamp_tax + transfer_fee
-        net_amount = gross_amount + total_cost if side.lower() == "buy" else gross_amount - total_cost
-
         return TransactionCost(
-            gross_amount=gross_amount,
-            commission=commission,
-            stamp_tax=stamp_tax,
-            transfer_fee=transfer_fee,
-            net_amount=net_amount
+            gross_amount=breakdown.gross_amount,
+            commission=breakdown.commission,
+            stamp_tax=breakdown.stamp_tax,
+            transfer_fee=breakdown.transfer_fee,
+            net_amount=breakdown.net_amount,
         )
 
     def get_effective_price(
@@ -489,7 +516,8 @@ class ASShareConstraints:
         price: float,
         prev_close: float,
         side: str,
-        order_type: str = "market"
+        order_type: str = "market",
+        trade_date: Optional[datetime] = None,
     ) -> float:
         """
         获取有效成交价格（考虑滑点）
@@ -507,12 +535,33 @@ class ASShareConstraints:
         if order_type != "market":
             return price
 
-        constraint = self.can_buy(symbol, price, prev_close) if side.lower() == "buy" else self.can_sell(symbol, price, prev_close)
+        constraint = (
+            self.can_buy(
+                symbol,
+                price,
+                prev_close,
+                trade_date=trade_date,
+            )
+            if side.lower() == "buy"
+            else self.can_sell(
+                symbol,
+                price,
+                prev_close,
+                trade_date=trade_date,
+            )
+        )
 
         if side.lower() == "buy":
             return price * (1 + constraint.slippage_rate)
         else:
             return price * (1 - constraint.slippage_rate)
+
+    @staticmethod
+    def _require_trade_date(trade_date: Optional[Date]) -> Date:
+        """Require an explicit event date for versioned exchange rules."""
+        if trade_date is None:
+            raise BacktestError("An explicit trade_date is required")
+        return trade_date.date() if isinstance(trade_date, datetime) else trade_date
 
 
 def create_constraints(

@@ -1,20 +1,18 @@
-"""CSV mock data provider implementation."""
+"""CSV fixture provider for explicit test-mode use."""
 
-import os
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 from ....domain.interfaces.data_provider import IDataProvider
 from ....core.errors import DataProviderError
-from ....core.registry import registry, ComponentType
 from ....core.logging import get_logger
+from ....core.runtime import require_test_mode
 
 
 logger = get_logger(__name__)
 
 
-@registry.register(ComponentType.DATA_PROVIDER, "csv_mock")
 class CSVProvider(IDataProvider):
     """CSV mock data provider implementation for testing purposes."""
 
@@ -25,6 +23,7 @@ class CSVProvider(IDataProvider):
         Args:
             data_dir: Directory containing CSV files with mock data
         """
+        require_test_mode("CSVProvider")
         self.data_dir = Path(data_dir)
         self._initialized = False
 

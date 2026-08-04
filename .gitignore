@@ -93,5 +93,12 @@ test-results/
 *.temp
 *.bak
 
+# Local Git worktrees
+.worktrees/
+
 # Models directory (generated)
 models/gbm/*.pkl
+
+# Frontend source (the generic Python `lib/` rule above must not hide it)
+!quanttool/web/frontend/lib/
+!quanttool/web/frontend/lib/**

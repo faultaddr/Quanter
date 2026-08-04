@@ -1,20 +1,45 @@
-"""Backtest engine for QuantTool."""
+"""Event-ordered A-share backtest engine."""
 
-from typing import Dict, Any, List, Optional
+from dataclasses import dataclass
+from datetime import datetime
+import math
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
-from datetime import datetime, timedelta
-from ..domain.interfaces.strategy import IStrategy
-from ..domain.models import Trade, Order, Position, Portfolio, Metric, BacktestResult
-from ..core.timeutils import get_next_trading_bar_timestamp
+
+from ..core.errors import BacktestError
 from ..core.logging import get_logger
+from ..domain.interfaces.strategy import IStrategy
+from ..domain.models import (
+    BacktestResult,
+    Metric,
+    Order,
+    OrderSide,
+    Portfolio,
+    Position,
+    Trade,
+)
+from .a_share_rules import resolve_trading_rule, round_buy_quantity
 from .ashare_constraints import ASShareConstraints, create_constraints
+from .engine_support import BacktestEngineSupport
+from .fee_schedule import calculate_transaction_cost
 
 
 logger = get_logger(__name__)
 
 
-class BacktestEngine:
-    """Event-driven backtest engine with T+1 support for A-shares."""
+@dataclass(frozen=True)
+class PendingSignal:
+    """A signal scheduled for the next supplied bar."""
+
+    symbol: str
+    signal: Dict[str, Any]
+    signal_time: datetime
+    execution_time: datetime
+
+
+class BacktestEngine(BacktestEngineSupport):
+    """Run bar-complete signals with next-bar execution and net costs."""
 
     def __init__(
         self,
@@ -22,75 +47,86 @@ class BacktestEngine:
         enable_st_restriction: bool = True,
         enable_limit_check: bool = True,
         commission_rate: Optional[float] = None,
-    ):
-        """Initialize backtest engine."""
-        self.initial_cash = 100000.0
-        self.commission_rate = commission_rate or 0.0003
+        initial_cash: float = 100000.0,
+    ) -> None:
+        if initial_cash <= 0:
+            raise BacktestError("initial_cash must be positive")
+        self.initial_cash = float(initial_cash)
+        self.commission_rate = (
+            0.0003 if commission_rate is None else commission_rate
+        )
         self.min_commission = 5.0
         self.slippage_rate = 0.0001
         self.max_position_size = 0.1
         self.max_positions = 10
-        self.enable_t_plus_1 = True  # A股 T+1 规则开关
-        self.enable_stop_loss = True  # 启用止损
-        self.enable_take_profit = True  # 启用止盈
-        self.enable_trailing_stop = False  # 启用移动止损（默认关闭）
-        self.trailing_stop_percent = 0.05  # 移动止损比例（5%）
+        self.enable_t_plus_1 = True
+        self.enable_stop_loss = True
+        self.enable_take_profit = True
+        self.enable_trailing_stop = False
+        self.trailing_stop_percent = 0.05
 
-        # A股约束处理器
         self.use_ashare_constraints = use_ashare_constraints
+        self.ashare_constraints: Optional[ASShareConstraints] = None
         if use_ashare_constraints:
             self.ashare_constraints = create_constraints(
                 commission_rate=self.commission_rate,
                 enable_st=enable_st_restriction,
                 enable_limit=enable_limit_check,
             )
-        else:
-            self.ashare_constraints = None
 
-        # 股票信息缓存（symbol -> {prev_close, is_suspended, stock_name}）
-        self._stock_info_cache: Dict[str, Dict] = {}
+        self._stock_info_cache: Dict[str, Dict[str, Any]] = {}
+        self.current_portfolio: Optional[Portfolio] = None
+        self.trades: List[Trade] = []
+        self.orders: List[Order] = []
+        self.positions: Dict[str, Position] = {}
+        self.equity_curve: List[Dict[str, Any]] = []
+        self.latest_market_prices: Dict[str, float] = {}
+        self._next_bar_time: Dict[str, Dict[pd.Timestamp, pd.Timestamp]] = {}
+        self._reset_counters()
 
-        # Runtime state
-        self.current_portfolio = None
-        self.trades = []
-        self.orders = []
-        self.positions = {}
-        self.equity_curve = []
-        # 止损止盈统计
-        self.stop_loss_triggers = 0  # 止损触发次数
-        self.take_profit_triggers = 0  # 止盈触发次数
-        # 约束检查统计
-        self.limit_up_skips = 0  # 涨停跳过次数
-        self.limit_down_skips = 0  # 跌停跳过次数
-        self.stock_restriction_skips = 0  # 股票限制跳过次数
-        self.suspended_skips = 0  # 停牌跳过次数
+    def _reset_counters(self) -> None:
+        self.stop_loss_triggers = 0
+        self.take_profit_triggers = 0
+        self.limit_up_skips = 0
+        self.limit_down_skips = 0
+        self.stock_restriction_skips = 0
+        self.suspended_skips = 0
 
-    def set_initial_cash(self, cash: float):
-        """Set initial cash for backtest."""
-        self.initial_cash = cash
+    def set_initial_cash(self, cash: float) -> None:
+        if cash <= 0:
+            raise BacktestError("initial cash must be positive")
+        self.initial_cash = float(cash)
 
-    def set_commission_rate(self, rate: float):
-        """Set commission rate for trades."""
+    def set_commission_rate(self, rate: float) -> None:
+        if rate < 0:
+            raise BacktestError("commission rate must be non-negative")
         self.commission_rate = rate
+        if self.ashare_constraints is not None:
+            self.ashare_constraints.commission_rate = rate
 
-    def set_min_commission(self, min_comm: float):
-        """Set minimum commission per trade."""
+    def set_min_commission(self, min_comm: float) -> None:
+        if min_comm < 0:
+            raise BacktestError("minimum commission must be non-negative")
         self.min_commission = min_comm
+        if self.ashare_constraints is not None:
+            self.ashare_constraints.min_commission = min_comm
 
-    def set_slippage_rate(self, rate: float):
-        """Set slippage rate for trades."""
+    def set_slippage_rate(self, rate: float) -> None:
+        if rate < 0:
+            raise BacktestError("slippage rate must be non-negative")
         self.slippage_rate = rate
 
-    def set_max_position_size(self, size: float):
-        """Set maximum position size as fraction of portfolio."""
+    def set_max_position_size(self, size: float) -> None:
+        if not 0 < size <= 1:
+            raise BacktestError("max position size must be in (0, 1]")
         self.max_position_size = size
 
-    def set_max_positions(self, num: int):
-        """Set maximum number of simultaneous positions."""
+    def set_max_positions(self, num: int) -> None:
+        if num <= 0:
+            raise BacktestError("max positions must be positive")
         self.max_positions = num
 
-    def set_t_plus_1(self, enabled: bool):
-        """Enable or disable T+1 rule for A-shares."""
+    def set_t_plus_1(self, enabled: bool) -> None:
         self.enable_t_plus_1 = enabled
 
     def update_stock_info(
@@ -99,86 +135,91 @@ class BacktestEngine:
         prev_close: float,
         is_suspended: bool = False,
         stock_name: Optional[str] = None,
-    ):
-        """
-        更新股票信息缓存
-
-        Args:
-            symbol: 股票代码
-            prev_close: 前收盘价
-            is_suspended: 是否停牌
-            stock_name: 股票名称
-        """
+    ) -> None:
+        """Set non-price metadata; run-time previous close comes from bars."""
         self._stock_info_cache[symbol] = {
             "prev_close": prev_close,
             "is_suspended": is_suspended,
             "stock_name": stock_name,
         }
 
-    def _check_trading_constraints(
+    @staticmethod
+    def _to_datetime(value: Any) -> datetime:
+        return pd.Timestamp(value).to_pydatetime()
+
+    @staticmethod
+    def _signal_direction(signal: Dict[str, Any]) -> Optional[str]:
+        value = signal.get("direction")
+        if value is None:
+            return None
+        if isinstance(value, OrderSide):
+            return value.value
+        direction = str(value).lower()
+        if direction not in {"buy", "sell", "hold"}:
+            raise BacktestError(f"Unsupported signal direction: {value}")
+        return direction
+
+    def _prepare_data(
         self,
-        symbol: str,
-        direction: str,
-        current_price: float,
-    ) -> bool:
-        """
-        检查交易约束
-
-        Args:
-            symbol: 股票代码
-            direction: 买卖方向
-            current_price: 当前价格
-
-        Returns:
-            是否可以交易
-        """
-        if not self.use_ashare_constraints or self.ashare_constraints is None:
-            return True
-
-        stock_info = self._stock_info_cache.get(symbol, {})
-        prev_close = stock_info.get("prev_close", current_price)
-        is_suspended = stock_info.get("is_suspended", False)
-        stock_name = stock_info.get("stock_name")
-
-        if direction == "buy":
-            constraint = self.ashare_constraints.can_buy(
-                symbol, current_price, prev_close, is_suspended, stock_name
+        data: Dict[str, pd.DataFrame],
+    ) -> Dict[str, pd.DataFrame]:
+        required = {"timestamp", "open", "high", "low", "close", "volume"}
+        prepared: Dict[str, pd.DataFrame] = {}
+        self._next_bar_time = {}
+        for symbol, source in data.items():
+            missing = required - set(source.columns)
+            if source.empty or missing:
+                raise BacktestError(
+                    f"Invalid backtest bars for {symbol}: missing={sorted(missing)}"
+                )
+            frame = source.copy()
+            frame["timestamp"] = pd.to_datetime(frame["timestamp"])
+            frame = frame.sort_values("timestamp", kind="stable").reset_index(
+                drop=True
             )
-        else:
-            constraint = self.ashare_constraints.can_sell(
-                symbol, current_price, prev_close, is_suspended, stock_name
-            )
+            if frame["timestamp"].duplicated().any():
+                raise BacktestError(
+                    f"Duplicate backtest timestamps for {symbol}"
+                )
+            prepared[symbol] = frame
+            timestamps = frame["timestamp"].tolist()
+            self._next_bar_time[symbol] = {
+                timestamps[index]: timestamps[index + 1]
+                for index in range(len(timestamps) - 1)
+            }
+        if not prepared:
+            raise BacktestError("Backtest data is empty")
+        return prepared
 
-        if not constraint.can_trade:
-            logger.info(f"约束检查阻止交易: {symbol} {direction} - {constraint.reason}")
-            # 统计约束导致的跳过
-            if "涨停" in constraint.reason:
-                self.limit_up_skips += 1
-            elif "跌停" in constraint.reason:
-                self.limit_down_skips += 1
-            elif "ST" in constraint.reason:
-                self.stock_restriction_skips += 1
-            elif "停牌" in constraint.reason:
-                self.suspended_skips += 1
-            return False
+    def _initialize_run(
+        self,
+        symbols: List[str],
+        start_date: datetime,
+    ) -> None:
+        if self.initial_cash <= 0:
+            raise BacktestError("initial cash must be positive")
+        self.current_portfolio = Portfolio(
+            cash=self.initial_cash,
+            positions=[],
+            total_value=self.initial_cash,
+            timestamp=start_date,
+        )
+        self.trades = []
+        self.orders = []
+        self.positions = {}
+        self.equity_curve = []
+        self.latest_market_prices = {}
+        self._reset_counters()
 
-        # 使用约束计算的动态滑点
-        self.slippage_rate = constraint.slippage_rate
-
-        return True
-
-    def _get_next_trading_day(self, current_date: datetime) -> datetime:
-        """
-        Get the next trading day from current date.
-        Simplified implementation: add 1 day, skip weekends.
-        For production, use a trading calendar.
-        """
-        from datetime import timedelta
-        next_day = current_date + timedelta(days=1)
-        # Skip weekends (Saturday=5, Sunday=6)
-        while next_day.weekday() >= 5:
-            next_day += timedelta(days=1)
-        return next_day
+        configured = self._stock_info_cache
+        self._stock_info_cache = {}
+        for symbol in symbols:
+            metadata = configured.get(symbol, {})
+            self._stock_info_cache[symbol] = {
+                "prev_close": None,
+                "is_suspended": metadata.get("is_suspended", False),
+                "stock_name": metadata.get("stock_name"),
+            }
 
     def run_backtest(
         self,
@@ -187,117 +228,152 @@ class BacktestEngine:
         start_date: datetime,
         end_date: datetime,
     ) -> BacktestResult:
-        """
-        Run the backtest with the given strategy and data.
+        """Run signals after each completed bar and fill on the next open."""
+        if pd.Timestamp(start_date) > pd.Timestamp(end_date):
+            raise BacktestError("start_date must not be after end_date")
+        frames = self._prepare_data(data)
+        self._initialize_run(list(frames), start_date)
 
-        Args:
-            strategy: Trading strategy to test
-            data: Historical data for backtest
-            start_date: Start date of backtest
-            end_date: End date of backtest
-
-        Returns:
-            Backtest result object
-        """
-        # Initialize portfolio
-        self.current_portfolio = Portfolio(
-            cash=self.initial_cash,
-            positions=[],
-            total_value=self.initial_cash,
-            timestamp=start_date,
+        timeline = sorted(
+            {
+                timestamp
+                for frame in frames.values()
+                for timestamp in frame["timestamp"].tolist()
+                if pd.Timestamp(start_date)
+                <= timestamp
+                <= pd.Timestamp(end_date)
+            }
         )
+        pending_by_timestamp: Dict[pd.Timestamp, List[PendingSignal]] = {}
 
-        # Combine all timestamps across all symbols to create a unified timeline
-        all_timestamps = set()
-        for symbol, df in data.items():
-            all_timestamps.update(df["timestamp"].tolist())
+        for timestamp in timeline:
+            pending_now = pending_by_timestamp.pop(timestamp, [])
+            pending_by_symbol: Dict[str, List[PendingSignal]] = {}
+            for pending in pending_now:
+                pending_by_symbol.setdefault(pending.symbol, []).append(pending)
 
-        all_timestamps = sorted(list(all_timestamps))
+            for symbol, frame in frames.items():
+                matching = frame.loc[frame["timestamp"] == timestamp]
+                if matching.empty:
+                    continue
+                current_bar = matching.iloc[0]
+                execution_time = self._to_datetime(timestamp)
+                next_timestamp = self._next_bar_time[symbol].get(timestamp)
 
-        # Initialize runtime state with latest prices tracking
-        self.trades = []
-        self.orders = []
-        self.positions = {}
-        self.equity_curve = []
-        self.latest_market_prices = {}  # Track latest market prices for each symbol
-        self.stop_loss_triggers = 0  # 止损触发次数
-        self.take_profit_triggers = 0  # 止盈触发次数
-        # 约束检查统计
-        self.limit_up_skips = 0
-        self.limit_down_skips = 0
-        self.stock_restriction_skips = 0
-        self.suspended_skips = 0
+                for pending in pending_by_symbol.get(symbol, []):
+                    self._execute_signal(
+                        symbol=symbol,
+                        signal=pending.signal,
+                        price=float(current_bar["open"]),
+                        signal_time=pending.signal_time,
+                        exec_time=execution_time,
+                        current_bar=current_bar,
+                        next_execution_time=(
+                            self._to_datetime(next_timestamp)
+                            if next_timestamp is not None
+                            else None
+                        ),
+                    )
 
-        # 初始化股票信息缓存（前收盘价）
-        self._stock_info_cache = {}
-        for symbol, df in data.items():
-            if len(df) > 1:
-                # 使用倒数第二行的收盘价作为前收盘价
-                prev_close = df.iloc[-2]["close"]
-                self._stock_info_cache[symbol] = {
-                    "prev_close": prev_close,
-                    "is_suspended": False,
-                    "stock_name": None,
-                }
+                self.latest_market_prices[symbol] = float(current_bar["close"])
+                if symbol in self.positions:
+                    self._check_stop_loss_take_profit(
+                        symbol,
+                        current_bar,
+                        execution_time,
+                    )
 
-        # Process each timestamp in chronological order
-        for timestamp in all_timestamps:
-            if timestamp < start_date or timestamp > end_date:
-                continue
-
-            # Process this timestamp for each symbol
-            for symbol, df in data.items():
-                # Get the bar at this timestamp for this symbol
-                symbol_data = df[df["timestamp"] == timestamp]
-
-                if not symbol_data.empty:
-                    current_bar = symbol_data.iloc[0]  # Get the row
-
-                    # Update latest market price for this symbol
-                    self.latest_market_prices[symbol] = current_bar["close"]
-
-                    # 更新前收盘价（用于约束检查）
-                    if symbol in self._stock_info_cache:
-                        self._stock_info_cache[symbol]["prev_close"] = current_bar["close"]
-
-                    # 先检查止损止盈（在处理策略信号之前）
-                    if symbol in self.positions:
-                        self._check_stop_loss_take_profit(
-                            symbol, current_bar, timestamp
+                historical = frame.loc[
+                    frame["timestamp"] <= timestamp
+                ].copy()
+                signal = strategy.get_signal(current_bar, historical)
+                if signal:
+                    direction = self._signal_direction(signal)
+                    if direction not in {None, "hold"} and next_timestamp is not None:
+                        pending = PendingSignal(
+                            symbol=symbol,
+                            signal=dict(signal),
+                            signal_time=execution_time,
+                            execution_time=self._to_datetime(next_timestamp),
                         )
+                        pending_by_timestamp.setdefault(
+                            next_timestamp,
+                            [],
+                        ).append(pending)
 
-                    # 如果持仓已被止损止盈平掉，跳过策略信号处理
-                    if symbol not in self.positions:
-                        # Get historical data up to this point for the strategy
-                        hist_data = df[df["timestamp"] <= timestamp].copy()
+                stock_info = self._stock_info_cache[symbol]
+                stock_info["prev_close"] = float(current_bar["close"])
+                bar_name = current_bar.get("stock_name")
+                if bar_name is not None and not pd.isna(bar_name):
+                    stock_info["stock_name"] = str(bar_name)
+                bar_suspended = current_bar.get("is_suspended")
+                if bar_suspended is not None and not pd.isna(bar_suspended):
+                    stock_info["is_suspended"] = bool(bar_suspended)
 
-                        # Get signal from strategy
-                        signal = strategy.get_signal(current_bar, hist_data)
-
-                        if signal and signal.get("direction"):
-                            self._process_strategy_signal(
-                                symbol, signal, df, timestamp, current_bar
-                            )
-                    else:
-                        # 已有持仓，仍然检查策略卖出信号
-                        hist_data = df[df["timestamp"] <= timestamp].copy()
-                        signal = strategy.get_signal(current_bar, hist_data)
-
-                        if signal and signal.get("direction") == "sell":
-                            self._process_strategy_signal(
-                                symbol, signal, df, timestamp, current_bar
-                            )
-
-            # Record portfolio value at this timestamp
-            portfolio_value = self._calculate_portfolio_value(timestamp)
+            portfolio_value = self._calculate_portfolio_value(execution_time)
+            if self.current_portfolio is not None:
+                self.current_portfolio.total_value = portfolio_value
+                self.current_portfolio.timestamp = execution_time
             self.equity_curve.append(
-                {"timestamp": timestamp, "portfolio_value": portfolio_value}
+                {
+                    "timestamp": execution_time,
+                    "portfolio_value": portfolio_value,
+                }
             )
 
-        # Calculate final metrics
-        backtest_result = self._generate_backtest_result(start_date, end_date)
+        return self._generate_backtest_result(start_date, end_date)
 
-        return backtest_result
+    def _reject_order(
+        self,
+        symbol: str,
+        direction: str,
+        quantity: float,
+        price: float,
+        exec_time: datetime,
+        signal: Dict[str, Any],
+        code: str,
+        reason: str,
+    ) -> None:
+        self.orders.append(
+            Order(
+                id=f"order_{len(self.orders) + 1}",
+                symbol=symbol,
+                side=direction,
+                order_type="market",
+                quantity=max(0.0, float(quantity)),
+                price=price,
+                timestamp=exec_time,
+                status="rejected",
+                parent_strategy=signal.get("strategy_name", "unknown"),
+                rejection_code=code,
+                rejection_reason=reason,
+            )
+        )
+
+    def _filled_order(
+        self,
+        symbol: str,
+        direction: str,
+        quantity: int,
+        price: float,
+        exec_time: datetime,
+        signal: Dict[str, Any],
+    ) -> None:
+        self.orders.append(
+            Order(
+                id=f"order_{len(self.orders) + 1}",
+                symbol=symbol,
+                side=direction,
+                order_type="market",
+                quantity=quantity,
+                price=price,
+                timestamp=exec_time,
+                filled_quantity=quantity,
+                filled_avg_price=price,
+                status="filled",
+                parent_strategy=signal.get("strategy_name", "unknown"),
+            )
+        )
 
     def _execute_signal(
         self,
@@ -306,419 +382,374 @@ class BacktestEngine:
         price: float,
         signal_time: datetime,
         exec_time: datetime,
-    ):
-        """Execute a trading signal."""
-        direction = signal["direction"]
+        current_bar: pd.Series,
+        next_execution_time: Optional[datetime],
+    ) -> None:
+        del signal_time  # Retained in the interface for audit/event compatibility.
+        direction = self._signal_direction(signal)
+        if direction not in {"buy", "sell"}:
+            return
+        if self.current_portfolio is None:
+            raise BacktestError("Backtest portfolio is not initialized")
 
-        # Calculate position size based on risk management rules
-        # 预留手续费和滑点空间（约 0.1%）
-        available_cash = self.current_portfolio.cash * 0.999
-        max_position_value = available_cash * self.max_position_size
-        position_value = min(
-            max_position_value,
-            self.current_portfolio.total_value * self.max_position_size,
+        stock_info = self._stock_info_cache[symbol]
+        stock_name = stock_info.get("stock_name")
+        bar_name = current_bar.get("stock_name")
+        if bar_name is not None and not pd.isna(bar_name):
+            stock_name = str(bar_name)
+        listing_session = current_bar.get("listing_session")
+        if listing_session is not None and pd.isna(listing_session):
+            listing_session = None
+        rule = resolve_trading_rule(
+            symbol,
+            exec_time.date(),
+            stock_name=stock_name,
+            listing_session=(
+                int(listing_session)
+                if listing_session is not None
+                else None
+            ),
         )
 
-        # Calculate quantity based on available capital
+        requested = signal.get("quantity", 0.0)
+        try:
+            requested_quantity = float(requested or 0.0)
+        except (TypeError, ValueError) as exc:
+            raise BacktestError("Signal quantity must be numeric") from exc
+
+        allowed, code, reason, slippage_rate = self._constraint_result(
+            symbol,
+            direction,
+            price,
+            exec_time,
+            current_bar,
+        )
+        if not allowed:
+            self._reject_order(
+                symbol,
+                direction,
+                requested_quantity,
+                price,
+                exec_time,
+                signal,
+                code or "constraint",
+                reason or "Order rejected by A-share constraints",
+            )
+            return
+
         if direction == "buy":
-            # Check if we're already at max positions
-            if (
-                len([p for p in self.current_portfolio.positions if p.side == "long"])
-                >= self.max_positions
-            ):
-                # Find the weakest long position to potentially close
-                # For simplicity, we'll just skip if we're at max positions
-                return
+            self._execute_buy(
+                symbol,
+                signal,
+                price,
+                exec_time,
+                next_execution_time,
+                rule,
+                requested_quantity,
+                slippage_rate,
+            )
+        else:
+            self._execute_sell(
+                symbol,
+                signal,
+                price,
+                exec_time,
+                rule,
+                requested_quantity,
+                slippage_rate,
+            )
 
-            quantity = position_value / price
-            if quantity * price > self.current_portfolio.cash:
-                quantity = self.current_portfolio.cash / price
-
-            if quantity * price > 0:  # Only execute if we have enough cash
-                # Place buy order
-                order = Order(
-                    id=f"order_{len(self.orders)+1}",
-                    symbol=symbol,
-                    side=direction,
-                    order_type="market",
-                    quantity=quantity,
-                    price=price,
-                    timestamp=exec_time,
-                    parent_strategy=signal.get("strategy_name", "unknown"),
-                )
-                self.orders.append(order)
-
-                # Execute the trade
-                commission = max(
-                    self.min_commission, quantity * price * self.commission_rate
-                )
-                total_cost = quantity * price + commission
-
-                if total_cost <= self.current_portfolio.cash:
-                    # Update portfolio
-                    self.current_portfolio.cash -= total_cost
-
-                    # Update or create position
-                    if symbol in self.positions:
-                        # Average into existing position
-                        existing_pos = self.positions[symbol]
-                        total_qty = existing_pos.quantity + quantity
-                        avg_price = (
-                            existing_pos.avg_price * existing_pos.quantity
-                            + price * quantity
-                        ) / total_qty
-
-                        existing_pos.quantity = total_qty
-                        existing_pos.avg_price = avg_price
-                        existing_pos.timestamp = exec_time
-                        # T+1: 新买入部分次日才能卖，但原有部分可以卖
-                        # 简化处理：混合持仓的可卖日期取最早的
-                        if existing_pos.sellable_date is None:
-                            existing_pos.sellable_date = self._get_next_trading_day(exec_time)
-                    else:
-                        # Create new position with T+1 restriction
-                        from datetime import timedelta
-                        sellable_date = self._get_next_trading_day(exec_time) if self.enable_t_plus_1 else exec_time
-
-                        # 获取止损止盈价格
-                        stop_loss_price = signal.get("stop_loss")
-                        take_profit_price = signal.get("take_profit")
-
-                        pos = Position(
-                            symbol=symbol,
-                            side="long",
-                            quantity=quantity,
-                            avg_price=price,
-                            timestamp=exec_time,
-                            sellable_date=sellable_date,
-                            stop_loss_price=stop_loss_price,
-                            take_profit_price=take_profit_price,
-                            trailing_stop_enabled=self.enable_trailing_stop,
-                            trailing_stop_percent=self.trailing_stop_percent,
-                            highest_price_since_entry=price,  # 初始最高价为入场价
-                        )
-                        self.positions[symbol] = pos
-                        self.current_portfolio.positions.append(pos)
-
-                    # Record the trade
-                    trade = Trade(
-                        id=f"trade_{len(self.trades)+1}",
-                        symbol=symbol,
-                        side=direction,
-                        quantity=quantity,
-                        price=price,
-                        timestamp=exec_time,
-                        fee=commission,
-                    )
-                    self.trades.append(trade)
-
-        elif direction == "sell":
-            # Check if we have a position in this symbol
-            if symbol in self.positions and self.positions[symbol].side == "long":
-                pos = self.positions[symbol]
-
-                # T+1 检查：当天买入的股票不能卖出
-                if self.enable_t_plus_1 and pos.sellable_date is not None:
-                    if exec_time < pos.sellable_date:
-                        # 跳过卖出信号，因为还在 T+1 限制期内
-                        return
-
-                # Determine how much to sell (could be partial)
-                sell_quantity = min(pos.quantity, signal.get("quantity", pos.quantity))
-
-                # Place sell order
-                order = Order(
-                    id=f"order_{len(self.orders)+1}",
-                    symbol=symbol,
-                    side=direction,
-                    order_type="market",
-                    quantity=sell_quantity,
-                    price=price,
-                    timestamp=exec_time,
-                    parent_strategy=signal.get("strategy_name", "unknown"),
-                )
-                self.orders.append(order)
-
-                # Execute the trade
-                gross_proceeds = sell_quantity * price
-                commission = max(
-                    self.min_commission, sell_quantity * price * self.commission_rate
-                )
-                net_proceeds = gross_proceeds - commission
-
-                # Update portfolio
-                self.current_portfolio.cash += net_proceeds
-
-                # Update position
-                pos.quantity -= sell_quantity
-                if pos.quantity <= 0:
-                    # Close position completely
-                    self.current_portfolio.positions = [
-                        p
-                        for p in self.current_portfolio.positions
-                        if p.symbol != symbol
-                    ]
-                    del self.positions[symbol]
-                else:
-                    # Partial sell, keep position
-                    pos.timestamp = exec_time
-
-                # Calculate PnL
-                cost_basis = sell_quantity * pos.avg_price
-                pnl = gross_proceeds - cost_basis - commission
-
-                # Record the trade
-                trade = Trade(
-                    id=f"trade_{len(self.trades)+1}",
-                    symbol=symbol,
-                    side=direction,
-                    quantity=sell_quantity,
-                    price=price,
-                    timestamp=exec_time,
-                    fee=commission,
-                    pnl=pnl,
-                )
-                self.trades.append(trade)
-
-    def _process_strategy_signal(
+    def _execute_buy(
         self,
         symbol: str,
         signal: Dict[str, Any],
-        df: pd.DataFrame,
-        timestamp: datetime,
-        current_bar: pd.Series,
-    ):
-        """处理策略信号，包含执行延迟逻辑"""
-        if not signal or not signal.get("direction"):
-            return
-
-        # 跳过 hold 信号
-        if signal.get("direction") == "hold":
-            return
-
-        # 对于日线数据，直接查找下一个交易日
-        # 使用 >= 而不是 == 来处理日期格式的时间戳
-        if hasattr(timestamp, 'date'):
-            # timestamp 是 datetime 对象
-            next_date = timestamp + timedelta(days=1)
-            next_bar_data = df[df["timestamp"] >= next_date]
-        else:
-            # 使用原始方法
-            next_timestamp = get_next_trading_bar_timestamp(timestamp)
-            if hasattr(next_timestamp, 'tz') and next_timestamp.tz is not None:
-                next_timestamp_naive = next_timestamp.replace(tzinfo=None)
-            else:
-                next_timestamp_naive = next_timestamp
-            next_bar_data = df[df["timestamp"] >= next_timestamp_naive]
-
-        if not next_bar_data.empty:
-            execution_bar = next_bar_data.iloc[0]
-            execution_price = execution_bar["close"]
-
-            # A股约束检查：检查是否可以交易
-            if not self._check_trading_constraints(
-                symbol, signal["direction"], execution_price
-            ):
-                return
-
-            # Apply slippage
-            if signal["direction"] == "buy":
-                execution_price *= 1 + self.slippage_rate
-            else:  # sell
-                execution_price *= 1 - self.slippage_rate
-
-            # Execute the order
-            self._execute_signal(
+        price: float,
+        exec_time: datetime,
+        next_execution_time: Optional[datetime],
+        rule: Any,
+        requested_quantity: float,
+        slippage_rate: float,
+    ) -> None:
+        assert self.current_portfolio is not None
+        if symbol in self.positions:
+            self._reject_order(
                 symbol,
+                "buy",
+                requested_quantity,
+                price,
+                exec_time,
                 signal,
-                execution_price,
-                timestamp,
-                execution_bar["timestamp"],
+                "already_positioned",
+                "A position in this symbol already exists",
             )
-
-    def _check_stop_loss_take_profit(
-        self,
-        symbol: str,
-        current_bar: pd.Series,
-        timestamp: datetime,
-    ):
-        """
-        检查止损止盈条件
-
-        在每根K线检查持仓是否触发止损或止盈
-        """
-        if symbol not in self.positions:
+            return
+        if len(self.positions) >= self.max_positions:
+            self._reject_order(
+                symbol,
+                "buy",
+                requested_quantity,
+                price,
+                exec_time,
+                signal,
+                "max_positions",
+                "Maximum simultaneous positions reached",
+            )
             return
 
-        pos = self.positions[symbol]
-        current_price = current_bar["close"]
-        current_low = current_bar["low"]
-        current_high = current_bar["high"]
+        portfolio_value = self._calculate_portfolio_value(exec_time)
+        budget = min(
+            self.current_portfolio.cash * self.max_position_size,
+            portfolio_value * self.max_position_size,
+        )
+        desired = requested_quantity if requested_quantity > 0 else budget / price
+        quantity = round_buy_quantity(desired, rule)
+        if quantity <= 0:
+            self._reject_order(
+                symbol,
+                "buy",
+                desired,
+                price,
+                exec_time,
+                signal,
+                "invalid_lot",
+                "Requested quantity is below the board minimum",
+            )
+            return
 
-        # T+1 检查：当天买入的股票不能卖出
-        if self.enable_t_plus_1 and pos.sellable_date is not None:
-            if timestamp < pos.sellable_date:
-                return
+        breakdown = None
+        slippage_cost = 0.0
+        while quantity > 0:
+            breakdown = calculate_transaction_cost(
+                price,
+                quantity,
+                "buy",
+                exec_time.date(),
+                commission_rate=self.commission_rate,
+                min_commission=self.min_commission,
+            )
+            slippage_cost = breakdown.gross_amount * slippage_rate
+            if breakdown.net_amount + slippage_cost <= self.current_portfolio.cash:
+                break
+            quantity = round_buy_quantity(
+                quantity - rule.buy_increment,
+                rule,
+            )
+        if quantity <= 0 or breakdown is None:
+            self._reject_order(
+                symbol,
+                "buy",
+                desired,
+                price,
+                exec_time,
+                signal,
+                "insufficient_cash",
+                "Cash is insufficient after transaction costs",
+            )
+            return
 
-        # 更新最高价（用于移动止损）
-        if pos.trailing_stop_enabled and pos.highest_price_since_entry:
-            if current_high > pos.highest_price_since_entry:
-                pos.highest_price_since_entry = current_high
-                # 更新移动止损价
-                new_stop = current_high * (1 - pos.trailing_stop_percent)
-                if pos.stop_loss_price is None or new_stop > pos.stop_loss_price:
-                    pos.stop_loss_price = new_stop
+        cash_cost = breakdown.net_amount + slippage_cost
+        self.current_portfolio.cash -= cash_cost
+        average_cost = cash_cost / quantity
+        sellable_date = (
+            next_execution_time
+            if self.enable_t_plus_1
+            else exec_time
+        )
+        position = Position(
+            symbol=symbol,
+            side="long",
+            quantity=quantity,
+            avg_price=average_cost,
+            timestamp=exec_time,
+            sellable_date=sellable_date,
+            stop_loss_price=signal.get("stop_loss"),
+            take_profit_price=signal.get("take_profit"),
+            trailing_stop_enabled=self.enable_trailing_stop,
+            trailing_stop_percent=self.trailing_stop_percent,
+            highest_price_since_entry=price,
+        )
+        self.positions[symbol] = position
+        self.current_portfolio.positions.append(position)
+        self._filled_order(symbol, "buy", quantity, price, exec_time, signal)
+        self.trades.append(
+            Trade(
+                id=f"trade_{len(self.trades) + 1}",
+                symbol=symbol,
+                side="buy",
+                quantity=quantity,
+                price=price,
+                timestamp=exec_time,
+                fee=breakdown.total_fee,
+                gross_amount=breakdown.gross_amount,
+                commission=breakdown.commission,
+                stamp_tax=breakdown.stamp_tax,
+                transfer_fee=breakdown.transfer_fee,
+                slippage_cost=slippage_cost,
+            )
+        )
 
-        # 检查止损（使用当日最低价判断是否触发）
-        if self.enable_stop_loss and pos.stop_loss_price is not None:
-            if current_low <= pos.stop_loss_price:
-                # 触发止损，使用止损价执行卖出
-                self._execute_stop_loss_take_profit(
-                    symbol, pos, pos.stop_loss_price, timestamp, "stop_loss"
-                )
-                self.stop_loss_triggers += 1
-                logger.info(f"[{timestamp}] {symbol} 触发止损 @ {pos.stop_loss_price:.2f}")
-                return
-
-        # 检查止盈（使用当日最高价判断是否触发）
-        if self.enable_take_profit and pos.take_profit_price is not None:
-            if current_high >= pos.take_profit_price:
-                # 触发止盈，使用止盈价执行卖出
-                self._execute_stop_loss_take_profit(
-                    symbol, pos, pos.take_profit_price, timestamp, "take_profit"
-                )
-                self.take_profit_triggers += 1
-                logger.info(f"[{timestamp}] {symbol} 触发止盈 @ {pos.take_profit_price:.2f}")
-                return
-
-    def _execute_stop_loss_take_profit(
+    def _execute_sell(
         self,
         symbol: str,
-        pos: Position,
-        execution_price: float,
-        timestamp: datetime,
-        reason: str,
-    ):
-        """执行止损或止盈卖出"""
-        sell_quantity = pos.quantity
+        signal: Dict[str, Any],
+        price: float,
+        exec_time: datetime,
+        rule: Any,
+        requested_quantity: float,
+        slippage_rate: float,
+    ) -> None:
+        assert self.current_portfolio is not None
+        position = self.positions.get(symbol)
+        if position is None:
+            self._reject_order(
+                symbol,
+                "sell",
+                requested_quantity,
+                price,
+                exec_time,
+                signal,
+                "no_position",
+                "No long position is available to sell",
+            )
+            return
+        if (
+            self.enable_t_plus_1
+            and position.sellable_date is not None
+            and exec_time < position.sellable_date
+        ):
+            self._reject_order(
+                symbol,
+                "sell",
+                requested_quantity or position.quantity,
+                price,
+                exec_time,
+                signal,
+                "t_plus_one",
+                "Position is not sellable until the next supplied bar",
+            )
+            return
 
-        # Apply slippage for sell
-        execution_price *= 1 - self.slippage_rate
+        held_quantity = int(round(position.quantity))
+        desired = requested_quantity if requested_quantity > 0 else held_quantity
+        if desired >= held_quantity:
+            quantity = held_quantity
+        elif rule.board == "main":
+            quantity = int(math.floor(desired))
+            quantity = (quantity // rule.buy_increment) * rule.buy_increment
+        else:
+            quantity = int(math.floor(desired))
+        if quantity <= 0:
+            self._reject_order(
+                symbol,
+                "sell",
+                desired,
+                price,
+                exec_time,
+                signal,
+                "invalid_lot",
+                "Partial sell quantity violates the board increment",
+            )
+            return
 
-        # Place sell order
-        order = Order(
-            id=f"order_{len(self.orders)+1}",
-            symbol=symbol,
-            side="sell",
-            order_type="market",
-            quantity=sell_quantity,
-            price=execution_price,
-            timestamp=timestamp,
-            parent_strategy=f"{reason}_trigger",
+        breakdown = calculate_transaction_cost(
+            price,
+            quantity,
+            "sell",
+            exec_time.date(),
+            commission_rate=self.commission_rate,
+            min_commission=self.min_commission,
         )
-        self.orders.append(order)
-
-        # Execute the trade
-        gross_proceeds = sell_quantity * execution_price
-        commission = max(
-            self.min_commission, sell_quantity * execution_price * self.commission_rate
-        )
-        net_proceeds = gross_proceeds - commission
-
-        # Update portfolio
+        slippage_cost = breakdown.gross_amount * slippage_rate
+        net_proceeds = breakdown.net_amount - slippage_cost
+        cost_basis = quantity * position.avg_price
+        pnl = net_proceeds - cost_basis
         self.current_portfolio.cash += net_proceeds
+        position.quantity -= quantity
+        position.realized_pnl += pnl
+        position.timestamp = exec_time
+        if position.quantity <= 0:
+            self.current_portfolio.positions = [
+                item
+                for item in self.current_portfolio.positions
+                if item.symbol != symbol
+            ]
+            del self.positions[symbol]
 
-        # Calculate PnL
-        cost_basis = sell_quantity * pos.avg_price
-        pnl = gross_proceeds - cost_basis - commission
-
-        # Record the trade
-        trade = Trade(
-            id=f"trade_{len(self.trades)+1}",
-            symbol=symbol,
-            side="sell",
-            quantity=sell_quantity,
-            price=execution_price,
-            timestamp=timestamp,
-            fee=commission,
-            pnl=pnl,
+        self._filled_order(symbol, "sell", quantity, price, exec_time, signal)
+        self.trades.append(
+            Trade(
+                id=f"trade_{len(self.trades) + 1}",
+                symbol=symbol,
+                side="sell",
+                quantity=quantity,
+                price=price,
+                timestamp=exec_time,
+                fee=breakdown.total_fee,
+                pnl=pnl,
+                gross_amount=breakdown.gross_amount,
+                commission=breakdown.commission,
+                stamp_tax=breakdown.stamp_tax,
+                transfer_fee=breakdown.transfer_fee,
+                slippage_cost=slippage_cost,
+            )
         )
-        self.trades.append(trade)
-
-        # Close position
-        self.current_portfolio.positions = [
-            p for p in self.current_portfolio.positions if p.symbol != symbol
-        ]
-        del self.positions[symbol]
 
     def _calculate_portfolio_value(self, timestamp: datetime) -> float:
-        """Calculate total portfolio value at a given timestamp."""
-        # Get current positions value based on latest available prices
-        positions_value = 0
-
-        for symbol, pos in self.positions.items():
-            # Get the latest market price for this symbol
-            if symbol in self.latest_market_prices:
-                current_price = self.latest_market_prices[symbol]
-                positions_value += pos.quantity * current_price
-            else:
-                # Fallback to average price if no current market price is available
-                positions_value += pos.quantity * pos.avg_price
-
+        del timestamp
+        if self.current_portfolio is None:
+            return self.initial_cash
+        positions_value = sum(
+            position.quantity
+            * self.latest_market_prices.get(symbol, position.avg_price)
+            for symbol, position in self.positions.items()
+        )
         return self.current_portfolio.cash + positions_value
 
     def _generate_backtest_result(
-        self, start_date: datetime, end_date: datetime
+        self,
+        start_date: datetime,
+        end_date: datetime,
     ) -> BacktestResult:
-        """Generate backtest result object from backtest data."""
         final_capital = self._calculate_portfolio_value(end_date)
         total_return = (final_capital - self.initial_cash) / self.initial_cash
-
-        # Calculate other metrics
-        metrics, volatility, sharpe_ratio, sortino_ratio, max_drawdown, profit_factor = self.calculate_metrics(self.trades, self.initial_cash, self.equity_curve)
-
-        # 添加A股约束统计到metrics
+        (
+            metrics,
+            volatility,
+            sharpe_ratio,
+            sortino_ratio,
+            max_drawdown,
+            profit_factor,
+        ) = self.calculate_metrics(
+            self.trades,
+            self.initial_cash,
+            self.equity_curve,
+        )
         if self.use_ashare_constraints:
-            metrics.extend([
-                Metric(
-                    name="limit_up_skips",
-                    value=float(self.limit_up_skips),
-                    description="因涨停无法买入的次数",
-                ),
-                Metric(
-                    name="limit_down_skips",
-                    value=float(self.limit_down_skips),
-                    description="因跌停无法卖出的次数",
-                ),
-                Metric(
-                    name="stock_restriction_skips",
-                    value=float(self.stock_restriction_skips),
-                    description="因ST限制无法交易的次数",
-                ),
-                Metric(
-                    name="suspended_skips",
-                    value=float(self.suspended_skips),
-                    description="因停牌无法交易的次数",
-                ),
-            ])
-
-        # Convert equity curve to list of dicts format
-        equity_curve_list = [{"timestamp": item["timestamp"], "portfolio_value": item["portfolio_value"]} for item in self.equity_curve]
-
-        # Annual return calculation (simple approach)
-        days_diff = (end_date - start_date).days
+            metrics.extend(
+                [
+                    Metric(name="limit_up_skips", value=self.limit_up_skips),
+                    Metric(name="limit_down_skips", value=self.limit_down_skips),
+                    Metric(
+                        name="stock_restriction_skips",
+                        value=self.stock_restriction_skips,
+                    ),
+                    Metric(name="suspended_skips", value=self.suspended_skips),
+                ]
+            )
+        days = (end_date - start_date).days
         annual_return = (
-            ((final_capital / self.initial_cash) ** (365.0 / days_diff) - 1)
-            if days_diff > 0
+            (final_capital / self.initial_cash) ** (365.0 / days) - 1
+            if days > 0
             else 0.0
         )
-
-        # Determine winning/losing trades
-        winning_trades = [t for t in self.trades if t.pnl and t.pnl > 0]
-        losing_trades = [t for t in self.trades if t.pnl and t.pnl < 0]
-
-        # Create result object
-        result = BacktestResult(
+        closed = [
+            trade
+            for trade in self.trades
+            if trade.side == OrderSide.SELL and trade.pnl is not None
+        ]
+        winning = [trade for trade in closed if trade.pnl > 0]
+        losing = [trade for trade in closed if trade.pnl < 0]
+        return BacktestResult(
             start_date=start_date,
             end_date=end_date,
             initial_capital=self.initial_cash,
@@ -729,163 +760,13 @@ class BacktestEngine:
             sharpe_ratio=sharpe_ratio,
             sortino_ratio=sortino_ratio,
             max_drawdown=max_drawdown,
-            win_rate=len(winning_trades) / len(self.trades) if self.trades else 0.0,
+            win_rate=len(winning) / len(closed) if closed else 0.0,
             profit_factor=profit_factor,
             total_trades=len(self.trades),
-            winning_trades=len(winning_trades),
-            losing_trades=len(losing_trades),
+            winning_trades=len(winning),
+            losing_trades=len(losing),
             trades=self.trades,
             orders=self.orders,
             metrics=metrics,
-            equity_curve=equity_curve_list,
+            equity_curve=self.equity_curve,
         )
-
-        return result
-
-    def calculate_metrics(
-        self, trades: List[Trade], initial_capital: float, equity_curve: List[Dict[str, float]]
-    ) -> tuple:
-        """
-        Calculate performance metrics from trade history and equity curve.
-
-        Args:
-            trades: List of trades from the backtest
-            initial_capital: Initial capital for the backtest
-            equity_curve: Equity curve data
-
-        Returns:
-            Tuple of (metrics_list, volatility, sharpe_ratio, sortino_ratio, max_drawdown, profit_factor)
-        """
-        if not trades:
-            return [], 0.0, 0.0, 0.0, 0.0, 0.0
-
-        # Calculate basic trade statistics
-        total_trades = len(trades)
-        winning_trades = [t for t in trades if t.pnl and t.pnl > 0]
-        losing_trades = [t for t in trades if t.pnl and t.pnl < 0]
-
-        total_pnl = sum((t.pnl or 0) for t in trades)
-        win_rate = len(winning_trades) / total_trades if total_trades > 0 else 0
-
-        gross_profit = (
-            sum(t.pnl for t in winning_trades if t.pnl) if winning_trades else 0
-        )
-        gross_loss = sum(t.pnl for t in losing_trades if t.pnl) if losing_trades else 0
-
-        profit_factor = (
-            abs(gross_profit / gross_loss) if gross_loss != 0 else float("inf")
-        )
-
-        # Calculate metrics from equity curve
-        if len(equity_curve) > 1:
-            # Extract portfolio values
-            portfolio_values = [item['portfolio_value'] for item in equity_curve]
-
-            # Calculate returns
-            returns = [(portfolio_values[i] - portfolio_values[i-1]) / portfolio_values[i-1]
-                      for i in range(1, len(portfolio_values))]
-
-            if len(returns) > 0:
-                # Calculate volatility (standard deviation of returns, annualized)
-                import numpy as np
-                returns_array = np.array(returns)
-                volatility = np.std(returns_array) * (252 ** 0.5)  # Annualized volatility (assuming 252 trading days)
-
-                # Calculate Sharpe ratio (assuming risk-free rate of 0 for simplicity)
-                avg_return = np.mean(returns_array) * 252  # Annualized return
-                sharpe_ratio = avg_return / volatility if volatility != 0 else 0.0
-
-                # Calculate Sortino ratio (using downside deviation)
-                negative_returns = returns_array[returns_array < 0]
-                if len(negative_returns) > 0:
-                    downside_deviation = np.std(negative_returns) * (252 ** 0.5)
-                else:
-                    downside_deviation = 0.0
-                sortino_ratio = avg_return / downside_deviation if downside_deviation != 0 else 0.0
-
-                # Calculate maximum drawdown
-                peak = portfolio_values[0]
-                max_dd = 0.0
-                for value in portfolio_values:
-                    if value > peak:
-                        peak = value
-                    dd = (peak - value) / peak
-                    if dd > max_dd:
-                        max_dd = dd
-                max_drawdown = max_dd
-            else:
-                volatility = 0.0
-                sharpe_ratio = 0.0
-                sortino_ratio = 0.0
-                max_drawdown = 0.0
-        else:
-            volatility = 0.0
-            sharpe_ratio = 0.0
-            sortino_ratio = 0.0
-            max_drawdown = 0.0
-
-        # Create metrics list
-        metrics = [
-            Metric(
-                name="total_return",
-                value=(initial_capital + total_pnl) / initial_capital - 1,
-                description="Total return over the backtest period",
-            ),
-            Metric(
-                name="total_trades",
-                value=total_trades,
-                description="Total number of trades executed",
-            ),
-            Metric(
-                name="win_rate",
-                value=win_rate,
-                description="Percentage of winning trades",
-            ),
-            Metric(
-                name="profit_factor",
-                value=profit_factor,
-                description="Gross profit divided by gross loss",
-            ),
-            Metric(
-                name="volatility",
-                value=volatility,
-                description="Annualized volatility of returns",
-            ),
-            Metric(
-                name="sharpe_ratio",
-                value=sharpe_ratio,
-                description="Risk-adjusted return (annualized return / annualized volatility)",
-            ),
-            Metric(
-                name="sortino_ratio",
-                value=sortino_ratio,
-                description="Downside risk-adjusted return (annualized return / annualized downside deviation)",
-            ),
-            Metric(
-                name="max_drawdown",
-                value=max_drawdown,
-                description="Maximum peak-to-trough drawdown",
-            ),
-            Metric(
-                name="avg_win_trade",
-                value=gross_profit / len(winning_trades) if winning_trades else 0,
-                description="Average profit per winning trade",
-            ),
-            Metric(
-                name="avg_loss_trade",
-                value=gross_loss / len(losing_trades) if losing_trades else 0,
-                description="Average loss per losing trade",
-            ),
-            Metric(
-                name="stop_loss_triggers",
-                value=self.stop_loss_triggers if hasattr(self, 'stop_loss_triggers') else 0,
-                description="Number of stop loss triggers",
-            ),
-            Metric(
-                name="take_profit_triggers",
-                value=self.take_profit_triggers if hasattr(self, 'take_profit_triggers') else 0,
-                description="Number of take profit triggers",
-            ),
-        ]
-
-        return metrics, volatility, sharpe_ratio, sortino_ratio, max_drawdown, profit_factor

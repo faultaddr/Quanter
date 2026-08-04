@@ -6,7 +6,6 @@
 2. 东方财富 push2 API（实时估值指标）
 3. EnhancedDataFetcher.get_fundamental_data（BaoStock/AkShare 回退）
 """
-import os
 import re
 import requests
 from typing import Dict, List, Optional, Any
@@ -14,10 +13,6 @@ from typing import Dict, List, Optional, Any
 from ...core.logging import get_logger
 
 logger = get_logger(__name__)
-
-# 禁用代理
-os.environ['NO_PROXY'] = '*'
-
 
 class FundamentalDataProvider:
     """基本面数据获取器（东方财富 API 优先）"""

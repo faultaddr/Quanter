@@ -229,19 +229,41 @@ async def get_stock_feasibility(symbol: str) -> Dict[str, Any]:
             stock_name = ''
             is_suspended = False
 
+        # Use one explicit market-check timestamp for every dated rule lookup.
+        check_time = datetime.now()
+
         # 检查买入可行性
-        buy_check = constraints.can_buy(symbol, current_price, prev_close, is_suspended, stock_name)
+        buy_check = constraints.can_buy(
+            symbol,
+            current_price,
+            prev_close,
+            is_suspended,
+            stock_name,
+            trade_date=check_time,
+        )
 
         # 检查卖出可行性
-        sell_check = constraints.can_sell(symbol, current_price, prev_close, is_suspended, stock_name)
+        sell_check = constraints.can_sell(
+            symbol,
+            current_price,
+            prev_close,
+            is_suspended,
+            stock_name,
+            trade_date=check_time,
+        )
 
         # 获取涨跌幅限制
-        limit_up, limit_down = constraints.calculate_limit_price(symbol, prev_close)
+        limit_up, limit_down = constraints.calculate_limit_price(
+            symbol,
+            prev_close,
+            date=check_time,
+            stock_name=stock_name,
+        )
 
         # 判断涨跌停状态
-        if abs(current_price - limit_up) < 0.01:
+        if limit_up is not None and abs(current_price - limit_up) < 0.01:
             limit_status = "limit_up"
-        elif abs(current_price - limit_down) < 0.01:
+        elif limit_down is not None and abs(current_price - limit_down) < 0.01:
             limit_status = "limit_down"
         else:
             limit_status = "normal"
@@ -387,4 +409,3 @@ async def get_stock_backtest_compare(symbol: str, days: int = 250) -> Dict[str, 
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"获取回测对比失败: {str(e)}")
-
