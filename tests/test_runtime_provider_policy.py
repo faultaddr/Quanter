@@ -63,6 +63,36 @@ print(json.dumps({'before': before, 'after': after}, sort_keys=True))
         payload = json.loads(completed.stdout.strip().splitlines()[-1])
         self.assertEqual(payload["before"], payload["after"])
 
+    def test_fundamental_provider_import_preserves_proxy_environment(self):
+        code = """
+import json, os
+before = {
+    key: os.environ.get(key)
+    for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
+}
+import quanttool.infrastructure.data_providers.fundamental_provider
+after = {key: os.environ.get(key) for key in before}
+print(json.dumps({'before': before, 'after': after}, sort_keys=True))
+"""
+        env = os.environ.copy()
+        env.update(
+            {
+                "HTTP_PROXY": "http://127.0.0.1:18080",
+                "HTTPS_PROXY": "http://127.0.0.1:18443",
+                "ALL_PROXY": "socks5://127.0.0.1:1080",
+                "NO_PROXY": "localhost",
+            }
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        payload = json.loads(completed.stdout.strip().splitlines()[-1])
+        self.assertEqual(payload["before"], payload["after"])
+
     def test_fetcher_factory_reads_optional_credentials_from_environment(self):
         from quanttool.infrastructure.data_providers.historical import enhanced_fetcher
 
