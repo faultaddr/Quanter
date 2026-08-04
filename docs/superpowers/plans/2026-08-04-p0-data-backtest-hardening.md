@@ -61,7 +61,6 @@ Create `tests/test_runtime_provider_policy.py` with these cases:
 
 ```python
 import os
-from pathlib import Path
 import subprocess
 import sys
 import unittest
@@ -114,14 +113,23 @@ print(json.dumps({'before': before, 'after': after}, sort_keys=True))
         payload = __import__("json").loads(completed.stdout.strip().splitlines()[-1])
         self.assertEqual(payload["before"], payload["after"])
 
-    def test_current_tree_contains_no_embedded_market_data_secret(self):
-        source = Path(
-            "quanttool/infrastructure/data_providers/historical/enhanced_fetcher.py"
-        ).read_text(encoding="utf-8")
-        import re
+    def test_fetcher_factory_reads_optional_credentials_from_environment(self):
+        from quanttool.infrastructure.data_providers.historical import enhanced_fetcher
 
-        self.assertIsNone(re.search(r'tushare_token\s*=\s*["\'][A-Za-z0-9]{20,}', source))
-        self.assertNotIn("qgqp_b_id=", source)
+        with patch.dict(
+            os.environ,
+            {
+                "TUSHARE_TOKEN": "token-from-runtime",
+                "EASTMONEY_COOKIE": "cookie-from-runtime",
+            },
+            clear=False,
+        ), patch.object(enhanced_fetcher, "EnhancedDataFetcher") as fetcher_type:
+            enhanced_fetcher.create_data_fetcher_with_credentials()
+
+        fetcher_type.assert_called_once_with(
+            tushare_token="token-from-runtime",
+            eastmoney_cookie="cookie-from-runtime",
+        )
 
 
 if __name__ == "__main__":
@@ -136,7 +144,7 @@ Run:
 .venv-mcp/bin/python -m unittest tests.test_runtime_provider_policy -v
 ```
 
-Expected: errors because `quanttool.core.runtime` does not exist, plus failures showing the CSV provider is constructible in production, proxy variables change on import, and embedded credentials remain.
+Expected: errors because `quanttool.core.runtime` does not exist, plus failures showing the CSV provider is constructible in production, proxy variables change on import, and the compatibility factory does not read credentials exclusively from runtime environment variables.
 
 - [ ] **Step 3: Implement the runtime policy**
 
@@ -216,9 +224,10 @@ Run:
 
 ```bash
 .venv-mcp/bin/python -m unittest tests.test_runtime_provider_policy tests.test_smoke.ImportSmokeTests -v
+rg -n 'tushare_token\s*=\s*["\x27][A-Za-z0-9]{20,}|qgqp_b_id=' quanttool --glob '*.py'
 ```
 
-Expected: all focused runtime tests and import smoke tests pass; output contains no secret values.
+Expected: all focused runtime tests and import smoke tests pass; the release-time secret scan prints no matches and no secret values.
 
 - [ ] **Step 7: Commit the runtime hardening**
 
